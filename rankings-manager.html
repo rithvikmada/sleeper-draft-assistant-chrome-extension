@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>4th&amp;Go — Rankings Manager</title>
+<style>
+  /* Same "turf" palette as panel.html — extended, not replaced. */
+  :root {
+    --bg: #0B0D08;
+    --panel: #14170F;
+    --line: #22251B;
+    --line2: #2A2E22;
+    --text: #E9E7DC;
+    --dim: #5C6050;
+    --dim2: #8A8E7C;
+    --green: #5FCF8A;
+    --gold: #F5C242;
+    --red: #C97A6E;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Inter, sans-serif;
+    font-size: 13px; padding: 0 0 60px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+
+  header {
+    background: linear-gradient(180deg, #14170F, #0F1109);
+    border-bottom: 2px solid var(--line2); padding: 16px 0; margin-bottom: 20px;
+  }
+  .brand { font-family: ui-monospace, monospace; font-weight: 800; font-size: 20px; color: var(--green); letter-spacing: -0.4px; }
+  .sub { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: 1.4px; margin-top: 2px; }
+  .head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+
+  button {
+    background: var(--green); color: #0B0D08; border: none; border-radius: 4px;
+    font-weight: 700; font-size: 11px; padding: 7px 12px; cursor: pointer;
+    font-family: ui-monospace, monospace;
+  }
+  button.alt { background: transparent; color: var(--dim2); border: 1px solid var(--line2); }
+  button.alt:hover { color: var(--text); border-color: var(--dim2); }
+  button.ghost { background: transparent; color: var(--red); border: 1px solid #4A3030; }
+  button:active { transform: scale(0.97); }
+
+  h2 { font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: 1.4px;
+       color: var(--dim2); font-weight: 700; margin: 26px 0 10px; text-transform: uppercase; }
+
+  /* ---- my team counts ---- */
+  #teamCounts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .cnt { font-family: ui-monospace, monospace; font-size: 11px; border: 1px solid var(--line2);
+         border-radius: 4px; padding: 4px 9px; background: var(--panel); }
+  .cnt b { font-size: 13px; }
+  #teamHint { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; }
+
+  /* ---- best picks ---- */
+  #best { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .bestCard {
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 8px;
+    padding: 14px; position: relative; overflow: hidden; border-top: 3px solid;
+  }
+  .medal { font-family: ui-monospace, monospace; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+  .bestName { font-size: 17px; font-weight: 700; margin-top: 6px; line-height: 1.2; }
+  .bestMeta { font-size: 11px; color: var(--dim2); font-family: ui-monospace, monospace; margin-top: 4px; }
+  .srcDots { display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap; }
+  .dot {
+    width: 20px; height: 20px; border-radius: 4px; font-size: 9px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    font-family: ui-monospace, monospace; border: 1px solid transparent; color: #0B0D08;
+  }
+  .dot.off { opacity: .3; }
+
+  /* ---- source chips ---- */
+  #sourceBar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+    border: 1px solid var(--line2); border-radius: 999px; background: var(--panel);
+    font-family: ui-monospace, monospace; font-size: 10.5px; cursor: pointer;
+  }
+  .chip .sw { width: 9px; height: 9px; border-radius: 2px; }
+  .chip.disabled { opacity: .4; }
+  .chip.solo { outline: 1px solid var(--gold); }
+  .chip .x { color: var(--dim); padding-left: 2px; }
+  .chip .x:hover { color: var(--red); }
+
+  /* ---- filters ---- */
+  #filters { display: flex; gap: 5px; flex-wrap: wrap; }
+  .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; }
+  .pf:hover { color: var(--dim); border-color: var(--dim); }
+  .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
+
+  /* ---- table ---- */
+  .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th {
+    background: #10130C; font-family: ui-monospace, monospace; font-size: 9.5px;
+    letter-spacing: .8px; color: var(--dim2); text-align: right; padding: 8px 10px;
+    border-bottom: 1px solid var(--line2); white-space: nowrap; position: sticky; top: 0;
+  }
+  th.l, td.l { text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #1A1D14; text-align: right; font-family: ui-monospace, monospace; white-space: nowrap; }
+  td.nm { font-family: -apple-system, "Segoe UI", Inter, sans-serif; font-weight: 600; }
+  tr.gone { opacity: .28; text-decoration: line-through; }
+  tr.mine td.nm { color: var(--green); }
+  tr:hover { background: #12150D; }
+  .posChip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
+  .tierChip { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px; color: #0B0D08; font-family: ui-monospace, monospace; }
+  .xbtn { cursor: pointer; color: var(--dim); }
+  .xbtn:hover { color: var(--gold); }
+  .flagBtn { cursor: pointer; color: var(--dim); padding: 0 2px; }
+  .flagBtn.fav.on { color: var(--gold); }
+  .flagBtn.avoid.on { color: var(--red); }
+  .flagBtn:not(.on):hover { color: var(--dim2); }
+  .flagMark { margin-right: 4px; }
+  .flagMark.fav { color: var(--gold); }
+  .flagMark.avoid { color: var(--red); }
+  tr.favRow { background: rgba(245,194,66,.05); }
+  tr.avoidRow { background: rgba(201,122,110,.05); }
+
+  /* ---- modal ---- */
+  #modal, #confirmModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
+    align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  }
+  #modal.open, #confirmModal.open { display: flex; }
+  .sheet {
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 8px;
+    width: 100%; max-width: 620px; max-height: 88vh; overflow: auto; padding: 20px;
+  }
+  .sheet h3 { font-family: ui-monospace, monospace; font-size: 13px; margin-bottom: 4px; }
+  .sheet p.hint { font-size: 11px; color: var(--dim); margin-bottom: 14px; line-height: 1.5; }
+  .sheet label { display: block; font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim2); letter-spacing: 1px; margin: 12px 0 5px; }
+  .sheet input[type=text], .sheet textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    color: var(--text); padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px;
+  }
+  .sheet textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
+  .sheet input:focus, .sheet textarea:focus { outline: 1px solid var(--green); }
+  .modalBtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  #parseNote { font-size: 11px; margin-top: 10px; font-family: ui-monospace, monospace; line-height: 1.5; }
+  #parseNote.warn { color: var(--gold); }
+  #parseNote.err { color: var(--red); }
+  #parseNote.ok { color: var(--green); }
+
+  .empty { color: var(--dim); text-align: center; padding: 34px; font-size: 12px; }
+  #toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(120%);
+    background: var(--gold); color: var(--bg); padding: 8px 16px; border-radius: 5px;
+    font-weight: 700; font-size: 11px; display: none; z-index: 200; font-family: ui-monospace, monospace;
+    opacity: 0; transition: opacity .2s ease, transform .2s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { background: var(--red); }
+</style>
+</head>
+<body>
+  <header>
+    <div class="wrap head-row">
+      <div>
+        <div class="brand">4TH&amp;GO — RANKINGS MANAGER</div>
+        <div class="sub" id="syncLine">NOT SYNCED</div>
+      </div>
+      <div class="sub" style="max-width:340px;text-align:right;line-height:1.5">
+        Curate ranking sources here. Live picks and recommendations live in the side panel.
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <h2>Ranking sources</h2>
+    <div id="sourceBar"></div>
+
+    <div id="orphansSection" style="display:none; margin-top: 18px; padding: 12px; background: rgba(201,122,110,.08); border: 1px solid rgba(201,122,110,.2); border-radius: 6px;">
+      <h3 style="font-size: 12px; color: var(--red); margin: 0 0 8px; font-weight: 700; letter-spacing: 0.5px;">UNMATCHED PLAYERS</h3>
+      <div id="orphansList" style="font-size: 11px;"></div>
+    </div>
+
+    <h2>All players</h2>
+    <div id="filters">
+      <button class="pf active" data-pos="ALL">ALL</button>
+      <button class="pf" data-pos="QB">QB</button>
+      <button class="pf" data-pos="RB">RB</button>
+      <button class="pf" data-pos="WR">WR</button>
+      <button class="pf" data-pos="TE">TE</button>
+      <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
+    </div>
+    <div class="tableWrap" style="margin-top:10px">
+      <table id="tbl"></table>
+    </div>
+  </div>
+
+  <div id="modal">
+    <div class="sheet">
+      <h3 id="modalTitle">Add a ranking source</h3>
+      <p class="hint" id="modalHint"></p>
+      <label>Source name</label>
+      <input type="text" id="srcName" placeholder="e.g. FantasyPros ECR" />
+      <label>Upload a CSV</label>
+      <input type="file" id="srcFile" accept=".csv,.tsv,.txt" />
+      <label>…or paste rows here</label>
+      <textarea id="srcPaste" placeholder="Name,Team,Position,Tier,Rank&#10;Jahmyr Gibbs,DET,RB,S,1.25&#10;Bijan Robinson,ATL,RB,S,1.75"></textarea>
+      <div id="parseNote"></div>
+      <div class="modalBtns">
+        <button class="alt" id="cancelBtn">CANCEL</button>
+        <button id="saveSrcBtn">SAVE SOURCE</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmModal">
+    <div class="sheet">
+      <h3 id="confirmTitle"></h3>
+      <p id="confirmMessage"></p>
+      <div class="modalBtns">
+        <button class="alt" id="confirmCancel">CANCEL</button>
+        <button id="confirmAction"></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="rankings.js"></script>
+  <script src="fp-rankings.js"></script>
+  <script src="shared.js"></script>
+  <script src="rankings-manager.js"></script>
+</body>
+</html>

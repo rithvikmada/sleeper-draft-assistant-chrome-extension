@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #0B0D08;
+    --panel: #14170F;
+    --line: #22251B;
+    --line2: #2A2E22;
+    --text: #E9E7DC;
+    --dim: #5C6050;
+    --dim2: #8A8E7C;
+    --green: #5FCF8A;
+    --gold: #F5C242;
+    --red: #C97A6E;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Inter, sans-serif;
+    font-size: 13px;
+  }
+  #header {
+    position: sticky; top: 0; z-index: 10;
+    background: linear-gradient(180deg, #14170F, #0F1109);
+    border-bottom: 2px solid var(--line2);
+    padding: 10px 12px;
+  }
+  .brand { font-family: ui-monospace, monospace; font-weight: 800; font-size: 15px; color: var(--green); letter-spacing: -0.3px; }
+  .sub { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: 1px; }
+  /* ---- status bar (always visible) + collapsible settings drawer ---- */
+  #statusBar { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+  #statusBar #status { flex: 1; margin-top: 0; }
+  .iconBtn {
+    background: transparent; color: var(--dim2); border: 1px solid var(--line2);
+    padding: 4px 7px; font-size: 11px; line-height: 1; flex: none;
+  }
+  .iconBtn:hover { color: var(--text); border-color: var(--dim2); }
+  .iconBtn.on { color: var(--green); border-color: var(--green); }
+  #settingsPanel {
+    overflow: hidden; max-height: 250px; transition: max-height .2s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity .2s ease;
+    opacity: 1; border-top: 1px solid var(--line); margin-top: 7px; padding-top: 7px;
+  }
+  #settingsPanel.collapsed {
+    max-height: 0; opacity: 0; margin-top: 0; padding-top: 0; border-top-color: transparent;
+  }
+  #connect { display: flex; gap: 6px; }
+  #draftId {
+    flex: 1; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    color: var(--text); padding: 6px 8px; font-size: 12px; font-family: ui-monospace, monospace;
+  }
+  #draftId:focus { outline: 1px solid var(--green); }
+  button {
+    background: var(--green); color: #0B0D08; border: none; border-radius: 4px;
+    font-weight: 700; font-size: 11px; padding: 6px 10px; cursor: pointer;
+    font-family: ui-monospace, monospace;
+  }
+  button:active { transform: scale(0.97); }
+  button.ghost { background: transparent; color: var(--red); border: 1px solid #4A3030; }
+  #metaRow { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+  #myRoster {
+    width: 108px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    color: var(--text); padding: 5px 7px; font-size: 11px; font-family: ui-monospace, monospace;
+  }
+  #myRoster:focus { outline: 1px solid var(--green); }
+  button.alt { background: transparent; color: var(--dim2); border: 1px solid var(--line2); }
+  button.alt:hover { color: var(--text); border-color: var(--dim2); }
+  #refreshRow { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+  #refreshBtn {
+    background: var(--gold); color: #1a1400; font-weight: 800; padding: 7px 12px; font-size: 12px;
+    border-radius: 5px; letter-spacing: .5px;
+  }
+  #refreshBtn:active { transform: scale(0.96); }
+  #refreshBtn.spin { opacity: 0.6; }
+  #lastSync { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; }
+  #cacheCountdown { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; margin-left: 8px; }
+  #cacheCountdown.fresh { color: var(--green); }
+  #status { margin-top: 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--dim); }
+  #status.live { color: var(--green); }
+  #status.err { color: var(--red); }
+  #status.pulse { animation: pulse .5s ease; }
+  @keyframes pulse { 0%{opacity:.3} 100%{opacity:1} }
+
+  /* ---- my-team position counts (shared widget) ---- */
+  #teamCounts { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .cnt {
+    font-family: ui-monospace, monospace; font-size: 10px; border: 1px solid var(--line2);
+    border-radius: 4px; padding: 3px 7px; background: var(--panel);
+  }
+  .cnt b { font-size: 12px; }
+  .teamHint { font-size: 9px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: .5px; }
+
+  /* ---- best picks right now (shared widget) ---- */
+  #bestPicks { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px; }
+  /* Side panel width varies a lot (and pops out wider) — go 3-across only when there's room. */
+  @media (min-width: 560px) { #bestPicks { grid-template-columns: repeat(3, 1fr); } }
+  .bestCard {
+    background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
+    padding: 8px 10px; border-top: 3px solid; min-width: 0;
+  }
+  .medal { font-family: ui-monospace, monospace; font-size: 8.5px; font-weight: 800; letter-spacing: 1px; }
+  .bestName { font-size: 14px; font-weight: 700; margin-top: 3px; line-height: 1.15; }
+  .bestMeta { font-size: 10px; color: var(--dim2); font-family: ui-monospace, monospace; margin-top: 3px; }
+  .posChip { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
+  .srcDots { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
+  .dot {
+    width: 17px; height: 17px; border-radius: 4px; font-size: 8.5px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    font-family: ui-monospace, monospace; border: 1px solid transparent; color: #0B0D08;
+  }
+  .dot.off { opacity: .3; }
+  .dot.solo { outline: 1.5px solid var(--gold); outline-offset: 1px; }
+  #soloBar { margin-top: 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--gold); display: none; align-items: center; gap: 6px; }
+  .empty { color: var(--dim); text-align: center; padding: 14px; font-size: 11px; }
+  #best {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 8px;
+  }
+  .best-cell { border-radius: 4px; padding: 5px 8px; border: 1px solid; min-width: 0; }
+  .best-pos { font-size: 9px; font-family: ui-monospace, monospace; letter-spacing: 1px; opacity: .8; }
+  .best-name { font-size: 11.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #filters { display: flex; gap: 4px; margin-top: 8px; }
+  .pf {
+    background: transparent; border: 1px solid var(--line2); color: var(--dim2);
+    padding: 4px 9px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s;
+  }
+  .pf:hover { color: var(--dim); border-color: var(--dim); }
+  .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
+  #board { padding: 10px 12px 30px; }
+  .tier-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 5px; }
+  .tier-badge {
+    width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-family: ui-monospace, monospace; font-size: 11px;
+  }
+  .tier-line { flex: 1; height: 1px; background: var(--line); }
+  .tier-count { font-size: 9px; color: var(--dim); font-family: ui-monospace, monospace; }
+  .row {
+    display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
+    background: var(--panel); border: 1px solid #1E2118; border-radius: 4px;
+    padding: 5px 8px; margin-bottom: 3px; border-left: 3px solid;
+    cursor: pointer; transition: opacity .15s, filter .15s;
+  }
+  .row:hover { filter: brightness(1.15); }
+  .row.gone { opacity: 0.28; text-decoration: line-through; }
+  .row.mine { outline: 1px solid var(--green); }
+  .rk { font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim); }
+  .nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nm .tm { color: var(--dim); font-weight: 400; font-size: 10px; }
+  .flagMark { margin-right: 3px; }
+  .flagMark.fav { color: var(--gold); }
+  .flagMark.avoid { color: var(--red); }
+  .pos-chip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
+  #toast {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%) translateY(120%);
+    background: var(--gold); color: var(--bg); padding: 7px 14px; border-radius: 5px;
+    font-weight: 700; font-size: 11px; display: none; z-index: 50; max-width: 90%;
+    font-family: ui-monospace, monospace; opacity: 0;
+    transition: opacity .2s ease, transform .2s ease;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { background: var(--red); }
+</style>
+</head>
+<body>
+  <div id="header">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <span class="brand">4TH&amp;GO</span>
+      <span class="sub" id="pickCounter"></span>
+    </div>
+    <div class="sub">SLEEPER LIVE SYNC · FULL PPR</div>
+
+    <div id="statusBar">
+      <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
+      <button id="settingsBtn" class="iconBtn" title="Show/hide setup &amp; sync settings">⚙</button>
+      <button id="popOutBtn" class="iconBtn" title="Pop out into its own resizable window">⤢</button>
+    </div>
+
+    <div id="settingsPanel">
+      <div id="connect">
+        <input id="draftId" placeholder="Sleeper draft ID (auto-detects from tab)" />
+        <button id="connectBtn">SYNC</button>
+        <button id="stopBtn" class="ghost" style="display:none">STOP</button>
+      </div>
+      <div id="metaRow">
+        <input id="myRoster" type="number" min="1" placeholder="My draft slot #" title="Your draft slot / roster number — used to mark your own picks" />
+        <button id="openManager" class="alt">⚙ RANKINGS MANAGER</button>
+      </div>
+      <div id="refreshRow" style="display:none">
+        <button id="refreshBtn">⟳ REFRESH NOW</button>
+        <span id="lastSync"></span>
+        <span id="cacheCountdown"></span>
+      </div>
+    </div>
+
+    <div id="teamCounts"></div>
+    <div id="bestPicks"></div>
+    <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="iconBtn">↺ SHOW ALL</button></div>
+    <div id="best"></div>
+    <div id="filters">
+      <button class="pf active" data-pos="ALL">ALL</button>
+      <button class="pf" data-pos="QB">QB</button>
+      <button class="pf" data-pos="RB">RB</button>
+      <button class="pf" data-pos="WR">WR</button>
+      <button class="pf" data-pos="TE">TE</button>
+      <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
+    </div>
+  </div>
+  <div id="board"></div>
+  <div id="toast"></div>
+  <script src="rankings.js"></script>
+  <script src="shared.js"></script>
+  <script src="panel.js"></script>
+</body>
+</html>

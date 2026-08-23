@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "4th&Go — Sleeper Draft Board",
+  "version": "1.0.0",
+  "description": "Your tiered rankings, auto-synced to a live Sleeper draft. Players get crossed off as picks come in.",
+  "permissions": ["sidePanel", "storage", "tabs"],
+  "host_permissions": ["https://api.sleeper.app/*"],
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "action": {
+    "default_title": "Open draft board"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "128": "icon128.png"
+  }
+}
