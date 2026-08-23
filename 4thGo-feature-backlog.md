@@ -191,28 +191,42 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   weight ever gets attached to flags, that's a deliberate future decision, not a
   side effect of this.
 
-## 16. True value-cliff tiering — NEW, upgrade path noted during the tier-blending fix
-- Current state (as of the multi-source tier rework): when 2+ ranking sources are
-  blended, the tier board no longer blends each source's own tier LABELS (their
-  boundaries aren't on the same scale — Flock's "tier 6" and FantasyPros' "tier 6"
-  don't represent the same quality band, they're independently-drawn cutoffs that
-  happen to share a number). Instead, tiers are carved directly from the blended
-  rank into 16 even-sized bands (`assignRankBasedTiers` in `shared.js`). This
-  guarantees tier order always matches rank order, which is correct, but it's an
-  even split, not a real detection of where the actual talent cliffs are.
-- Real tiering (what FantasyPros' own paid tiers, and tools like it, actually do)
-  clusters players by GAPS in projected point value — a big drop-off between
-  player N and N+1 means a new tier starts there, so tiers can be uneven sizes and
-  actually reflect "these guys are basically interchangeable, this next guy is a
-  step down."
-- Blocked on the same thing as #8 (VORP): we only have ordinal rank data, not real
-  point projections, so there's no magnitude to detect a "gap" in — rank alone
-  can't tell you if #14 vs #15 is a big drop or a coin flip. Once a projections
-  source exists, revisit this: gap-detection (e.g. threshold on projected-points
-  delta between consecutive ranked players, or simple clustering) should replace
-  the even-band bucketing here.
-- Low priority until #8 has a data source; noted now so the even-bucket approach
-  isn't mistaken for the final design later.
+## 16. True value-cliff tiering — attempted, reverted (2026-08-23), still unsolved
+- **History note**: this section went through multiple stale descriptions —
+  `assignRankBasedTiers` ("even-sized bands" from blended rank), then this
+  entry briefly (incorrectly) marked a source-vote-boundary approach as
+  "built." That approach was tried, looked fine in simulation, then failed
+  badly on real live data and was fully reverted. Currently running: the
+  depth-based equal-width-bucket version, unchanged. Don't trust prior
+  descriptions of "what's built" in this section; check `shared.js`'s
+  `assignBlendedTiers` directly, or CLAUDE.md's "Source-vote-boundary tiering
+  was tried and reverted" entry for the full account of what failed and why.
+- **What was tried and reverted**: for every adjacent pair of players in
+  blended rank order, count how many sources that tier BOTH of them place
+  them in different tiers, keeping a boundary where a majority of those
+  voting sources agreed. Simulated fine against bundled data (16 tiers,
+  10-61 players each), but real usage produced an 11-player tier 1 followed
+  by a 112-player tier 2. Root cause: independently-drawn tier boundaries
+  from different sources almost never land on the exact same adjacent
+  rank-pair, even when sources broadly agree a cliff exists nearby (one
+  breaks 14/15, another 16/17 — zero credit under exact-pair matching
+  despite real near-agreement). With only 2-3 sources actually covering most
+  of the draft, "majority at this exact pair" was nearly unreachable outside
+  a few lucky spots, collapsing most of the board into one leftover tier.
+- **Next real attempt, if picked back up**: a windowed/clustering version —
+  treat two sources' boundaries as "the same cliff" if they fall within a
+  small rank-distance of each other, rather than requiring the exact same
+  adjacent pair. Needs real design work (how wide a window, how to merge
+  overlapping windows from 3+ sources) before building, not another quick
+  pass.
+- **Also unresolved**: whether "FantasyPros Top 10" only has tier opinions
+  for its first ~10 players and contributes nothing past that — worth
+  checking before any next attempt, since it changes how many real voters
+  exist for 95% of the draft regardless of which blending method is used.
+- The more rigorous long-term version remains gap-detection on real
+  point-projection magnitude (VORP, #8) instead of editorial tier agreement —
+  genuinely detects talent cliffs rather than cliffs in how sources chose to
+  draw their own boundaries. Still blocked on VORP existing.
 
 Rough dependency order, for when we do batch these:
 1. Editable rankings import (#1) — foundational, nothing else really needs it first

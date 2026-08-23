@@ -17,6 +17,7 @@ let flags = {}; // playerKey -> "favorite" | "avoid"
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let posFilter = "ALL";
 let showTaken = false; // independent toggle, layered on top of posFilter — not a 6th filter option
+let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let soloSource = null;   // when set, the whole page shows just this source
 let editingAdp = false;  // the add/import modal is in "ADP" mode
 let suppressEcho = false;
@@ -60,19 +61,26 @@ function renderSourceBar() {
   const chips = sources.map((s) => {
     const solo = soloSource === s.id;
     const cls = `chip${s.enabled ? "" : " disabled"}${solo ? " solo" : ""}`;
-    const edit = `<span class="edit-src" data-edit="${s.id}" title="Rename this source" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const edit = `<span class="edit-src" data-edit="${s.id}" title="Edit this source · ${formatLastUpdated(s.importedAt)}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
     const del = s.builtin ? "" : `<span class="x" data-del="${s.id}" title="Remove source">✕</span>`;
+    const swatch = s.icon
+      ? `<img src="${s.icon}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
+      : `<span class="sw" style="background:${s.color}"></span>`;
+    const posOnlyBadge = s.positionOnly ? `<span style="color:var(--dim);font-size:9px;margin-left:3px" title="Position-only — reference column, doesn't affect blended rank/tier">POS</span>` : "";
     return `<span class="${cls}" data-toggle="${s.id}" title="Click to enable/disable · double-click to isolate">
-      <span class="sw" style="background:${s.color}"></span>${s.name}${edit}
+      ${swatch}${s.name}${posOnlyBadge}${edit}
       <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
   }).join("");
 
   const adpChips = adpSources.map((s) => {
     const cls = `chip${s.enabled ? "" : " disabled"}`;
-    const edit = `<span class="edit-src" data-editadp="${s.id}" title="Rename this ADP source" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const edit = `<span class="edit-src" data-editadp="${s.id}" title="Edit this ADP source · ${formatLastUpdated(s.importedAt)}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
     const del = `<span class="x" data-deladp="${s.id}" title="Remove ADP source">✕</span>`;
+    const swatch = s.icon
+      ? `<img src="${s.icon}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
+      : `<span class="sw" style="background:${s.color}"></span>`;
     return `<span class="${cls}" data-toggleadp="${s.id}" title="Click to enable/disable — each enabled ADP source gets its own column, and the value/reach meter blends whichever are on">
-      <span class="sw" style="background:${s.color}"></span>${s.name}${edit}
+      ${swatch}${s.name}${edit}
       <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
   }).join("");
 
@@ -107,12 +115,7 @@ function renderSourceBar() {
   bar.querySelectorAll("[data-editadp]").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
-      const s = adpSources.find((x) => x.id === el.dataset.editadp);
-      const newName = prompt(`Rename "${s.name}" to:`, s.name);
-      if (!newName || newName === s.name) return;
-      s.name = newName.trim();
-      persistAdpSources();
-      renderAll();
+      openEditModal("adp", el.dataset.editadp);
     });
   });
 
@@ -150,15 +153,7 @@ function renderSourceBar() {
   bar.querySelectorAll("[data-edit]").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
-      const id = el.dataset.edit;
-      const s = sources.find((x) => x.id === id);
-      const newName = prompt(`Rename "${s.name}" to:`, s.name);
-      if (!newName || newName === s.name) return;
-      s.name = newName.trim();
-      suppressEcho = true;
-      persistSources();
-      suppressEcho = false;
-      renderAll();
+      openEditModal("source", el.dataset.edit);
     });
   });
   $("addSrcBtn").addEventListener("click", () => openModal(false));
@@ -218,6 +213,12 @@ function renderTable(rows) {
   let list = rows;
   if (posFilter !== "ALL") list = list.filter((r) => r.pos === posFilter);
   if (!showTaken) list = list.filter((r) => !taken.has(r.key));
+  if (playerSearch) {
+    const q = playerSearch.toLowerCase();
+    list = list.filter((r) =>
+      r.name.toLowerCase().includes(q) || (r.team || "").toLowerCase().includes(q)
+    );
+  }
 
   if (!list.length) {
     $("tbl").innerHTML = `<tr><td class="empty">Nothing here.</td></tr>`;
@@ -230,7 +231,7 @@ function renderTable(rows) {
     <th>POS</th>
     <th>TIER</th>
     <th>CONSENSUS</th>
-    ${cols.map((s) => `<th style="color:${s.color}">${s.name.toUpperCase()}</th>`).join("")}
+    ${cols.map((s) => `<th style="color:${s.color}" title="${s.positionOnly ? "Position-only source — shows this source's own within-position tier, not a rank. Reference only, never affects blended rank/tier." : ""}">${s.name.toUpperCase()}${s.positionOnly ? " ⓘ" : ""}</th>`).join("")}
     ${adpCols.map((s) => `<th style="color:${s.color}">${s.name.toUpperCase()}</th>`).join("")}
     <th title="Sleeper Live ADP vs. your other enabled ADP source(s) (baseline). Green = Sleeper drafts them later than baseline (a discount). Red = Sleeper drafts them earlier than baseline (a reach). Needs Sleeper Live ADP + at least one other ADP source enabled.">VALUE</th>
     <th></th>
@@ -245,13 +246,16 @@ function renderTable(rows) {
       ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${r.tier}</span>` : "";
     const flag = flags[r.key];
     const rowFlagClass = flag === "favorite" ? " favRow" : flag === "avoid" ? " avoidRow" : "";
-    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}">
+    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pname="${r.name}" data-ppos="${r.pos}">
       <td class="l" style="color:var(--dim)">${i + 1}</td>
-      <td class="l nm">${flagBadge(flag)}${r.name} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
+      <td class="l nm" title="Right-click to find & merge near-match orphans">${flagBadge(flag)}${r.name} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
       <td><span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span></td>
       <td>${tier}</td>
       <td style="color:var(--text)">${r.consensus?.toFixed(1) ?? "—"}</td>
-      ${cols.map((s) => `<td style="color:${r.ranks[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${r.ranks[s.id] ?? "·"}</td>`).join("")}
+      ${cols.map((s) => {
+        const val = s.positionOnly ? r.posOnlyTiers?.[s.id] : r.ranks[s.id];
+        return `<td style="color:${val !== undefined ? "var(--dim2)" : "var(--dim)"}">${val ?? "·"}</td>`;
+      }).join("")}
       ${adpCols.map((s) => `<td style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${adpEntry?.values[s.id] ?? "·"}</td>`).join("")}
       <td>${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}</td>
       <td>
@@ -282,14 +286,36 @@ function toggleFlag(key, kind) {
   renderAll();
 }
 
+// Orphans past this rank are almost always late-round/deep-bench players
+// where a name mismatch just doesn't matter — merging them is busywork, and
+// they used to bury the handful of actually-relevant early orphans in a long
+// scroll. Collapsed by default for the same reason: this section is a rare
+// safety net, not something that needs to stay open and eat screen space
+// above the main player table on every visit.
+const ORPHAN_RANK_LIMIT = 150;
+let orphansCollapsed = true;
+
 function renderOrphans() {
-  const orphans = findOrphans(sources, merges);
-  const orphanList = Object.entries(orphans);
+  const rawOrphans = findOrphans(sources, merges);
+  let totalRaw = 0;
+  const orphanList = Object.entries(rawOrphans).map(([srcId, keys]) => {
+    const src = sources.find((s) => s.id === srcId);
+    totalRaw += keys.length;
+    const keptKeys = keys.filter((key) => {
+      const player = src && src.players.find((p) => playerKey(p.name, p.pos) === key);
+      return player && isFinite(player.rank) && player.rank < ORPHAN_RANK_LIMIT;
+    });
+    return [srcId, keptKeys];
+  }).filter(([, keys]) => keys.length);
+
   if (!orphanList.length) {
     $("orphansSection").style.display = "none";
     return;
   }
   $("orphansSection").style.display = "block";
+  const totalKept = orphanList.reduce((n, [, keys]) => n + keys.length, 0);
+  const hidden = totalRaw - totalKept;
+  $("orphansCount").textContent = `(${totalKept}${hidden ? ` · ${hidden} below rank ${ORPHAN_RANK_LIMIT} hidden` : ""})`;
   const html = orphanList.map(([srcId, keys]) => {
     const src = sources.find((s) => s.id === srcId);
     const srcName = src ? src.name : `Source ${srcId}`;
@@ -305,34 +331,158 @@ function renderOrphans() {
     return `<div style="margin-bottom:8px"><span style="color:var(--dim)">${srcName}</span>${pairs}</div>`;
   }).join("");
   $("orphansList").innerHTML = html;
+  $("orphansList").style.display = orphansCollapsed ? "none" : "block";
+  $("orphansToggle").textContent = orphansCollapsed ? "▸" : "▾";
 
   document.querySelectorAll("[data-merge]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const key = btn.dataset.merge;
-      showMergePrompt(key);
+    btn.addEventListener("click", () => openMergeModal(btn.dataset.merge));
+  });
+}
+$("orphansHeader").addEventListener("click", () => {
+  orphansCollapsed = !orphansCollapsed;
+  renderOrphans();
+});
+
+// ---------- merge modal ----------
+// Replaced a native prompt() asking users to type "Name|POS" freehand — an
+// easy format to get slightly wrong (extra space, missing pipe) with a
+// generic error toast as the only feedback, so a failed merge just silently
+// left the orphan unchanged and looked like nothing happened at all. This
+// lists actual candidate players from other enabled sources at the same
+// position, so merging is a click, not a typed guess.
+let mergingOrphanKey = null;
+
+function mergeCandidatesFor(orphanKey) {
+  const pos = orphanKey.split("|")[1];
+  const seen = new Map(); // canonicalKey -> { name, pos, rank, sourceNames:[] }
+  sources.filter((s) => s.enabled).forEach((s) => {
+    s.players.forEach((p) => {
+      if (p.pos !== pos) return;
+      const key = playerKey(p.name, p.pos);
+      if (key === orphanKey) return; // never offer merging a player with itself
+      if (!seen.has(key)) seen.set(key, { name: p.name, pos: p.pos, rank: p.rank, sourceNames: [] });
+      seen.get(key).sourceNames.push(s.name);
+    });
+  });
+  return [...seen.values()].sort((a, b) => a.rank - b.rank);
+}
+function renderMergeCandidates(filterText) {
+  const q = filterText.trim().toLowerCase();
+  const candidates = mergeCandidatesFor(mergingOrphanKey).filter((c) => !q || c.name.toLowerCase().includes(q));
+  const el = $("mergeCandidates");
+  if (!candidates.length) {
+    el.innerHTML = `<div class="empty">No matching players at this position in another source.</div>`;
+    return;
+  }
+  el.innerHTML = candidates.map((c) => `
+    <div class="mergeCandidate" data-name="${c.name}" data-pos="${c.pos}">
+      <span>${c.name}</span>
+      <span class="src">${c.sourceNames.join(", ")} · rank ${c.rank}</span>
+    </div>`).join("");
+  el.querySelectorAll(".mergeCandidate").forEach((row) => {
+    row.addEventListener("click", () => {
+      const canonicalKey = playerKey(row.dataset.name, row.dataset.pos);
+      const orphanName = mergingOrphanKey.split("|")[0];
+      const next = { ...merges };
+      next[mergingOrphanKey] = canonicalKey;
+      merges = next;
+      suppressEcho = true;
+      saveMerges(merges).finally(() => { suppressEcho = false; });
+      toast(`Merged "${orphanName}" into "${row.dataset.name}".`);
+      closeMergeModal();
+      renderAll();
     });
   });
 }
-
-function showMergePrompt(orphanKey) {
-  // For now, offer a simple choice: either merge with an exact name match, or ignore.
-  // In a rare case, users can manually fix names in their source and re-import.
-  const response = prompt(
-    `Found "${orphanKey.split("|")[0]}" in only one source.\n\nTo merge with another player, paste their name and position (e.g., "Player Name|POS"), or press Cancel to ignore.`,
-    ""
-  );
-  if (!response) return;
-  const [name, pos] = response.split("|").map((s) => s.trim());
-  if (!name || !pos) { toast("Invalid format. Use: Name|POS", true); return; }
-  const canonicalKey = playerKey(name, pos);
-  const next = { ...merges };
-  next[orphanKey] = canonicalKey;
-  merges = next;
-  suppressEcho = true;
-  saveMerges(merges).finally(() => { suppressEcho = false; });
-  toast(`Merged "${orphanKey}" with "${canonicalKey}"`);
-  renderAll();
+function openMergeModal(orphanKey) {
+  mergingOrphanKey = orphanKey;
+  const [name, pos] = orphanKey.split("|");
+  $("mergeHint").textContent = `"${name}" (${pos}) only appears in one source. Pick which player it actually is:`;
+  $("mergeSearch").value = "";
+  renderMergeCandidates("");
+  $("mergeModal").classList.add("open");
 }
+function closeMergeModal() { $("mergeModal").classList.remove("open"); mergingOrphanKey = null; }
+$("mergeSearch").addEventListener("input", () => renderMergeCandidates($("mergeSearch").value));
+$("mergeCancelBtn").addEventListener("click", closeMergeModal);
+$("mergeModal").addEventListener("click", (e) => { if (e.target.id === "mergeModal") closeMergeModal(); });
+
+// ---------- right-click "merge near matches" menu ----------
+// The orphans list above only surfaces mismatches ranked under 150 (deep-
+// bench name variants aren't worth the scroll), and even within that, it's
+// one merge at a time. This is the other direction: right-click a player
+// ALREADY on the board and find every other source's likely-same-person
+// entry in one shot, regardless of rank — for a source like Boone/Smyth
+// where an abbreviated name ("K. Gainwell") never matched the canonical
+// "Kenneth Gainwell" and would otherwise sit unmerged forever past the
+// orphans list's rank cutoff.
+function closeNearMergeMenu() {
+  const el = $("nearMergeMenu");
+  if (el) el.remove();
+  document.removeEventListener("click", closeNearMergeMenu);
+  document.removeEventListener("keydown", onNearMergeMenuKey);
+}
+function onNearMergeMenuKey(e) {
+  if (e.key === "Escape") closeNearMergeMenu();
+}
+function openNearMergeMenu(x, y, name, pos) {
+  closeNearMergeMenu();
+  const canonicalKey = playerKey(name, pos);
+  const matches = findNearMatchOrphans(name, pos, sources, merges);
+  const menu = document.createElement("div");
+  menu.id = "nearMergeMenu";
+  menu.className = "nearMergeMenu";
+  if (!matches.length) {
+    menu.innerHTML = `<div class="nmm-title">No likely name-mismatch found for "${name}" in another source.</div>`;
+  } else {
+    menu.innerHTML = `
+      <div class="nmm-title">Found ${matches.length} likely match${matches.length > 1 ? "es" : ""} for "${name}" (${pos}) in other sources — merge into this player?</div>
+      ${matches.map((m, i) => `
+        <div class="nmm-row">
+          <input type="checkbox" id="nmm-${i}" data-idx="${i}" checked />
+          <label for="nmm-${i}">${m.name} <span class="nmm-src">${m.srcName} · rank ${m.rank}</span></label>
+        </div>`).join("")}
+      <div class="nmm-actions">
+        <button class="nmm-merge">MERGE SELECTED</button>
+        <button class="nmm-cancel">Cancel</button>
+      </div>`;
+  }
+  document.body.appendChild(menu);
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - w - 6))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - h - 6))}px`;
+  const mergeBtn = menu.querySelector(".nmm-merge");
+  if (mergeBtn) {
+    mergeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const checked = [...menu.querySelectorAll("input[type=checkbox]:checked")].map((cb) => matches[Number(cb.dataset.idx)]);
+      if (!checked.length) { closeNearMergeMenu(); return; }
+      const next = { ...merges };
+      checked.forEach((m) => { next[m.key] = canonicalKey; });
+      merges = next;
+      suppressEcho = true;
+      saveMerges(merges).finally(() => { suppressEcho = false; });
+      toast(`Merged ${checked.length} player${checked.length > 1 ? "s" : ""} into "${name}".`);
+      closeNearMergeMenu();
+      renderAll();
+    });
+  }
+  const cancelBtn = menu.querySelector(".nmm-cancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", (e) => { e.stopPropagation(); closeNearMergeMenu(); });
+  menu.addEventListener("click", (e) => e.stopPropagation());
+  setTimeout(() => {
+    document.addEventListener("click", closeNearMergeMenu);
+    document.addEventListener("keydown", onNearMergeMenuKey);
+  }, 0);
+}
+$("tbl").addEventListener("contextmenu", (e) => {
+  const nameEl = e.target.closest(".nm");
+  if (!nameEl) return;
+  const row = nameEl.closest("tr");
+  if (!row || !row.dataset.pname) return;
+  e.preventDefault();
+  openNearMergeMenu(e.clientX, e.clientY, row.dataset.pname, row.dataset.ppos);
+});
 
 // This surface is curation-only: source management + the full side-by-side
 // comparison table. Live recommendations and team counts live in the side panel
@@ -398,12 +548,150 @@ function openModal(isAdp) {
   $("srcFile").value = "";
   $("parseNote").textContent = "";
   $("parseNote").className = "";
+  // Position-only doesn't apply to ADP sources — ADP never blends tiers at all.
+  $("srcPositionOnlyRow").style.display = isAdp ? "none" : "";
+  $("srcPositionOnlyHint").style.display = isAdp ? "none" : "";
+  $("srcPositionOnly").checked = false;
   $("modal").classList.add("open");
 }
 function closeModal() { $("modal").classList.remove("open"); }
 
 $("cancelBtn").addEventListener("click", closeModal);
 $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+
+// ---------- edit modal (rename, icon, replace CSV, last-updated status) ----------
+// Replaces the old native prompt()-based rename with a proper menu — added so
+// re-uploading a source day-of-draft doesn't mean re-running "+ ADD SOURCE"
+// (which, for ranking sources, would create a duplicate rather than update in
+// place; ADP sources already upserted by name). This modal always edits a
+// known id directly, so there's no name-matching ambiguity either way.
+let editingTarget = null;      // { kind: "source"|"adp", id }
+let editingIconDataUrl;        // undefined = unchanged, null = cleared, string = new icon
+let editingNewPlayers = null;  // parsed players from a freshly-chosen CSV, replacing the source's list on save
+
+function findEditingSource() {
+  const list = editingTarget.kind === "adp" ? adpSources : sources;
+  return list.find((x) => x.id === editingTarget.id);
+}
+function renderEditIconPreview(dataUrl) {
+  $("editIconPreview").innerHTML = dataUrl ? `<img src="${dataUrl}" />` : "";
+}
+function formatLastUpdated(ts) {
+  if (!ts) return "Never re-uploaded since import.";
+  return `Last updated ${new Date(ts).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}.`;
+}
+function openEditModal(kind, id) {
+  editingTarget = { kind, id };
+  editingIconDataUrl = undefined;
+  editingNewPlayers = null;
+  const s = findEditingSource();
+  $("editSrcName").value = s.name;
+  renderEditIconPreview(s.icon || null);
+  $("editSrcFile").value = "";
+  $("editParseNote").textContent = "";
+  $("editParseNote").className = "";
+  // The two code-seeded ranking sources (this builtin, and FantasyPros ECR)
+  // normally re-seed their player list from the bundled JS file on every
+  // load. Replacing the CSV here now sets manualOverride (see makeSource in
+  // shared.js), which tells loadSources()/ensureBuiltinSources() to stop
+  // doing that and trust this upload instead — so the option can just stay
+  // visible for every ranking source rather than being hidden for these two.
+  $("editCsvLabel").style.display = "";
+  $("editSrcFile").style.display = "";
+  const isCodeSeeded = kind === "source" && (id === "default" || id === "fp");
+  $("editStatusLine").textContent = isCodeSeeded && !s.manualOverride
+    ? "Built in — re-seeded from the bundled rankings file on every load. Upload a CSV below to take over from here."
+    : formatLastUpdated(s.importedAt);
+  // Position-only doesn't apply to ADP sources — ADP never blends tiers at all.
+  $("editPositionOnlyRow").style.display = kind === "adp" ? "none" : "";
+  $("editPositionOnlyHint").style.display = kind === "adp" ? "none" : "";
+  $("editPositionOnly").checked = !!s.positionOnly;
+  $("editModal").classList.add("open");
+}
+function closeEditModal() { $("editModal").classList.remove("open"); editingTarget = null; }
+$("editCancelBtn").addEventListener("click", closeEditModal);
+$("editModal").addEventListener("click", (e) => { if (e.target.id === "editModal") closeEditModal(); });
+
+// Downscales to a small square PNG so a photo-sized upload doesn't bloat
+// chrome.storage.local — the icon only ever renders at ~9-32px anyway.
+function loadIconAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const size = 48;
+        const canvas = document.createElement("canvas");
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const cropSize = Math.min(img.width, img.height);
+        const sx = (img.width - cropSize) / 2, sy = (img.height - cropSize) / 2;
+        ctx.drawImage(img, sx, sy, cropSize, cropSize, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => reject(new Error("Couldn't read that image."));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.readAsDataURL(file);
+  });
+}
+$("editIconFile").addEventListener("change", async () => {
+  const f = $("editIconFile").files[0];
+  if (!f) return;
+  try {
+    editingIconDataUrl = await loadIconAsDataUrl(f);
+    renderEditIconPreview(editingIconDataUrl);
+  } catch (e) {
+    toast(e.message, true);
+  }
+});
+$("editIconClear").addEventListener("click", () => {
+  editingIconDataUrl = null;
+  renderEditIconPreview(null);
+});
+$("editSrcFile").addEventListener("change", () => {
+  const f = $("editSrcFile").files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const { players, warnings } = parseRankings(r.result);
+    const note = $("editParseNote");
+    if (!players.length) {
+      note.className = "err";
+      note.textContent = "Couldn't parse any players. " + warnings.join(" ");
+      editingNewPlayers = null;
+      return;
+    }
+    editingNewPlayers = players;
+    note.className = warnings.length ? "warn" : "ok";
+    note.textContent = `Parsed ${players.length} players — will replace the current list on save. ${warnings.join(" ")}`;
+  };
+  r.readAsText(f);
+});
+$("editSaveBtn").addEventListener("click", async () => {
+  const name = $("editSrcName").value.trim();
+  if (!name) { toast("Give the source a name.", true); return; }
+  const s = findEditingSource();
+  s.name = name;
+  if (editingIconDataUrl !== undefined) s.icon = editingIconDataUrl;
+  if (editingTarget.kind === "source") s.positionOnly = $("editPositionOnly").checked;
+  if (editingNewPlayers) {
+    s.players = editingTarget.kind === "adp"
+      ? editingNewPlayers.map((p) => ({ name: p.name, pos: p.pos, rank: p.rank }))
+      : editingNewPlayers.map((p) => ({ name: p.name, team: p.team, pos: p.pos, tier: p.tier, rank: p.rank }));
+    s.importedAt = Date.now();
+    // Marks a code-seeded ranking source (default / fp) as user-owned from
+    // here on, so loadSources()/ensureBuiltinSources() stop stomping this
+    // upload back to the bundled JS file's content on the next load.
+    if (editingTarget.kind === "source") s.manualOverride = true;
+  }
+  if (editingTarget.kind === "adp") await persistAdpSources();
+  else await persistSources();
+  closeEditModal();
+  renderAll();
+  toast(`Updated "${name}".`);
+});
 
 // ---------- confirm modal (themed replacement for native confirm) ----------
 let confirmResolve = null;
@@ -481,9 +769,10 @@ $("saveSrcBtn").addEventListener("click", async () => {
     }
   } else {
     const color = SOURCE_PALETTE[sources.length % SOURCE_PALETTE.length];
-    sources.push(makeSource(name, players, { color }));
+    const positionOnly = $("srcPositionOnly").checked;
+    sources.push(makeSource(name, players, { color, positionOnly }));
     await persistSources();
-    toast(`Added "${name}" — ${players.length} players.`);
+    toast(`Added "${name}"${positionOnly ? " (position-only)" : ""} — ${players.length} players.`);
   }
   closeModal();
   renderAll();
@@ -501,6 +790,10 @@ document.querySelectorAll(".pf[data-pos]").forEach((btn) => {
 $("takenToggle").addEventListener("click", () => {
   showTaken = !showTaken;
   $("takenToggle").classList.toggle("active", showTaken);
+  renderAll();
+});
+$("playerSearch").addEventListener("input", () => {
+  playerSearch = $("playerSearch").value.trim();
   renderAll();
 });
 
@@ -542,11 +835,16 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 async function ensureBuiltinSources() {
   if (typeof FP_RANKINGS === "undefined") return;
   const existing = sources.find((s) => s.id === "fp");
+  // Once manually overridden via the edit modal's CSV replace, trust the
+  // stored player list instead of stomping it back to FP_RANKINGS on every
+  // load — same rule as the default source in shared.js's loadSources().
+  if (existing && existing.manualOverride) return;
   const fpSource = makeSource("FantasyPros ECR", FP_RANKINGS, {
     id: "fp",
     builtin: false,
     color: existing ? existing.color : undefined,
     enabled: existing ? existing.enabled : true,
+    icon: existing ? existing.icon : undefined,
   });
   sources = [...sources.filter((s) => s.id !== "fp"), fpSource];
   suppressEcho = true;

@@ -12,6 +12,25 @@
 // letters so sources like FantasyPros (whose CSV tier column is already numeric)
 // don't need translation to line up with the bundled rankings.
 const TIER_ORDER = ["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16"];
+// Letter-graded sources ("S,A,B,C,...,O" is a common 16-tier scheme) get
+// mapped onto TIER_ORDER's numeric scale so their tiers actually participate
+// in cross-source blending (buildConsensus's depthVotes below keys off
+// TIER_ORDER.indexOf, which only ever matches numeric labels) instead of
+// being silently invisible to it, and so a single-source view of one of
+// these sources gets the app's normal tier colors instead of falling back to
+// gray. S is treated as the best tier (maps to "1"), then A-O follow in
+// order — this is the standard reading of that scheme, not a guess specific
+// to one source's export.
+const LETTER_TIER_ORDER = ["S","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O"];
+function normalizeTierLabel(tier) {
+  const t = String(tier || "").trim().toUpperCase();
+  if (!t || TIER_ORDER.includes(t)) return t;
+  const idx = LETTER_TIER_ORDER.indexOf(t);
+  // Unrecognized label (not numeric, not in the S-O scheme) — leave it as-is.
+  // renderBoard()'s tier grouping still displays it (ordered by rank among
+  // the other groups), it just won't blend numerically with other sources.
+  return idx === -1 ? t : String(idx + 1);
+}
 const TIER_COLORS = {
   1:"#F5C242", 2:"#E8853A", 3:"#D9622F", 4:"#4F9E6B", 5:"#3D8A62", 6:"#357A5A",
   7:"#3A7CA5", 8:"#356E93", 9:"#5B6B8C", 10:"#665C8C", 11:"#7A5C8C", 12:"#8C5C7A",
@@ -60,6 +79,23 @@ function makeSource(name, players, opts = {}) {
     color: opts.color || SOURCE_PALETTE[0],
     enabled: opts.enabled !== false,
     builtin: !!opts.builtin,
+    icon: opts.icon || null, // small square data URL, set via the manager's edit modal — falls back to the color swatch when absent
+    importedAt: opts.importedAt || Date.now(), // when the player list was last (re-)uploaded, shown in the edit modal
+    // True once a user manually replaces this source's CSV through the edit
+    // modal. Only meaningful for the two code-seeded sources (this one and
+    // FantasyPros ECR in rankings-manager.js) — it's what tells loadSources()/
+    // ensureBuiltinSources() to stop re-seeding from the bundled JS file and
+    // trust the stored upload instead, so a manual replacement actually
+    // sticks rather than being silently overwritten on the next load.
+    manualOverride: !!opts.manualOverride,
+    // True for sources whose Rank column is only meaningful WITHIN a
+    // position (e.g. "QB rank 3"), not comparable across positions the way
+    // every other source's rank is. buildConsensus excludes these entirely
+    // from rank/tier blending — mixing a positional rank into the
+    // cross-position median would corrupt it for every other source at
+    // once. Instead their tier shows up as its own reference column
+    // (renderBoard/renderTable), never reshaping the blended board itself.
+    positionOnly: !!opts.positionOnly,
     players,
   };
 }
@@ -78,19 +114,35 @@ function defaultSource() {
 async function loadSources() {
   const v = await chrome.storage.local.get([K_SOURCES]);
   const stored = Array.isArray(v[K_SOURCES]) ? v[K_SOURCES] : [];
-  // Always re-seed the builtin from rankings.js so a code update to the default
-  // ranking set actually takes effect instead of being pinned to a stale copy.
+  // Re-seed the builtin from rankings.js so a code update to the default
+  // ranking set actually takes effect — UNLESS the user has manually replaced
+  // its CSV through the edit modal, in which case that upload wins instead
+  // (see manualOverride in makeSource).
   const base = defaultSource();
   const existingBase = stored.find((s) => s.id === "default");
-  if (existingBase) base.enabled = existingBase.enabled;
+  if (existingBase) {
+    base.enabled = existingBase.enabled;
+    base.icon = existingBase.icon || null;
+    if (existingBase.manualOverride) {
+      base.manualOverride = true;
+      base.players = existingBase.players;
+      base.importedAt = existingBase.importedAt;
+    }
+  }
   return [base, ...stored.filter((s) => s.id !== "default")];
 }
 
 async function saveSources(sources) {
-  // Persist the builtin's enabled flag but not its (large, regenerable) player list.
+  // Persist the builtin's enabled flag, icon, and — only once manually
+  // overridden — its player list too (normally left as [] since it's large
+  // and regenerable from rankings.js on every load).
   const toStore = sources.map((s) =>
     s.id === "default"
-      ? { id: "default", name: s.name, color: s.color, enabled: s.enabled, builtin: true, players: [] }
+      ? {
+          id: "default", name: s.name, color: s.color, enabled: s.enabled, builtin: true,
+          icon: s.icon || null, manualOverride: !!s.manualOverride, importedAt: s.importedAt,
+          players: s.manualOverride ? s.players : [],
+        }
       : s
   );
   await chrome.storage.local.set({ [K_SOURCES]: toStore });
@@ -262,52 +314,96 @@ function median(nums) {
 // treated as unranked/infinity, which would unfairly bury them.
 function buildConsensus(sources, merges = {}) {
   const enabled = sources.filter((s) => s.enabled);
+  // Position-only sources (Rank/Tier only meaningful within one position,
+  // e.g. a QB-only or RB-only guide) never touch rank/tier blending —
+  // mixing a positional rank or tier into the cross-position math would
+  // corrupt it for every other source at once (see makeSource in this file).
+  // The combined sources below drive consensus/tier exactly as before;
+  // position-only sources are collected separately into `posOnlyTiers` and
+  // surfaced as their own reference column instead (renderBoard/renderTable).
+  // Exception: when a position-only source is the ONLY source passed in at
+  // all (isolating it via a solo click, in panel.js's activeSources()), there
+  // is nothing else for its positional rank to corrupt — so let it act as a
+  // normal single blend source instead, showing its own rank/tier as-is.
+  // Without this, isolating a position-only source produced an all-null-
+  // consensus board ("No available players", "Nothing here") since nothing
+  // ever populated `ranks`/ranked it fell into the position-only-only branch.
+  const soloing = enabled.length === 1;
+  const blendSources = soloing ? enabled : enabled.filter((s) => !s.positionOnly);
+  const posOnlySources = soloing ? [] : enabled.filter((s) => s.positionOnly);
+
   // Each source's own max tier index actually used — the denominator for
   // normalizing that source's tier labels to a comparable 0..1 "depth" scale.
   // See assignBlendedTiers for why this is necessary.
   const maxTierIdx = new Map();
-  enabled.forEach((src) => {
+  blendSources.forEach((src) => {
     let max = 0;
     src.players.forEach((p) => {
-      if (p.tier) max = Math.max(max, TIER_ORDER.indexOf(String(p.tier)));
+      if (p.tier) max = Math.max(max, TIER_ORDER.indexOf(normalizeTierLabel(p.tier)));
     });
     maxTierIdx.set(src.id, max);
   });
 
   const map = new Map();
-  enabled.forEach((src) => {
+  const getEntry = (p, key) => {
+    if (!map.has(key)) {
+      map.set(key, { key, name: p.name, team: p.team, pos: p.pos, tierVotes: [], depthVotes: [], ranks: {}, posOnlyTiers: {}, posOnlyRanks: {} });
+    }
+    return map.get(key);
+  };
+  blendSources.forEach((src) => {
     src.players.forEach((p) => {
       if (!p.pos) return;
       let key = playerKey(p.name, p.pos);
       // Apply merges: if this key is a variant, resolve to canonical.
       key = applyMerge(key, merges);
-      if (!map.has(key)) {
-        map.set(key, { key, name: p.name, team: p.team, pos: p.pos, tierVotes: [], depthVotes: [], ranks: {} });
-      }
-      const e = map.get(key);
+      const e = getEntry(p, key);
       e.ranks[src.id] = p.rank;
       if (!e.team && p.team) e.team = p.team;
       if (p.tier) {
-        e.tierVotes.push(p.tier);
-        const idx = TIER_ORDER.indexOf(String(p.tier));
+        // Normalized so a letter-graded source's tiers can actually blend
+        // with numeric ones (TIER_ORDER.indexOf below only matches "1".."16")
+        // instead of being silently excluded from depth-based blending.
+        const tier = normalizeTierLabel(p.tier);
+        e.tierVotes.push(tier);
+        const idx = TIER_ORDER.indexOf(tier);
         const max = maxTierIdx.get(src.id);
         if (idx >= 0 && max > 0) e.depthVotes.push(idx / max);
       }
     });
   });
+  // Position-only sources: only ever recorded into posOnlyTiers, keyed by
+  // source id, for display — never into ranks/tierVotes/depthVotes above.
+  // A player who only appears in a position-only source (never in any
+  // combined source) still gets an entry so their tier reference shows up
+  // somewhere, but they'll have no rank/blended tier of their own.
+  posOnlySources.forEach((src) => {
+    src.players.forEach((p) => {
+      if (!p.pos) return;
+      let key = playerKey(p.name, p.pos);
+      key = applyMerge(key, merges);
+      const e = getEntry(p, key);
+      if (!e.team && p.team) e.team = p.team;
+      if (p.tier) e.posOnlyTiers[src.id] = String(p.tier).trim();
+      // Within-position rank (e.g. this source's "WR2") — needed so Best
+      // Picks can tell which player is this source's TOP recommendation
+      // within a position, not just its tier band. See renderBestPicksWidget.
+      if (isFinite(p.rank)) e.posOnlyRanks[src.id] = p.rank;
+    });
+  });
   const out = [...map.values()].map((e) => {
     const vals = Object.values(e.ranks).filter((v) => isFinite(v));
     return {
-      key: e.key, name: e.name, team: e.team, pos: e.pos, ranks: e.ranks,
-      // With exactly one active source, its own tier label is meaningful as-is.
-      // With 2+, filled in below — see assignBlendedTiers.
-      tier: enabled.length <= 1 ? modeTier(e.tierVotes) : "",
+      key: e.key, name: e.name, team: e.team, pos: e.pos, ranks: e.ranks, posOnlyTiers: e.posOnlyTiers, posOnlyRanks: e.posOnlyRanks,
+      // With exactly one active blending source, its own tier label is
+      // meaningful as-is. With 2+, filled in below — see assignBlendedTiers.
+      tier: blendSources.length <= 1 ? modeTier(e.tierVotes) : "",
       depth: e.depthVotes.length ? median(e.depthVotes) : null,
       consensus: median(vals), sourceCount: vals.length,
     };
   });
   out.sort((a, b) => (a.consensus ?? 1e9) - (b.consensus ?? 1e9));
-  if (enabled.length > 1) assignBlendedTiers(out);
+  if (blendSources.length > 1) assignBlendedTiers(out);
   return out;
 }
 
@@ -341,6 +437,19 @@ function modeTier(votes) {
 // a lot of players sit at similar depth, the tier stays big — that's real
 // signal carried over from the sources' own tiering, not this code forcing an
 // even split.
+//
+// A source-vote-boundary version (count how many sources place an exact tier
+// break between each adjacent pair in blended rank order) was tried and
+// reverted 2026-08-23: real per-source tier boundaries almost never land on
+// the exact same rank-adjacent pair across sources, even when they broadly
+// agree there's a cliff nearby (one source breaks between rank 14/15, another
+// between 16/17 — zero overlap under exact-pair matching despite real
+// agreement). That made "majority agreement at this exact pair" nearly
+// impossible to reach across most of the draft, collapsing into one huge
+// leftover tier — worse than this depth-based version, not better. A
+// windowed/clustering approach (treating nearby-but-not-identical boundaries
+// as the same cliff) might fix that properly, but needs real design work
+// before trying again — don't re-attempt the naive exact-pair version.
 function assignBlendedTiers(sortedRows) {
   let running = 0;
   sortedRows.forEach((r) => {
@@ -371,29 +480,57 @@ function sourceTag(name) {
   return String(name || "").slice(0, 2).toUpperCase();
 }
 
-// opts: { rows, sources, takenSet:Set<key>, adp, soloSource, onSolo(id|null) }
+// A source's dot, used everywhere a source needs a small visual identifier
+// (Best Picks cards, the always-visible source list). Renders the icon
+// uploaded via the Rankings Manager's edit modal when the source has one,
+// falling back to the existing color-swatch + 2-letter tag otherwise — the
+// same fallback pattern used for the manager's own chip swatches.
+function sourceDotHtml(s, { solo = false, title } = {}) {
+  const cls = `dot${solo ? " solo" : ""}${s.icon ? " has-icon" : ""}`;
+  const inner = s.icon ? `<img src="${s.icon}" alt="" />` : sourceTag(s.name);
+  return `<span class="${cls}" data-solo="${s.id}" style="background:${s.color}" title="${title ?? s.name}">${inner}</span>`;
+}
+
+// opts: { rows, sources, takenSet:Set<key>, adp, soloSource, posFilter, onSolo(id|null) }
 // `rows` must be consensus across ALL enabled sources (not solo-filtered) so
 // every source's agreement can be checked, even though only the active source's
 // dot always shows. Isolating a source re-sorts the top 3 by that source's own
-// rank instead of the blended consensus.
+// rank instead of the blended consensus. Position-filtering is the CALLER's
+// job (pre-filter `rows` before passing them in) — doing it here would also
+// need to reach into `sourceTopPick` below, and filtering upstream makes
+// "each source's own #1 pick" naturally scope to that position for free.
+// `posFilter` is only used for the medal label text, so a filtered view
+// doesn't silently look identical to the unfiltered one.
 function renderBestPicksWidget(el, opts) {
   if (!el) return;
-  const { rows = [], sources = [], takenSet = new Set(), adp = null, valueMap = null, soloSource = null, onSolo, flags = {} } = opts || {};
+  const { rows = [], sources = [], takenSet = new Set(), adp = null, valueMap = null, soloSource = null, posFilter = "ALL", onSolo, flags = {} } = opts || {};
+  // `rows` here is always the FULL multi-source consensus (see panel.js's
+  // renderRecommendations) so every source's dot stays visible — which means
+  // a position-only source never wrote anything into `r.ranks` (see
+  // buildConsensus: it only gets that treatment when it's the ONLY source in
+  // the whole call, which isn't the case here). Isolating one has to read its
+  // rank from `r.posOnlyRanks` instead, or every row gets filtered out and
+  // Best Picks goes blank for that source's isolation view.
+  const soloIsPosOnly = soloSource && sources.find((s) => s.id === soloSource)?.positionOnly;
+  const soloRank = (r) => (soloIsPosOnly ? r.posOnlyRanks?.[soloSource] : r.ranks[soloSource]);
   let displayRows = rows;
   if (soloSource) {
     displayRows = rows
-      .filter((r) => r.ranks[soloSource] !== undefined)
+      .filter((r) => soloRank(r) !== undefined)
       .slice()
-      .sort((a, b) => a.ranks[soloSource] - b.ranks[soloSource]);
+      .sort((a, b) => soloRank(a) - soloRank(b));
   }
   const top = displayRows.filter((r) => !takenSet.has(r.key)).slice(0, 3);
+  const posLabel = posFilter && posFilter !== "ALL" ? ` ${posFilter}` : "";
   const medals = [
-    { label: "1ST — BEST AVAILABLE", color: "#F5C242" },
+    { label: `1ST — BEST${posLabel} AVAILABLE`, color: "#F5C242" },
     { label: "2ND", color: "#C9CAD1" },
     { label: "3RD", color: "#C98A5F" },
   ];
   if (!top.length) {
-    el.innerHTML = `<div class="empty" style="grid-column:1/-1">No available players — add a ranking source in the Rankings Manager.</div>`;
+    el.innerHTML = posLabel
+      ? `<div class="empty" style="grid-column:1/-1">No available${posLabel} players — everyone's off the board.</div>`
+      : `<div class="empty" style="grid-column:1/-1">No available players — add a ranking source in the Rankings Manager.</div>`;
     return;
   }
   // Each enabled source's own single best-available pick (excluding taken
@@ -403,6 +540,29 @@ function renderBestPicksWidget(el, opts) {
   // as a signal; "agrees this is the best pick" is the useful one.
   const sourceTopPick = new Map(); // sourceId -> playerKey
   sources.filter((s) => s.enabled).forEach((s) => {
+    if (s.positionOnly) {
+      // A position-only source's rank is only meaningful WITHIN a position
+      // (its "WR2" isn't comparable to its "RB2"), so it can't have one true
+      // overall top pick the way a blended source does. Instead: find this
+      // source's best-ranked player within each position actually shown on
+      // the cards, then — if that yields candidates from more than one
+      // position (e.g. its own WR2 AND its own RB2 both land on cards) —
+      // dot only the single one that ranks highest on OUR blended board,
+      // so the source still gets exactly one dot, not one per position.
+      const byPos = new Map();
+      top.forEach((r) => {
+        const rk = r.posOnlyRanks?.[s.id];
+        if (rk === undefined) return;
+        const cur = byPos.get(r.pos);
+        if (!cur || rk < cur.rk) byPos.set(r.pos, { key: r.key, rk, consensus: r.consensus ?? Infinity });
+      });
+      let bestKey = null, bestConsensus = Infinity;
+      byPos.forEach((c) => {
+        if (bestKey === null || c.consensus < bestConsensus) { bestKey = c.key; bestConsensus = c.consensus; }
+      });
+      if (bestKey) sourceTopPick.set(s.id, bestKey);
+      return;
+    }
     let bestKey = null, bestRank = Infinity;
     rows.forEach((r) => {
       if (takenSet.has(r.key)) return;
@@ -418,11 +578,15 @@ function renderBestPicksWidget(el, opts) {
     // Every other source's dot shows only if ITS OWN #1 pick is this player.
     const dots = sources
       .filter((s) => s.enabled && (s.id === soloSource || sourceTopPick.get(s.id) === r.key))
-      .map((s) => `<span class="dot${soloSource === s.id ? " solo" : ""}" data-solo="${s.id}"
-            style="background:${s.color}" title="${s.name}: rank ${r.ranks[s.id] ?? "—"}">${sourceTag(s.name)}</span>`)
+      .map((s) => sourceDotHtml(s, {
+        solo: soloSource === s.id,
+        title: s.positionOnly
+          ? `${s.name}: ${r.pos}${r.posOnlyRanks?.[s.id] ?? "—"}`
+          : `${s.name}: rank ${r.ranks[s.id] ?? "—"}`,
+      }))
       .join("");
     const adpV = adp ? adp.map.get(r.key) : undefined;
-    const displayRank = soloSource ? r.ranks[soloSource] : r.consensus;
+    const displayRank = soloSource ? soloRank(r) : r.consensus;
     // Short tag, not the full source name, in the RANK tile's label — a long
     // name ("Fantasy Flock Rankings") wraps and makes the whole card grid
     // jump height when isolating a source.
@@ -477,8 +641,7 @@ function renderSourceListWidget(el, opts) {
   const { sources = [], soloSource = null, onSolo } = opts || {};
   const enabled = sources.filter((s) => s.enabled);
   if (enabled.length < 2) { el.innerHTML = ""; return; }
-  el.innerHTML = enabled.map((s) => `<span class="dot${soloSource === s.id ? " solo" : ""}" data-solo="${s.id}"
-        style="background:${s.color}" title="${s.name}">${sourceTag(s.name)}</span>`).join("");
+  el.innerHTML = enabled.map((s) => sourceDotHtml(s, { solo: soloSource === s.id })).join("");
   if (onSolo) {
     el.querySelectorAll("[data-solo]").forEach((dot) => {
       dot.addEventListener("click", () => {
@@ -517,8 +680,9 @@ function makeAdpSource(name, players, opts = {}) {
     name,
     color: opts.color || SOURCE_PALETTE[0],
     enabled: opts.enabled !== false,
+    icon: opts.icon || null, // small square data URL, set via the manager's edit modal
     players, // [{name,pos,rank}] — rank here means "ADP value"
-    importedAt: Date.now(),
+    importedAt: opts.importedAt || Date.now(),
   };
 }
 async function loadAdpSources() {
@@ -728,4 +892,46 @@ function findOrphans(sources, merges = {}) {
     }
   });
   return orphans;
+}
+
+// Given one canonical player (a name already shown on the board, e.g. from
+// the consensus table), find every OTHER source's player that's almost
+// certainly the same person under a different spelling — same last name +
+// first initial + position, same fallback pattern already trusted elsewhere
+// in this app for matching a live Sleeper pick to a rankings row (see
+// matchPick in panel.js). Only auto-offers a source's player when it's the
+// SINGLE such candidate there — if a source has two same-initial same-
+// lastname players at that position (rare, but possible), it's ambiguous and
+// gets skipped rather than guessed, exactly like matchPick's own safety
+// check (`loose.length === 1`). Used by the Rankings Manager's right-click
+// "merge near matches" menu, to resolve several sources' worth of name-
+// mismatch orphans against one player in a single action instead of hunting
+// them down one at a time in the (rank-limited) orphans list.
+function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {}) {
+  const canonicalKey = playerKey(canonicalName, canonicalPos);
+  const normed = norm(canonicalName);
+  const tokens = normed.split(" ");
+  const lastName = tokens[tokens.length - 1];
+  const firstInitial = normed.charAt(0);
+  const matches = [];
+  sources.filter((s) => s.enabled).forEach((src) => {
+    // If this source already resolves (directly or via an existing merge) to
+    // the canonical key, there's nothing to find here.
+    const hasExact = src.players.some(
+      (p) => p.pos === canonicalPos && applyMerge(playerKey(p.name, p.pos), merges) === canonicalKey
+    );
+    if (hasExact) return;
+    const candidates = src.players.filter((p) => {
+      if (p.pos !== canonicalPos) return false;
+      const key = applyMerge(playerKey(p.name, p.pos), merges);
+      if (key === canonicalKey) return false;
+      const n = norm(p.name);
+      return n.endsWith(" " + lastName) && n.charAt(0) === firstInitial;
+    });
+    if (candidates.length === 1) {
+      const p = candidates[0];
+      matches.push({ srcId: src.id, srcName: src.name, name: p.name, pos: p.pos, rank: p.rank, key: playerKey(p.name, p.pos) });
+    }
+  });
+  return matches;
 }

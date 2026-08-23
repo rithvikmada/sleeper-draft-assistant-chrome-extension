@@ -119,6 +119,8 @@
     font-family: ui-monospace, monospace; border: 1px solid transparent; color: #0B0D08;
   }
   .dot.solo { outline: 1.5px solid var(--gold); outline-offset: 1px; }
+  .dot.has-icon { padding: 0; overflow: hidden; }
+  .dot.has-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
   #soloBar { margin-top: 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--gold); display: none; align-items: center; gap: 6px; }
   .empty { color: var(--dim); text-align: center; padding: 14px; font-size: 11px; }
   #best {
@@ -128,6 +130,12 @@
   .best-pos { font-size: 9px; font-family: ui-monospace, monospace; letter-spacing: 1px; opacity: .8; }
   .best-name { font-size: 11.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #filters { display: flex; gap: 4px; margin-top: 8px; }
+  #playerSearch {
+    flex: 1; min-width: 80px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    color: var(--text); padding: 5px 8px; font-size: 11px; font-family: ui-monospace, monospace;
+  }
+  #playerSearch:focus { outline: 1px solid var(--green); }
+  #playerSearch::placeholder { color: var(--dim); }
   .pf {
     background: transparent; border: 1px solid var(--line2); color: var(--dim2);
     padding: 4px 9px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s;
@@ -158,6 +166,24 @@
   .flagMark { margin-right: 3px; }
   .flagMark.fav { color: var(--gold); }
   .flagMark.avoid { color: var(--red); }
+  .nm { cursor: context-menu; }
+  /* ---- right-click flag menu (favorite/avoid) — right-click chosen specifically
+     because double-click on the row already means "cross player off" (see the
+     dblclick handler in panel.js); a floating menu was picked over inline pills
+     or a tooltip so it never competes with the ADP columns/value bar for row space. */
+  .flagMenu {
+    position: fixed; z-index: 50; background: #1C1F16; border: 1px solid #3A3E2E; border-radius: 8px;
+    padding: 4px; display: flex; flex-direction: column; min-width: 130px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.5); font-family: ui-monospace, monospace;
+  }
+  .flagMenu button {
+    all: unset; padding: 7px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  }
+  .flagMenu button:hover { background: rgba(255,255,255,.08); }
+  .flagMenu .fm-fav { color: var(--gold); }
+  .flagMenu .fm-avoid { color: var(--red); }
+  .flagMenu .fm-current { background: rgba(255,255,255,.06); }
+  .flagMenu .fm-clear { color: var(--dim2); border-top: 1px solid var(--line2); margin-top: 2px; padding-top: 8px; }
   .pos-chip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
   .adp-cell { font-family: ui-monospace, monospace; font-size: 10px; text-align: right; white-space: nowrap; }
   /* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) — matches rankings-manager.html, sized down for the panel's narrower width ----
@@ -201,8 +227,8 @@
 
     <div id="statusBar">
       <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
+      <button id="openManager" class="iconBtn" title="Open the Rankings Manager">↗ MANAGER</button>
       <button id="settingsBtn" class="iconBtn" title="Show/hide setup &amp; sync settings">⚙</button>
-      <button id="popOutBtn" class="iconBtn" title="Pop out into its own resizable window">⤢</button>
     </div>
 
     <div id="settingsPanel">
@@ -213,7 +239,6 @@
       </div>
       <div id="metaRow">
         <input id="myRoster" type="number" min="1" placeholder="My draft slot #" title="Your draft slot / roster number — used to mark your own picks" />
-        <button id="openManager" class="alt">⚙ RANKINGS MANAGER</button>
       </div>
       <div id="refreshRow" style="display:none">
         <button id="refreshBtn">⟳ REFRESH NOW</button>
@@ -229,11 +254,13 @@
     <div id="best"></div>
     <div id="filters">
       <button class="pf active" data-pos="ALL">ALL</button>
+      <button class="pf" data-pos="RB/WR" title="RB and WR only — no QB, no TE">RB/WR</button>
       <button class="pf" data-pos="QB">QB</button>
       <button class="pf" data-pos="RB">RB</button>
       <button class="pf" data-pos="WR">WR</button>
       <button class="pf" data-pos="TE">TE</button>
       <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
+      <input type="text" id="playerSearch" placeholder="Search name or team…" />
     </div>
   </div>
   <div id="adpColLabels" style="display:none"></div>

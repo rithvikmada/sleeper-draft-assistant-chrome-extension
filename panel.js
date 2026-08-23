@@ -46,6 +46,16 @@ let myRosterId = null; // user-entered draft slot / roster id — drives the "mi
 let suppressStorageEcho = false; // ignore the onChanged event fired by our own write
 let pollTimer = null;
 let posFilter = "ALL";
+// Most filter values are a single position, matched exactly. A grouped filter
+// (currently just the RB/WR flex view) maps to a set of positions instead —
+// everything downstream (renderBoard, renderRecommendations) calls
+// filterMatchesPos() rather than comparing r.pos === posFilter directly, so
+// adding another grouped filter later is a one-line addition here.
+const POS_FILTER_GROUPS = { "RB/WR": ["RB", "WR"] };
+function filterMatchesPos(pos) {
+  const group = POS_FILTER_GROUPS[posFilter];
+  return group ? group.includes(pos) : pos === posFilter;
+}
 let lastPickCount = 0;
 let unmatched = [];
 let currentDraftId = null;
@@ -70,6 +80,7 @@ let lastSharedPicks = []; // source-agnostic record of every drafted player, by 
 let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manager
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let showTaken = false; // independent toggle, layered on top of posFilter
+let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 
 const $ = (id) => document.getElementById(id);
 
@@ -105,10 +116,20 @@ function renderBoard() {
   // position filter, it layers drafted players (crossed out) on top of it.
   const rows = buildConsensus(activeSources(), merges);
   let list = rows;
-  if (posFilter !== "ALL") list = list.filter((r) => r.pos === posFilter);
+  if (posFilter !== "ALL") list = list.filter((r) => filterMatchesPos(r.pos));
 
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   if (!showTaken) list = list.filter((r) => !isGone(r));
+
+  // Search layers on top of position/taken filters, same independence pattern —
+  // matches on name or team, case-insensitive, substring (not just prefix) so
+  // "chase" finds "Ja'Marr Chase" and "det" finds every Lions player.
+  if (playerSearch) {
+    const q = playerSearch.toLowerCase();
+    list = list.filter((r) =>
+      r.name.toLowerCase().includes(q) || (r.team || "").toLowerCase().includes(q)
+    );
+  }
 
   // Per-row ADP columns + value badge — one column per enabled ADP source
   // (usually Sleeper Live ADP + a pasted FantasyPros export), plus the
@@ -118,6 +139,14 @@ function renderBoard() {
   const adpCols = adpSources.filter((s) => s.enabled);
   const adpConsensus = buildAdpConsensus(adpSources);
   const valueMap = buildValueComparison(adpSources);
+  // Position-only ranking sources are still full ranking sources — like Flock
+  // or FantasyPros, they don't get their own board column, they contribute
+  // to the tiered list (or, for position-only, to the Best Picks dot logic —
+  // see shared.js). Board columns are reserved for ADP and future per-player
+  // stat/projection data, not per-ranking-source detail (that's what the
+  // Rankings Manager table is for). A dedicated posOnly reference column was
+  // tried and reverted the same day it shipped — inconsistent with every
+  // other ranking source's total absence from the board's columns.
   // Every track is a fixed length, deliberately — NOT "auto" for the pos-chip
   // column. #adpColLabels and each .row are separate grid containers, so an
   // "auto" track sizes independently per container: the label row's pos-chip
@@ -139,7 +168,8 @@ function renderBoard() {
     labelsEl.style.gridTemplateColumns = gridCols;
     labelsEl.innerHTML = `<span></span><span></span>` +
       adpCols.map((s) => `<span style="color:${s.color}" title="${s.name}">${sourceTag(s.name)}</span>`).join("") +
-      `<span>VALUE</span><span></span>`;
+      `<span>VALUE</span>` +
+      `<span></span>`;
     // Pull the first tier divider up toward the labels instead of leaving a
     // big dead gap — #board's own top padding is meant for the space before
     // an UNlabeled list, not on top of the label row's own spacing.
@@ -152,7 +182,22 @@ function renderBoard() {
   const groups = {};
   list.forEach((r) => { const t = r.tier || "?"; (groups[t] = groups[t] || []).push(r); });
 
-  const orderedTiers = TIER_ORDER.filter((t) => groups[t]);
+  // Isolating to a single source passes that source's own raw tier label
+  // through as-is (see buildConsensus) — which isn't guaranteed to be
+  // numeric. This used to only recognize TIER_ORDER's "1".."16" labels and
+  // silently dropped every other tier group entirely, so a source using
+  // letter tiers (S/A/B/C/...) rendered an empty board even though its
+  // players were right there in `list`. Every group now gets shown:
+  // TIER_ORDER's numeric tiers keep their defined order, any other label
+  // is ordered by that group's best (lowest) rank, and "?" (no tier at all)
+  // always goes last.
+  const otherTierLabels = Object.keys(groups)
+    .filter((t) => t !== "?" && !TIER_ORDER.includes(t))
+    .sort((a, b) =>
+      Math.min(...groups[a].map((r) => r.consensus ?? Infinity)) -
+      Math.min(...groups[b].map((r) => r.consensus ?? Infinity))
+    );
+  const orderedTiers = [...TIER_ORDER.filter((t) => groups[t]), ...otherTierLabels];
   if (groups["?"]) orderedTiers.push("?"); // players no active source assigned a tier to
 
   $("board").innerHTML = orderedTiers.map((t) => {
@@ -213,16 +258,23 @@ function renderRecommendations() {
     soloSource,
     onSolo: (id) => { soloSource = id; renderAll(); },
   });
+  // Always the FULL blended consensus (every enabled source), never solo-filtered —
+  // the widget itself re-sorts/re-labels for soloSource, but every source's dot
+  // needs to stay visible so you can see what other sources think of the same pick.
+  // Position-filtering it here (not inside the widget) means "each source's own
+  // #1 pick" naturally becomes "each source's own #1 pick AT THIS POSITION" too —
+  // asked for directly: filtering the board to RB mid-draft should surface the
+  // best available RBs here, not the same overall-best-3 regardless of position.
+  const consensusRows = buildConsensus(sources.filter((s) => s.enabled), merges);
+  const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos));
   renderBestPicksWidget($("bestPicks"), {
-    // Always the FULL blended consensus (every enabled source), never solo-filtered —
-    // the widget itself re-sorts/re-labels for soloSource, but every source's dot
-    // needs to stay visible so you can see what other sources think of the same pick.
-    rows: buildConsensus(sources.filter((s) => s.enabled), merges),
+    rows: bestPicksRows,
     sources,
     takenSet: takenKeySet(),
     adp,
     valueMap: buildValueComparison(adpSources),
     soloSource,
+    posFilter,
     // renderAll (not renderRecommendations) so the tier board — which DOES isolate
     // to just the solo source — updates in the same tick instead of waiting for
     // the next poll cycle.
@@ -510,24 +562,73 @@ $("board").addEventListener("dblclick", (e) => {
   persistDraftState(); // keep the manager tab in step
 });
 
+// ---------- flag context menu (favorite/avoid) ----------
+// Right-click on a player's name, not double-click — double-click on the row
+// already means "cross player off" (see the dblclick handler above), so
+// right-click was picked specifically to avoid a gesture collision. Flags
+// used to be settable only from the Rankings Manager tab; this lets you set
+// them mid-draft without switching tabs, while the manager stays the only
+// place to browse/edit them in bulk.
+function closeFlagMenu() {
+  const el = $("flagMenu");
+  if (el) el.remove();
+  document.removeEventListener("click", closeFlagMenu);
+  document.removeEventListener("keydown", onFlagMenuKey);
+}
+function onFlagMenuKey(e) {
+  if (e.key === "Escape") closeFlagMenu();
+}
+function setFlag(key, kind) {
+  const next = { ...flags };
+  if (kind === null || next[key] === kind) delete next[key];
+  else next[key] = kind;
+  flags = next;
+  saveFlags(flags);
+  renderAll();
+}
+function openFlagMenu(x, y, key) {
+  closeFlagMenu();
+  const current = flags[key];
+  const menu = document.createElement("div");
+  menu.id = "flagMenu";
+  menu.className = "flagMenu";
+  menu.innerHTML = `
+    <button class="fm-fav${current === "favorite" ? " fm-current" : ""}" data-kind="favorite">★ Favorite</button>
+    <button class="fm-avoid${current === "avoid" ? " fm-current" : ""}" data-kind="avoid">⊘ Avoid</button>
+    ${current ? `<button class="fm-clear" data-kind="clear">Clear flag</button>` : ""}
+  `;
+  document.body.appendChild(menu);
+  // Measure before placing so the menu never renders off the panel's edge.
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - w - 6))}px`;
+  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - h - 6))}px`;
+  menu.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setFlag(key, btn.dataset.kind === "clear" ? null : btn.dataset.kind);
+      closeFlagMenu();
+    });
+  });
+  // Deferred so the click that opened the menu doesn't also close it via the
+  // document listener registered below.
+  setTimeout(() => {
+    document.addEventListener("click", closeFlagMenu);
+    document.addEventListener("keydown", onFlagMenuKey);
+  }, 0);
+}
+$("board").addEventListener("contextmenu", (e) => {
+  const nameEl = e.target.closest(".nm");
+  if (!nameEl) return;
+  const row = nameEl.closest(".row");
+  if (!row) return;
+  e.preventDefault();
+  openFlagMenu(e.clientX, e.clientY, row.dataset.key);
+});
+
 // ---------- settings drawer / pop-out ----------
 $("settingsBtn").addEventListener("click", () => {
   const collapsed = $("settingsPanel").classList.toggle("collapsed");
   $("settingsBtn").classList.toggle("on", !collapsed);
-});
-
-// The side panel can't detach, but the same page opens fine as a normal window,
-// so this is a real second-monitor view with no separate codebase. window.close()
-// is what actually closes a side panel from its own script (there's no
-// chrome.sidePanel.close() — confirmed against Chrome's docs).
-$("popOutBtn").addEventListener("click", () => {
-  chrome.windows.create({
-    url: chrome.runtime.getURL("panel.html?popout=1"),
-    type: "popup",
-    width: 620,
-    height: 900,
-  });
-  window.close();
 });
 
 $("showAllBtn").addEventListener("click", () => {
@@ -550,8 +651,37 @@ $("myRoster").addEventListener("change", () => {
   persistDraftState();
 });
 
-$("openManager").addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("rankings-manager.html") });
+// A bare chrome.tabs.create({url}) was tried first — twice, once plain and
+// once followed by chrome.windows.update(tab.windowId, {focused:true}). Both
+// failed: confirmed via chrome://extensions' "Inspect views" list that the
+// tab WAS being created on every click, it just had no visible home — Chrome
+// was attaching it to this board's own type:"popup" window (no tab strip to
+// surface it), so "focus the tab's window" was just re-focusing the popup
+// itself. tabs.create()'s implicit "current window" resolution isn't safe to
+// rely on from inside a popup window. Switching to
+// chrome.windows.create({type:"normal"}) fixed the visibility bug but traded
+// in a real usability cost: it always opens a brand-new browser window,
+// even when the user's actual draft tab is sitting right there in an
+// existing one. Explicitly targeting a real normal (tabbed) window's id —
+// rather than letting either API implicitly guess one — gets both: reliably
+// visible, AND lands as a tab in whatever window the user's already using
+// (there's normally just one), falling back to a new window only if truly
+// none exists.
+$("openManager").addEventListener("click", async () => {
+  try {
+    const url = chrome.runtime.getURL("rankings-manager.html");
+    const normalWindows = await chrome.windows.getAll({ windowTypes: ["normal"] });
+    if (normalWindows.length) {
+      const win = normalWindows.find((w) => w.focused) || normalWindows[0];
+      await chrome.tabs.create({ url, windowId: win.id });
+      await chrome.windows.update(win.id, { focused: true });
+    } else {
+      await chrome.windows.create({ url, type: "normal" });
+    }
+  } catch (e) {
+    console.error("[4th&Go] couldn't open the Rankings Manager", e);
+    toast(`Couldn't open the Rankings Manager: ${e.message}`, true);
+  }
 });
 
 document.querySelectorAll(".pf[data-pos]").forEach((btn) => {
@@ -560,11 +690,16 @@ document.querySelectorAll(".pf[data-pos]").forEach((btn) => {
     btn.classList.add("active");
     posFilter = btn.dataset.pos;
     renderBoard();
+    renderRecommendations(); // Best Picks now filters to posFilter too — see renderRecommendations
   });
 });
 $("takenToggle").addEventListener("click", () => {
   showTaken = !showTaken;
   $("takenToggle").classList.toggle("active", showTaken);
+  renderBoard();
+});
+$("playerSearch").addEventListener("input", () => {
+  playerSearch = $("playerSearch").value.trim();
   renderBoard();
 });
 
@@ -597,11 +732,6 @@ $("takenToggle").addEventListener("click", () => {
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
-
-  // A popped-out window can't sensibly pop out again (or self-close into nothing).
-  if (new URLSearchParams(location.search).get("popout")) {
-    $("popOutBtn").style.display = "none";
-  }
 
   // Settings start open so first-run has the draft ID box visible.
   $("settingsBtn").classList.add("on");

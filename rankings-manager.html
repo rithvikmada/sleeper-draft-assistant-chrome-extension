@@ -93,6 +93,12 @@
 
   /* ---- filters ---- */
   #filters { display: flex; gap: 5px; flex-wrap: wrap; }
+  #playerSearch {
+    flex: 1; min-width: 140px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
+    color: var(--text); padding: 5px 9px; font-size: 11px; font-family: ui-monospace, monospace;
+  }
+  #playerSearch:focus { outline: 1px solid var(--green); }
+  #playerSearch::placeholder { color: var(--dim); }
   .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; }
   .pf:hover { color: var(--dim); border-color: var(--dim); }
   .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
@@ -126,11 +132,46 @@
   tr.avoidRow { background: rgba(201,122,110,.05); }
 
   /* ---- modal ---- */
-  #modal, #confirmModal {
+  #modal, #confirmModal, #editModal, #mergeModal {
     position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
     align-items: center; justify-content: center; z-index: 100; padding: 20px;
   }
-  #modal.open, #confirmModal.open { display: flex; }
+  #modal.open, #confirmModal.open, #editModal.open, #mergeModal.open { display: flex; }
+  #mergeCandidates { max-height: 280px; overflow: auto; margin-top: 10px; border: 1px solid var(--line2); border-radius: 4px; }
+  #mergeCandidates .empty { padding: 14px; text-align: center; color: var(--dim); font-size: 11.5px; }
+  .mergeCandidate {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 11px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px;
+  }
+  .mergeCandidate:last-child { border-bottom: none; }
+  .mergeCandidate:hover { background: rgba(255,255,255,.05); }
+  .mergeCandidate .src { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; text-align: right; white-space: nowrap; }
+  /* Right-click "merge near matches" menu on a player name in the main table —
+     same floating-menu pattern as the board's favorite/avoid right-click menu. */
+  .nearMergeMenu {
+    position: fixed; z-index: 150; background: #1C1F16; border: 1px solid #3A3E2E; border-radius: 8px;
+    padding: 10px; min-width: 240px; max-width: 320px;
+    box-shadow: 0 6px 16px rgba(0,0,0,.5); font-family: ui-monospace, monospace; font-size: 11px;
+  }
+  .nearMergeMenu .nmm-title { color: var(--dim2); margin-bottom: 8px; line-height: 1.4; }
+  .nearMergeMenu .nmm-empty { color: var(--dim); padding: 4px 0; }
+  .nearMergeMenu .nmm-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+  .nearMergeMenu .nmm-row label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nearMergeMenu .nmm-src { color: var(--dim); font-size: 9.5px; }
+  .nearMergeMenu .nmm-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .nearMergeMenu button { all: unset; padding: 6px 10px; font-size: 10.5px; border-radius: 4px; cursor: pointer; }
+  .nearMergeMenu .nmm-merge { background: var(--green); color: var(--bg); font-weight: 700; }
+  .nearMergeMenu .nmm-merge[disabled] { opacity: .4; cursor: default; }
+  .nearMergeMenu .nmm-cancel { color: var(--dim2); }
+  .iconRow { display: flex; align-items: center; gap: 10px; }
+  .iconPreview {
+    width: 32px; height: 32px; border-radius: 6px; background: var(--line2); flex: none;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .iconPreview img { width: 100%; height: 100%; object-fit: cover; }
+  #editIconClear { cursor: pointer; font-size: 10px; color: var(--dim2); font-family: ui-monospace, monospace; }
+  #editIconClear:hover { color: var(--red); }
+  #editStatusLine { color: var(--dim2); }
   .sheet {
     background: var(--panel); border: 1px solid var(--line2); border-radius: 8px;
     width: 100%; max-width: 620px; max-height: 88vh; overflow: auto; padding: 20px;
@@ -138,6 +179,12 @@
   .sheet h3 { font-family: ui-monospace, monospace; font-size: 13px; margin-bottom: 4px; }
   .sheet p.hint { font-size: 11px; color: var(--dim); margin-bottom: 14px; line-height: 1.5; }
   .sheet label { display: block; font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim2); letter-spacing: 1px; margin: 12px 0 5px; }
+  .sheet label.checkRow {
+    display: flex; align-items: flex-start; gap: 8px; text-transform: none; letter-spacing: normal;
+    font-size: 11.5px; color: var(--text); font-family: inherit; cursor: pointer;
+  }
+  .sheet label.checkRow input[type=checkbox] { margin-top: 2px; flex: none; }
+  .sheet #srcPositionOnlyHint { margin: 4px 0 0; }
   .sheet input[type=text], .sheet textarea {
     width: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
     color: var(--text); padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px;
@@ -145,10 +192,10 @@
   .sheet textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
   .sheet input:focus, .sheet textarea:focus { outline: 1px solid var(--green); }
   .modalBtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  #parseNote { font-size: 11px; margin-top: 10px; font-family: ui-monospace, monospace; line-height: 1.5; }
-  #parseNote.warn { color: var(--gold); }
-  #parseNote.err { color: var(--red); }
-  #parseNote.ok { color: var(--green); }
+  #parseNote, #editParseNote { font-size: 11px; margin-top: 10px; font-family: ui-monospace, monospace; line-height: 1.5; }
+  #parseNote.warn, #editParseNote.warn { color: var(--gold); }
+  #parseNote.err, #editParseNote.err { color: var(--red); }
+  #parseNote.ok, #editParseNote.ok { color: var(--green); }
 
   .empty { color: var(--dim); text-align: center; padding: 34px; font-size: 12px; }
   #toast {
@@ -179,8 +226,11 @@
     <div id="sourceBar"></div>
 
     <div id="orphansSection" style="display:none; margin-top: 18px; padding: 12px; background: rgba(201,122,110,.08); border: 1px solid rgba(201,122,110,.2); border-radius: 6px;">
-      <h3 style="font-size: 12px; color: var(--red); margin: 0 0 8px; font-weight: 700; letter-spacing: 0.5px;">UNMATCHED PLAYERS</h3>
-      <div id="orphansList" style="font-size: 11px;"></div>
+      <div id="orphansHeader" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer">
+        <h3 style="font-size: 12px; color: var(--red); margin: 0; font-weight: 700; letter-spacing: 0.5px;">UNMATCHED PLAYERS <span id="orphansCount" style="color:var(--dim); font-weight:400"></span></h3>
+        <span id="orphansToggle" style="color:var(--dim2); font-size:11px">▾</span>
+      </div>
+      <div id="orphansList" style="font-size: 11px; margin-top: 8px;"></div>
     </div>
 
     <h2>All players</h2>
@@ -191,6 +241,7 @@
       <button class="pf" data-pos="WR">WR</button>
       <button class="pf" data-pos="TE">TE</button>
       <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
+      <input type="text" id="playerSearch" placeholder="Search name or team…" />
     </div>
     <div class="tableWrap" style="margin-top:10px">
       <table id="tbl"></table>
@@ -208,9 +259,54 @@
       <label>…or paste rows here</label>
       <textarea id="srcPaste" placeholder="Name,Team,Position,Tier,Rank&#10;Jahmyr Gibbs,DET,RB,1,1.25&#10;Bijan Robinson,ATL,RB,1,1.75"></textarea>
       <div id="parseNote"></div>
+      <label class="checkRow" id="srcPositionOnlyRow">
+        <input type="checkbox" id="srcPositionOnly" />
+        Position-only source (Rank column is only meaningful within one position, e.g. "QB rank 3" — not comparable across positions)
+      </label>
+      <p class="hint" id="srcPositionOnlyHint">Won't affect blended rank or tier — shows up as its own reference column (its Tier value) instead.</p>
       <div class="modalBtns">
         <button class="alt" id="cancelBtn">CANCEL</button>
         <button id="saveSrcBtn">SAVE SOURCE</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="editModal">
+    <div class="sheet">
+      <h3>Edit source</h3>
+      <p class="hint" id="editStatusLine"></p>
+      <label>Source name</label>
+      <input type="text" id="editSrcName" />
+      <label>Icon</label>
+      <div class="iconRow">
+        <div id="editIconPreview" class="iconPreview"></div>
+        <input type="file" id="editIconFile" accept="image/*" />
+        <span class="edit-src" id="editIconClear" title="Remove icon">✕ clear</span>
+      </div>
+      <label id="editCsvLabel">Replace with a new CSV (optional)</label>
+      <input type="file" id="editSrcFile" accept=".csv,.tsv,.txt" />
+      <div id="editParseNote"></div>
+      <label class="checkRow" id="editPositionOnlyRow">
+        <input type="checkbox" id="editPositionOnly" />
+        Position-only source (Rank column is only meaningful within one position — not comparable across positions)
+      </label>
+      <p class="hint" id="editPositionOnlyHint">Won't affect blended rank or tier — shows up as its own reference column (its Tier value) instead.</p>
+      <div class="modalBtns">
+        <button class="alt" id="editCancelBtn">CANCEL</button>
+        <button id="editSaveBtn">SAVE CHANGES</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="mergeModal">
+    <div class="sheet">
+      <h3>Merge player</h3>
+      <p class="hint" id="mergeHint"></p>
+      <label>Search</label>
+      <input type="text" id="mergeSearch" placeholder="Filter by name…" />
+      <div id="mergeCandidates"></div>
+      <div class="modalBtns">
+        <button class="alt" id="mergeCancelBtn">CANCEL</button>
       </div>
     </div>
   </div>
