@@ -423,15 +423,23 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 });
 
 // ---------- seed built-in sources ----------
+// Re-seed FantasyPros' player list from fp-rankings.js on every load, same as
+// the default source already does — otherwise a fix to that file (e.g. the
+// tier column) never reaches storage, since it only used to seed once and was
+// left alone forever after.
 async function ensureBuiltinSources() {
-  // Seed FantasyPros if not already present
-  if (typeof FP_RANKINGS !== "undefined" && !sources.some((s) => s.id === "fp")) {
-    const fpSource = makeSource("FantasyPros ECR", FP_RANKINGS, { id: "fp", builtin: false });
-    sources.push(fpSource);
-    suppressEcho = true;
-    await saveSources(sources);
-    suppressEcho = false;
-  }
+  if (typeof FP_RANKINGS === "undefined") return;
+  const existing = sources.find((s) => s.id === "fp");
+  const fpSource = makeSource("FantasyPros ECR", FP_RANKINGS, {
+    id: "fp",
+    builtin: false,
+    color: existing ? existing.color : undefined,
+    enabled: existing ? existing.enabled : true,
+  });
+  sources = [...sources.filter((s) => s.id !== "fp"), fpSource];
+  suppressEcho = true;
+  await saveSources(sources);
+  suppressEcho = false;
 }
 
 // ---------- init ----------

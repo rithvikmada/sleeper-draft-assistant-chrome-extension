@@ -8,11 +8,14 @@
 // them there, classic scripts share one global scope and it'll throw.
 // ============================================================
 
-const TIER_ORDER = ["S","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O"];
+// Tiers are numbered 1 (best) through 16 — standardized on numbers rather than
+// letters so sources like FantasyPros (whose CSV tier column is already numeric)
+// don't need translation to line up with the bundled rankings.
+const TIER_ORDER = ["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16"];
 const TIER_COLORS = {
-  S:"#F5C242", A:"#E8853A", B:"#D9622F", C:"#4F9E6B", D:"#3D8A62", E:"#357A5A",
-  F:"#3A7CA5", G:"#356E93", H:"#5B6B8C", I:"#665C8C", J:"#7A5C8C", K:"#8C5C7A",
-  L:"#8C5C5C", M:"#6B5C4A", N:"#5C5C5C", O:"#4A4A4A",
+  1:"#F5C242", 2:"#E8853A", 3:"#D9622F", 4:"#4F9E6B", 5:"#3D8A62", 6:"#357A5A",
+  7:"#3A7CA5", 8:"#356E93", 9:"#5B6B8C", 10:"#665C8C", 11:"#7A5C8C", 12:"#8C5C7A",
+  13:"#8C5C5C", 14:"#6B5C4A", 15:"#5C5C5C", 16:"#4A4A4A",
 };
 const POS_COLORS = {
   QB:{ text:"#F5C242", bg:"rgba(245,194,66,.12)", border:"rgba(245,194,66,.35)" },
@@ -67,7 +70,7 @@ function defaultSource() {
   const players = (typeof RANKINGS !== "undefined" ? RANKINGS : []).map((p) => ({
     name: p.name, team: p.team, pos: p.pos, tier: p.tier, rank: p.rank,
   }));
-  return makeSource("My Default Rankings", players, {
+  return makeSource("Fantasy Flock Rankings", players, {
     id: "default", color: "#5FCF8A", builtin: true,
   });
 }
@@ -116,7 +119,7 @@ const HEADER_ALIASES = {
   name: ["name", "player", "player name", "playername"],
   team: ["team", "tm"],
   pos:  ["position", "pos"],
-  tier: ["tier"],
+  tier: ["tier", "tiers"],
   rank: ["rank", "expert rank", "expertrank", "overall", "ecr", "rk"],
 };
 
@@ -228,6 +231,18 @@ function median(nums) {
 // treated as unranked/infinity, which would unfairly bury them.
 function buildConsensus(sources, merges = {}) {
   const enabled = sources.filter((s) => s.enabled);
+  // Each source's own max tier index actually used — the denominator for
+  // normalizing that source's tier labels to a comparable 0..1 "depth" scale.
+  // See assignBlendedTiers for why this is necessary.
+  const maxTierIdx = new Map();
+  enabled.forEach((src) => {
+    let max = 0;
+    src.players.forEach((p) => {
+      if (p.tier) max = Math.max(max, TIER_ORDER.indexOf(String(p.tier)));
+    });
+    maxTierIdx.set(src.id, max);
+  });
+
   const map = new Map();
   enabled.forEach((src) => {
     src.players.forEach((p) => {
@@ -236,20 +251,79 @@ function buildConsensus(sources, merges = {}) {
       // Apply merges: if this key is a variant, resolve to canonical.
       key = applyMerge(key, merges);
       if (!map.has(key)) {
-        map.set(key, { key, name: p.name, team: p.team, pos: p.pos, tier: p.tier, ranks: {} });
+        map.set(key, { key, name: p.name, team: p.team, pos: p.pos, tierVotes: [], depthVotes: [], ranks: {} });
       }
       const e = map.get(key);
       e.ranks[src.id] = p.rank;
       if (!e.team && p.team) e.team = p.team;
-      if (!e.tier && p.tier) e.tier = p.tier;
+      if (p.tier) {
+        e.tierVotes.push(p.tier);
+        const idx = TIER_ORDER.indexOf(String(p.tier));
+        const max = maxTierIdx.get(src.id);
+        if (idx >= 0 && max > 0) e.depthVotes.push(idx / max);
+      }
     });
   });
   const out = [...map.values()].map((e) => {
     const vals = Object.values(e.ranks).filter((v) => isFinite(v));
-    return { ...e, consensus: median(vals), sourceCount: vals.length };
+    return {
+      key: e.key, name: e.name, team: e.team, pos: e.pos, ranks: e.ranks,
+      // With exactly one active source, its own tier label is meaningful as-is.
+      // With 2+, filled in below — see assignBlendedTiers.
+      tier: enabled.length <= 1 ? modeTier(e.tierVotes) : "",
+      depth: e.depthVotes.length ? median(e.depthVotes) : null,
+      consensus: median(vals), sourceCount: vals.length,
+    };
   });
   out.sort((a, b) => (a.consensus ?? 1e9) - (b.consensus ?? 1e9));
+  if (enabled.length > 1) assignBlendedTiers(out);
   return out;
+}
+
+// A player's tier from a single source is used as-is (see buildConsensus).
+// It exists only for that single-vote case; ties never arise with one vote.
+function modeTier(votes) {
+  if (!votes.length) return "";
+  const counts = {};
+  votes.forEach((t) => { counts[t] = (counts[t] || 0) + 1; });
+  let best = votes[0], bestCount = 0;
+  Object.entries(counts).forEach(([t, c]) => {
+    if (c > bestCount || (c === bestCount && TIER_ORDER.indexOf(t) < TIER_ORDER.indexOf(best))) {
+      best = t; bestCount = c;
+    }
+  });
+  return best;
+}
+
+// Two sources' tier LABELS aren't on the same scale — Flock's "tier 6" and
+// FantasyPros' "tier 6" don't represent the same quality band, they're just
+// independently-drawn cutoffs that happen to share a number. But each source's
+// tier DEPTH — how far down that source's own hierarchy a player sits, as a
+// fraction of the deepest tier that source uses (`e.depth` from buildConsensus,
+// e.g. "top 3 of 16" -> 0.19) — IS comparable across sources, since it's
+// relative to each source's own scale rather than the raw label.
+//
+// This blends that depth (median across sources, same pattern as rank), forces
+// it to only get worse (never better) as blended rank worsens so a tier can
+// never contradict the rank it's built from, then buckets by EQUAL-WIDTH bands
+// on that depth score (not equal player counts). Where sources genuinely agree
+// a lot of players sit at similar depth, the tier stays big — that's real
+// signal carried over from the sources' own tiering, not this code forcing an
+// even split.
+function assignBlendedTiers(sortedRows) {
+  let running = 0;
+  sortedRows.forEach((r) => {
+    // Missing depth (no source tiered this player) falls back to the depth of
+    // the last player who had one, so a gap in tier data doesn't reset progress.
+    if (r.depth !== null) running = Math.max(running, r.depth);
+    r._depthEff = running;
+  });
+  const n = TIER_ORDER.length;
+  sortedRows.forEach((r) => {
+    const idx = Math.min(Math.floor(r._depthEff * n), n - 1);
+    r.tier = TIER_ORDER[idx];
+    delete r._depthEff;
+  });
 }
 
 // ---------- shared widgets ----------
@@ -257,11 +331,31 @@ function buildConsensus(sources, merges = {}) {
 // so "the sidebar agrees with the manager" is true by construction rather than by
 // two copies of the markup drifting apart. Pass a container element, not an id.
 
+// Two-letter tag for a source's dot ("Fantasy Flock Rankings" -> "FF",
+// "FantasyPros ECR" -> "FE") — a single initial collides whenever two source
+// names share a first letter, which is common ("Fantasy Flock" / "FantasyPros").
+function sourceTag(name) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return String(name || "").slice(0, 2).toUpperCase();
+}
+
 // opts: { rows, sources, takenSet:Set<key>, adp, soloSource, onSolo(id|null) }
+// `rows` must be consensus across ALL enabled sources (not solo-filtered) so
+// every source's agreement can be checked, even though only the active source's
+// dot always shows. Isolating a source re-sorts the top 3 by that source's own
+// rank instead of the blended consensus.
 function renderBestPicksWidget(el, opts) {
   if (!el) return;
   const { rows = [], sources = [], takenSet = new Set(), adp = null, soloSource = null, onSolo, flags = {} } = opts || {};
-  const top = rows.filter((r) => !takenSet.has(r.key)).slice(0, 3);
+  let displayRows = rows;
+  if (soloSource) {
+    displayRows = rows
+      .filter((r) => r.ranks[soloSource] !== undefined)
+      .slice()
+      .sort((a, b) => a.ranks[soloSource] - b.ranks[soloSource]);
+  }
+  const top = displayRows.filter((r) => !takenSet.has(r.key)).slice(0, 3);
   const medals = [
     { label: "1ST — BEST AVAILABLE", color: "#F5C242" },
     { label: "2ND", color: "#C9CAD1" },
@@ -271,30 +365,72 @@ function renderBestPicksWidget(el, opts) {
     el.innerHTML = `<div class="empty" style="grid-column:1/-1">No available players — add a ranking source in the Rankings Manager.</div>`;
     return;
   }
+  // Each enabled source's own single best-available pick (excluding taken
+  // players) — a dot on a card means THAT source's #1 pick is this exact
+  // player, not merely that the source has them ranked somewhere. Almost
+  // every source ranks almost every player, so "ranked at all" is meaningless
+  // as a signal; "agrees this is the best pick" is the useful one.
+  const sourceTopPick = new Map(); // sourceId -> playerKey
+  sources.filter((s) => s.enabled).forEach((s) => {
+    let bestKey = null, bestRank = Infinity;
+    rows.forEach((r) => {
+      if (takenSet.has(r.key)) return;
+      const rk = r.ranks[s.id];
+      if (rk !== undefined && rk < bestRank) { bestRank = rk; bestKey = r.key; }
+    });
+    if (bestKey) sourceTopPick.set(s.id, bestKey);
+  });
   el.innerHTML = top.map((r, i) => {
     const m = medals[i];
     const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
-    // One dot per source that ranks this player — click to isolate that source.
+    // The active solo source's dot always shows (these cards ARE its picks).
+    // Every other source's dot shows only if ITS OWN #1 pick is this player.
     const dots = sources
-      .filter((s) => r.ranks[s.id] !== undefined)
-      .map((s) => `<span class="dot${s.enabled ? "" : " off"}${soloSource === s.id ? " solo" : ""}" data-solo="${s.id}"
-            style="background:${s.color}" title="${s.name}: rank ${r.ranks[s.id]}">${s.name.charAt(0).toUpperCase()}</span>`)
+      .filter((s) => s.enabled && (s.id === soloSource || sourceTopPick.get(s.id) === r.key))
+      .map((s) => `<span class="dot${soloSource === s.id ? " solo" : ""}" data-solo="${s.id}"
+            style="background:${s.color}" title="${s.name}: rank ${r.ranks[s.id] ?? "—"}">${sourceTag(s.name)}</span>`)
       .join("");
     const adpV = adp ? adp.map.get(r.key) : undefined;
-    const d = adpV !== undefined ? adpDelta(r.consensus, adpV) : null;
+    const displayRank = soloSource ? r.ranks[soloSource] : r.consensus;
+    // Short tag, not the full source name, in the meta line — a long name
+    // ("Fantasy Flock Rankings rank 30.1") wraps to a second line and makes
+    // the whole card grid jump height when isolating a source.
+    const rankLabel = soloSource
+      ? `${sourceTag(sources.find((s) => s.id === soloSource)?.name || "")} rank ${displayRank?.toFixed(1) ?? "—"}`
+      : `rank ${displayRank?.toFixed(1) ?? "—"} <span style="color:var(--dim)">(${r.sourceCount} src)</span>`;
+    const d = adpV !== undefined ? adpDelta(displayRank, adpV) : null;
     return `<div class="bestCard" style="border-top-color:${m.color}">
       <div class="medal" style="color:${m.color}">${m.label}</div>
       <div class="bestName">${flagBadge(flags[r.key])}${r.name}</div>
       <div class="bestMeta">
         <span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span>
-        ${r.team ? " " + r.team : ""} · rank ${r.consensus?.toFixed(1) ?? "—"}
-        <span style="color:var(--dim)">(${r.sourceCount} src)</span>
+        ${r.team ? " " + r.team : ""} · ${rankLabel}
         ${d !== null ? ` · <span style="color:${adpDeltaColor(d)}">ADP ${adpV} (${d > 0 ? "+" : ""}${d.toFixed(0)})</span>` : ""}
       </div>
       <div class="srcDots">${dots}</div>
     </div>`;
   }).join("");
 
+  if (onSolo) {
+    el.querySelectorAll("[data-solo]").forEach((dot) => {
+      dot.addEventListener("click", () => {
+        onSolo(soloSource === dot.dataset.solo ? null : dot.dataset.solo);
+      });
+    });
+  }
+}
+
+// A persistent, always-visible list of every enabled source — the per-card
+// dots on renderBestPicksWidget only show a source when it agrees with that
+// specific pick, so a source with no dot anywhere still needs a way to be
+// selected. opts: { sources, soloSource, onSolo(id|null) }
+function renderSourceListWidget(el, opts) {
+  if (!el) return;
+  const { sources = [], soloSource = null, onSolo } = opts || {};
+  const enabled = sources.filter((s) => s.enabled);
+  if (enabled.length < 2) { el.innerHTML = ""; return; }
+  el.innerHTML = enabled.map((s) => `<span class="dot${soloSource === s.id ? " solo" : ""}" data-solo="${s.id}"
+        style="background:${s.color}" title="${s.name}">${sourceTag(s.name)}</span>`).join("");
   if (onSolo) {
     el.querySelectorAll("[data-solo]").forEach((dot) => {
       dot.addEventListener("click", () => {

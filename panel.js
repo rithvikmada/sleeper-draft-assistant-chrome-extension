@@ -9,34 +9,39 @@
 // which loads first — see the note at the top of that file.
 
 // ---------- name matching ----------
-// Build lookup: normalized name -> array of player indices (position disambiguates)
-const players = RANKINGS.map((p, i) => ({ ...p, id: i, normName: norm(p.name) }));
-const byName = new Map();
-players.forEach((p) => {
-  if (!byName.has(p.normName)) byName.set(p.normName, []);
-  byName.get(p.normName).push(p);
-});
+// Matches a Sleeper pick (first/last/pos) against the CURRENT blended consensus
+// rows (whatever sources are active/enabled right now) — not a fixed player
+// list — so an imported source's players match too, not just the bundled default.
+function buildMatchIndex(rows) {
+  const byName = new Map();
+  rows.forEach((r) => {
+    const n = norm(r.name);
+    if (!byName.has(n)) byName.set(n, []);
+    byName.get(n).push(r);
+  });
+  return { rows, byName };
+}
 
-function matchPick(first, last, pos) {
+function matchPick(first, last, pos, index) {
   const n = norm(`${first} ${last}`);
-  const cands = byName.get(n);
+  const cands = index.byName.get(n);
   if (cands) {
-    const posMatch = cands.find((c) => c.pos === pos);
+    const posMatch = cands.find((r) => r.pos === pos);
     return posMatch || cands[0];
   }
   // fallback: last name + first initial + position (catches "Ken Walker" vs "Kenneth Walker")
   const ln = norm(last);
   const fi = norm(first).charAt(0);
-  const loose = players.filter(
-    (p) => p.pos === pos && p.normName.endsWith(" " + ln) && p.normName.charAt(0) === fi
+  const loose = index.rows.filter(
+    (r) => r.pos === pos && norm(r.name).endsWith(" " + ln) && norm(r.name).charAt(0) === fi
   );
   if (loose.length === 1) return loose[0];
   return null;
 }
 
 // ---------- state ----------
-let taken = {};        // playerId -> { byMe: bool, pickNo: number|null }
-let manualTaken = {};  // clicks made by hand (kept separate so a re-poll doesn't wipe them)
+let taken = {};        // playerKey -> { byMe: bool, pickNo: number|null }
+let manualTaken = {};  // playerKey -> true, clicks made by hand (kept separate so a re-poll doesn't wipe them)
 let myRosterId = null; // user-entered draft slot / roster id — drives the "mine" highlight and the manager's position counts
 let suppressStorageEcho = false; // ignore the onChanged event fired by our own write
 let pollTimer = null;
@@ -68,10 +73,16 @@ let showTaken = false; // independent toggle, layered on top of posFilter
 const $ = (id) => document.getElementById(id);
 
 // ---------- rendering ----------
+// Both the BEST grid and the tier board are built from the SAME blended
+// consensus rows the Best Picks widget uses (respecting soloSource isolation
+// via activeSources()) — they used to be hardcoded to the bundled default
+// rankings file only, which is why isolating a source or adding an import
+// never changed what the board showed.
 function bestAvailable() {
+  const rows = buildConsensus(activeSources(), merges);
   const out = {};
   ["QB","RB","WR","TE"].forEach((pos) => {
-    out[pos] = players.find((p) => p.pos === pos && !taken[p.id] && !manualTaken[p.id]);
+    out[pos] = rows.find((r) => r.pos === pos && !taken[r.key] && !manualTaken[r.key]);
   });
   return out;
 }
@@ -83,7 +94,7 @@ function renderBest() {
     const p = best[pos];
     return `<div class="best-cell" style="background:${c.bg};border-color:${c.border}">
       <div class="best-pos" style="color:${c.text}">BEST ${pos}</div>
-      <div class="best-name">${p ? `${p.name} <span style="color:${TIER_COLORS[p.tier]};font-size:10px">T-${p.tier}</span>` : "—"}</div>
+      <div class="best-name">${p ? `${p.name}${p.tier ? ` <span style="color:${TIER_COLORS[p.tier]};font-size:10px">T-${p.tier}</span>` : ""}` : "—"}</div>
     </div>`;
   }).join("");
 }
@@ -91,30 +102,35 @@ function renderBest() {
 function renderBoard() {
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
-  let list = players;
-  if (posFilter !== "ALL") list = list.filter((p) => p.pos === posFilter);
+  const rows = buildConsensus(activeSources(), merges);
+  let list = rows;
+  if (posFilter !== "ALL") list = list.filter((r) => r.pos === posFilter);
 
-  const isGone = (p) => !!(taken[p.id] || manualTaken[p.id]);
-  if (!showTaken) list = list.filter((p) => !isGone(p));
+  const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
+  if (!showTaken) list = list.filter((r) => !isGone(r));
 
   const groups = {};
-  list.forEach((p) => { (groups[p.tier] = groups[p.tier] || []).push(p); });
+  list.forEach((r) => { const t = r.tier || "?"; (groups[t] = groups[t] || []).push(r); });
 
-  $("board").innerHTML = TIER_ORDER.filter((t) => groups[t]).map((t) => {
-    const rows = groups[t].map((p) => {
-      const c = POS_COLORS[p.pos];
-      const gone = isGone(p);
-      const mine = taken[p.id] && taken[p.id].byMe;
-      const pickLabel = taken[p.id] && taken[p.id].pickNo ? ` · pk ${taken[p.id].pickNo}` : "";
-      const flag = flags[playerKey(p.name, p.pos)];
-      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-id="${p.id}" title="Double-click to cross off / undo" style="border-left-color:${c.text}">
-        <span class="rk">${p.rank.toFixed(1)}</span>
-        <span class="nm">${flagBadge(flag)}${p.name} <span class="tm">· ${p.team}${pickLabel}</span></span>
-        <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${p.pos}</span>
+  const orderedTiers = TIER_ORDER.filter((t) => groups[t]);
+  if (groups["?"]) orderedTiers.push("?"); // players no active source assigned a tier to
+
+  $("board").innerHTML = orderedTiers.map((t) => {
+    const rows = groups[t].map((r) => {
+      const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
+      const gone = isGone(r);
+      const mine = taken[r.key] && taken[r.key].byMe;
+      const pickLabel = taken[r.key] && taken[r.key].pickNo ? ` · pk ${taken[r.key].pickNo}` : "";
+      const flag = flags[r.key];
+      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${r.key}" data-name="${r.name}" title="Double-click to cross off / undo" style="border-left-color:${c.text}">
+        <span class="rk">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
+        <span class="nm">${flagBadge(flag)}${r.name} <span class="tm">· ${r.team || ""}${pickLabel}</span></span>
+        <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span>
       </div>`;
     }).join("");
+    const badgeColor = TIER_COLORS[t] || "#4A4A4A";
     return `<div class="tier-head">
-      <div class="tier-badge" style="background:${TIER_COLORS[t]};color:#0B0D08">${t}</div>
+      <div class="tier-badge" style="background:${badgeColor};color:#0B0D08">${t}</div>
       <div class="tier-line"></div>
       <div class="tier-count">${groups[t].length}</div>
     </div>${rows}`;
@@ -144,13 +160,24 @@ function renderSoloBar() {
 
 function renderRecommendations() {
   renderTeamCountsWidget($("teamCounts"), { picks: lastSharedPicks, myRosterId });
+  renderSourceListWidget($("sourceList"), {
+    sources,
+    soloSource,
+    onSolo: (id) => { soloSource = id; renderAll(); },
+  });
   renderBestPicksWidget($("bestPicks"), {
-    rows: buildConsensus(activeSources(), merges),
+    // Always the FULL blended consensus (every enabled source), never solo-filtered —
+    // the widget itself re-sorts/re-labels for soloSource, but every source's dot
+    // needs to stay visible so you can see what other sources think of the same pick.
+    rows: buildConsensus(sources.filter((s) => s.enabled), merges),
     sources,
     takenSet: takenKeySet(),
     adp,
     soloSource,
-    onSolo: (id) => { soloSource = id; renderRecommendations(); },
+    // renderAll (not renderRecommendations) so the tier board — which DOES isolate
+    // to just the solo source — updates in the same tick instead of waiting for
+    // the next poll cycle.
+    onSolo: (id) => { soloSource = id; renderAll(); },
     flags,
   });
   renderSoloBar();
@@ -178,13 +205,7 @@ function toast(msg, isError = false) {
 
 // ---------- shared state bridge (side panel <-> Rankings Manager tab) ----------
 function manualKeys() {
-  return Object.keys(manualTaken)
-    .filter((id) => manualTaken[id])
-    .map((id) => {
-      const p = players[Number(id)];
-      return p ? playerKey(p.name, p.pos) : null;
-    })
-    .filter(Boolean);
+  return Object.keys(manualTaken).filter((k) => manualTaken[k]);
 }
 
 function persistDraftState(draftId, sharedPicks) {
@@ -200,11 +221,8 @@ function persistDraftState(draftId, sharedPicks) {
 
 // The manager can cross players off too — mirror its manual list back into ours.
 function applyManualKeysFromStorage(keys) {
-  const wanted = new Set(keys || []);
   const next = {};
-  players.forEach((p) => {
-    if (wanted.has(playerKey(p.name, p.pos))) next[p.id] = true;
-  });
+  (keys || []).forEach((k) => { next[k] = true; });
   manualTaken = next;
   renderAll();
 }
@@ -220,7 +238,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes[K_SOURCES]) {
     sources = await loadSources();
     if (soloSource && !sources.some((s) => s.id === soloSource)) soloSource = null;
-    renderRecommendations();
+    renderAll(); // board + best grid are consensus-based now too, not just the widgets
   }
   if (changes[K_ADP]) {
     adp = await loadAdp();
@@ -232,7 +250,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
   if (changes[K_MERGES]) {
     merges = await loadMerges();
-    renderRecommendations();
+    renderAll();
   }
 });
 
@@ -261,6 +279,9 @@ async function poll(draftId, { manual = false } = {}) {
     }
     const picks = await res.json();
 
+    // Match against whatever sources are currently active — includes imported
+    // sources, not just the bundled default.
+    const matchIndex = buildMatchIndex(buildConsensus(activeSources(), merges));
     const nextTaken = {};
     const sharedPicks = []; // source-agnostic record for the Rankings Manager
     unmatched = [];
@@ -287,9 +308,9 @@ async function poll(draftId, { manual = false } = {}) {
         byMe: mine,
       });
 
-      const m = matchPick(first, last, pos);
+      const m = matchPick(first, last, pos, matchIndex);
       if (m) {
-        nextTaken[m.id] = { byMe: mine, pickNo: pk.pick_no };
+        nextTaken[m.key] = { byMe: mine, pickNo: pk.pick_no };
       } else {
         unmatched.push(`${first} ${last} (${pos})`);
       }
@@ -425,15 +446,15 @@ $("refreshBtn").addEventListener("click", () => {
 $("board").addEventListener("dblclick", (e) => {
   const row = e.target.closest(".row");
   if (!row) return;
-  const id = Number(row.dataset.id);
-  if (taken[id]) return; // synced picks can't be un-clicked (they're real)
-  const p = players[id];
-  if (manualTaken[id]) {
-    delete manualTaken[id];
-    toast(`${p.name} put back on the board.`);
+  const key = row.dataset.key;
+  if (taken[key]) return; // synced picks can't be un-clicked (they're real)
+  const name = row.dataset.name;
+  if (manualTaken[key]) {
+    delete manualTaken[key];
+    toast(`${name} put back on the board.`);
   } else {
-    manualTaken[id] = true;
-    toast(`${p.name} crossed off — double-click again to undo.`);
+    manualTaken[key] = true;
+    toast(`${name} crossed off — double-click again to undo.`);
   }
   renderAll();
   persistDraftState(); // keep the manager tab in step
@@ -461,7 +482,7 @@ $("popOutBtn").addEventListener("click", () => {
 
 $("showAllBtn").addEventListener("click", () => {
   soloSource = null;
-  renderRecommendations();
+  renderAll();
 });
 
 // ---------- roster id (which draft slot is mine) ----------

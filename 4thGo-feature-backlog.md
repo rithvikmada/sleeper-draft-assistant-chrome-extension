@@ -182,6 +182,29 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   weight ever gets attached to flags, that's a deliberate future decision, not a
   side effect of this.
 
+## 16. True value-cliff tiering — NEW, upgrade path noted during the tier-blending fix
+- Current state (as of the multi-source tier rework): when 2+ ranking sources are
+  blended, the tier board no longer blends each source's own tier LABELS (their
+  boundaries aren't on the same scale — Flock's "tier 6" and FantasyPros' "tier 6"
+  don't represent the same quality band, they're independently-drawn cutoffs that
+  happen to share a number). Instead, tiers are carved directly from the blended
+  rank into 16 even-sized bands (`assignRankBasedTiers` in `shared.js`). This
+  guarantees tier order always matches rank order, which is correct, but it's an
+  even split, not a real detection of where the actual talent cliffs are.
+- Real tiering (what FantasyPros' own paid tiers, and tools like it, actually do)
+  clusters players by GAPS in projected point value — a big drop-off between
+  player N and N+1 means a new tier starts there, so tiers can be uneven sizes and
+  actually reflect "these guys are basically interchangeable, this next guy is a
+  step down."
+- Blocked on the same thing as #8 (VORP): we only have ordinal rank data, not real
+  point projections, so there's no magnitude to detect a "gap" in — rank alone
+  can't tell you if #14 vs #15 is a big drop or a coin flip. Once a projections
+  source exists, revisit this: gap-detection (e.g. threshold on projected-points
+  delta between consecutive ranked players, or simple clustering) should replace
+  the even-band bucketing here.
+- Low priority until #8 has a data source; noted now so the even-bucket approach
+  isn't mistaken for the final design later.
+
 Rough dependency order, for when we do batch these:
 1. Editable rankings import (#1) — foundational, nothing else really needs it first
 2. ADP vs. rank heat map (#6) — self-contained, low risk, good early win

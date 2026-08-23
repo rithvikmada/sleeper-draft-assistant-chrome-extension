@@ -1,6 +1,6 @@
 const fs = require("fs");
 const vm = require("vm");
-const DIR = "/Users/rithvikmada/Repos/sleeper-draft-ext 4/";
+const DIR = __dirname + "/";
 const chrome = { storage: { local: { get: async (keys) => ({}), set: async (o) => {} }, onChanged:{addListener:()=>{}} } };
 const ctx = vm.createContext({ chrome, console });
 vm.runInContext(fs.readFileSync(DIR+"rankings.js","utf8"), ctx);
