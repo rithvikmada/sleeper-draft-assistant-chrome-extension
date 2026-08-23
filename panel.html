@@ -101,11 +101,18 @@
     background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
     padding: 8px 10px; border-top: 3px solid; min-width: 0;
   }
+  .bestTop { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .medal { font-family: ui-monospace, monospace; font-size: 8.5px; font-weight: 800; letter-spacing: 1px; }
-  .bestName { font-size: 14px; font-weight: 700; margin-top: 3px; line-height: 1.15; }
-  .bestMeta { font-size: 10px; color: var(--dim2); font-family: ui-monospace, monospace; margin-top: 3px; }
-  .posChip { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
-  .srcDots { display: flex; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
+  .posTeamChip {
+    font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px; border: 1px solid;
+    font-family: ui-monospace, monospace; white-space: nowrap; flex: none;
+  }
+  .bestName { font-size: 14px; font-weight: 700; margin-top: 5px; line-height: 1.15; }
+  .statTiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+  .statTile { background: rgba(255,255,255,.03); border-radius: 4px; padding: 5px 7px; min-width: 0; }
+  .statLabel { font-size: 8px; color: var(--dim); letter-spacing: .5px; font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statValue { font-size: 13px; font-weight: 700; margin-top: 1px; font-family: ui-monospace, monospace; }
+  .srcDots { display: flex; gap: 3px; margin-top: 7px; flex-wrap: wrap; }
   .dot {
     min-width: 20px; height: 17px; padding: 0 3px; border-radius: 4px; font-size: 8.5px; font-weight: 800;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
@@ -129,6 +136,7 @@
   .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
   #board { padding: 10px 12px 30px; }
   .tier-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 5px; }
+  #board > .tier-head:first-child { margin-top: 0; }
   .tier-badge {
     width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-family: ui-monospace, monospace; font-size: 11px;
@@ -151,6 +159,27 @@
   .flagMark.fav { color: var(--gold); }
   .flagMark.avoid { color: var(--red); }
   .pos-chip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
+  .adp-cell { font-family: ui-monospace, monospace; font-size: 10px; text-align: right; white-space: nowrap; }
+  /* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) — matches rankings-manager.html, sized down for the panel's narrower width ----
+     width:100% + justify-content:flex-end makes this right-align WITHIN its grid column, matching the numeric
+     columns and the "VALUE" header above it — it used to be wrapped in a separately-centered .value-cell,
+     which was the actual cause of the header/bar mismatch the user spotted (header right-aligned, bar centered). */
+  .vbig { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, monospace; justify-content: flex-end; width: 100%; }
+  .vbig-num { font-size: 9.5px; font-weight: 800; width: 22px; text-align: right; flex: none; }
+  .vbig-track { position: relative; width: 56px; height: 12px; background: #1E2118; border-radius: 3px; overflow: hidden; flex: none; }
+  .vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line2); }
+  .vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+  .vbig-empty { color: var(--dim); font-size: 10px; }
+  /* ---- ADP column labels, shown once above the tiered board when any ADP source is enabled ----
+     Horizontal padding (20px) intentionally matches #board's 12px + .row's own 8px combined —
+     the label row lives OUTSIDE #board, so without this it drifts left of the actual columns. */
+  #adpColLabels {
+    display: grid; align-items: center; gap: 8px; padding: 4px 20px 2px;
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--dim2);
+    font-family: ui-monospace, monospace;
+  }
+  #adpColLabels span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  #adpColLabels span:first-child, #adpColLabels span:nth-child(2) { text-align: left; }
   #toast {
     position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%) translateY(120%);
     background: var(--gold); color: var(--bg); padding: 7px 14px; border-radius: 5px;
@@ -207,6 +236,7 @@
       <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
     </div>
   </div>
+  <div id="adpColLabels" style="display:none"></div>
   <div id="board"></div>
   <div id="toast"></div>
   <script src="rankings.js"></script>

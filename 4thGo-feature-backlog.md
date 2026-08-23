@@ -28,6 +28,15 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   by consensus rank order — it does NOT yet account for roster needs, positional
   scarcity, or league scoring, so it isn't the "smart" single answer yet. That
   still waits on #4/#5. The side panel keeps its 4-position grid unchanged.
+- **Scope addition (2026-08-23):** when this pass finally happens, it needs to
+  include the side panel board's row layout — rank, name, per-source ADP
+  columns, the value bar, and the pos chip. That layout was built incrementally
+  (ADP columns added, then a value bar, then column labels) without a full
+  picture of everything it'd eventually need to hold, and went through five
+  rounds of alignment bugs as a result (see `claude.md`'s "Design & alignment
+  lessons" section for the actual root causes). Design it once, thoughtfully,
+  against the complete feature set instead of bolting more columns onto the
+  current ad-hoc grid.
 
 ## 3. Multiple ranking sources side-by-side — ✅ BUILT (Rankings Manager)
 - See more than one source's opinion on the board at once (not just your one CSV).

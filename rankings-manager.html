@@ -83,6 +83,14 @@
   .chip .x { color: var(--dim); padding-left: 2px; }
   .chip .x:hover { color: var(--red); }
 
+  /* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) ---- */
+  .vbig { display: inline-flex; align-items: center; gap: 8px; font-family: ui-monospace, monospace; justify-content: flex-end; width: 100%; }
+  .vbig-num { font-size: 10px; font-weight: 800; width: 26px; text-align: right; flex: none; }
+  .vbig-track { position: relative; width: 84px; height: 14px; background: #1E2118; border-radius: 3px; overflow: hidden; flex: none; }
+  .vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line2); }
+  .vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+  .vbig-empty { color: var(--dim); font-size: 10px; }
+
   /* ---- filters ---- */
   #filters { display: flex; gap: 5px; flex-wrap: wrap; }
   .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; }

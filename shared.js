@@ -31,7 +31,7 @@ const SOURCE_PALETTE = ["#5FA8E8","#E88AC9","#F5C242","#9B8AE8","#5FCFC4","#E8A0
 // ---------- storage keys ----------
 const K_SOURCES = "rankingSources"; // array of source objects (see makeSource)
 const K_DRAFT   = "draftState";     // live picks + manual crossouts, shared by both surfaces
-const K_ADP     = "adpData";        // { players:[{name,pos,adp}], importedAt, label }
+const K_ADP     = "adpData";        // array of ADP source objects (see makeAdpSource) — was a single {players,label} blob before multi-source ADP; old shape is discarded, not migrated
 const K_ROSTER  = "myRosterId";     // which draft slot / roster id is the user's
 const K_FLAGS   = "playerFlags";    // playerKey -> "favorite" | "avoid", set in the manager, shown everywhere
 const K_MERGES  = "playerMerges";   // { variantKey: canonicalKey, ... } — unmatched player reconciliation
@@ -118,10 +118,24 @@ function splitLine(line) {
 const HEADER_ALIASES = {
   name: ["name", "player", "player name", "playername"],
   team: ["team", "tm"],
-  pos:  ["position", "pos"],
+  // "pos.rk" is FantasyPros' Real-Time ADP export — a positional-rank column
+  // (values like "RB1", "WR12") that also carries the position itself.
+  pos:  ["position", "pos", "pos.rk", "pos rk"],
   tier: ["tier", "tiers"],
-  rank: ["rank", "expert rank", "expertrank", "overall", "ecr", "rk"],
+  // "real-time" comes first deliberately: FantasyPros' Real-Time ADP export
+  // carries both a coarse sequential "RK" column (just row order, 1/2/3/...)
+  // and a precise decimal "REAL-TIME" column (the actual live ADP value,
+  // e.g. 1.3/2.1/3.2). The real value is what we want, so it's checked ahead
+  // of the generic rank aliases — see the priority-ordered lookup below.
+  rank: ["real-time", "realtime", "rank", "expert rank", "expertrank", "overall", "ecr", "rk"],
 };
+// FantasyPros' ADP exports (and others) embed team + bye week right in the
+// name cell, e.g. "Jahmyr Gibbs DET (6)" or "Tyreek Hill FA ()" for a
+// free agent. Left in place, that breaks playerKey() matching against every
+// other source (which just has "Jahmyr Gibbs"), so it's stripped on import.
+function stripEmbeddedTeamBye(name) {
+  return String(name || "").replace(/\s+[A-Z]{2,4}\s*\(\d*\)\s*$/, "").trim();
+}
 
 function looksLikePos(v) { return POSITIONS.includes(String(v).toUpperCase()); }
 function looksLikeTeam(v) { return /^[A-Z]{2,3}$/.test(String(v).trim()) && !looksLikePos(v); }
@@ -141,10 +155,19 @@ function parseRankings(text) {
   let idx = null;
 
   // --- header row? ---
-  const first = rows[0].map((c) => c.toLowerCase().trim());
-  const headerHits = Object.values(HEADER_ALIASES).filter((aliases) =>
-    first.some((c) => aliases.includes(c))
-  ).length;
+  // Some exports (FantasyPros' Real-Time ADP among them) prepend a caption
+  // line above the real header, e.g. "Real-Time ADP — Redraft Half-PPR...".
+  // Scanning only row 0 would score that caption as 0 header hits and fall
+  // through to shape-inference with the real header row misread as data (and
+  // the position column, which IS on row 1, never even considered). Instead,
+  // scan the first few rows and use whichever scores the most header-alias
+  // hits — a real header row will always win over a prose caption line.
+  let headerRowIdx = 0, headerHits = 0, first = rows[0].map((c) => c.toLowerCase().trim());
+  for (let i = 0; i < Math.min(4, rows.length); i++) {
+    const cand = rows[i].map((c) => c.toLowerCase().trim());
+    const hits = Object.values(HEADER_ALIASES).filter((aliases) => cand.some((c) => aliases.includes(c))).length;
+    if (hits > headerHits) { headerHits = hits; headerRowIdx = i; first = cand; }
+  }
   // Two or more recognized header words is unambiguous. A single one still
   // counts when the row carries no numbers at all — a real ranking row almost
   // always has a rank, so an all-text first row is a header (catches a
@@ -152,10 +175,18 @@ function parseRankings(text) {
   if (headerHits >= 2 || (headerHits >= 1 && !first.some(looksLikeNum))) {
     idx = {};
     Object.entries(HEADER_ALIASES).forEach(([role, aliases]) => {
-      const at = first.findIndex((c) => aliases.includes(c));
+      // Priority is the ALIAS order, not column position — some exports carry
+      // more than one plausible column for a role (e.g. both "RK" and
+      // "REAL-TIME" for rank), and the earliest-listed alias should win
+      // regardless of which column it happens to sit in.
+      let at = -1;
+      for (const alias of aliases) {
+        const found = first.findIndex((c) => c === alias);
+        if (found !== -1) { at = found; break; }
+      }
       if (at !== -1) idx[role] = at;
     });
-    rows = rows.slice(1);
+    rows = rows.slice(headerRowIdx + 1);
   } else {
     // --- no header: infer column roles from the shape of the data ---
     const sample = rows.slice(0, Math.min(12, rows.length));
@@ -193,7 +224,7 @@ function parseRankings(text) {
   const players = [];
   let skipped = 0;
   rows.forEach((r, i) => {
-    const name = (r[idx.name] || "").trim();
+    const name = stripEmbeddedTeamBye((r[idx.name] || "").trim());
     if (!name) { skipped++; return; }
     let pos = idx.pos !== undefined ? String(r[idx.pos] || "").toUpperCase().trim() : "";
     // Strip numeric suffixes (WR1 → WR, TE2 → TE) for sources like FantasyPros that use positional tiers
@@ -347,7 +378,7 @@ function sourceTag(name) {
 // rank instead of the blended consensus.
 function renderBestPicksWidget(el, opts) {
   if (!el) return;
-  const { rows = [], sources = [], takenSet = new Set(), adp = null, soloSource = null, onSolo, flags = {} } = opts || {};
+  const { rows = [], sources = [], takenSet = new Set(), adp = null, valueMap = null, soloSource = null, onSolo, flags = {} } = opts || {};
   let displayRows = rows;
   if (soloSource) {
     displayRows = rows
@@ -392,20 +423,37 @@ function renderBestPicksWidget(el, opts) {
       .join("");
     const adpV = adp ? adp.map.get(r.key) : undefined;
     const displayRank = soloSource ? r.ranks[soloSource] : r.consensus;
-    // Short tag, not the full source name, in the meta line — a long name
-    // ("Fantasy Flock Rankings rank 30.1") wraps to a second line and makes
-    // the whole card grid jump height when isolating a source.
-    const rankLabel = soloSource
-      ? `${sourceTag(sources.find((s) => s.id === soloSource)?.name || "")} rank ${displayRank?.toFixed(1) ?? "—"}`
-      : `rank ${displayRank?.toFixed(1) ?? "—"} <span style="color:var(--dim)">(${r.sourceCount} src)</span>`;
-    const d = adpV !== undefined ? adpDelta(displayRank, adpV) : null;
+    // Short tag, not the full source name, in the RANK tile's label — a long
+    // name ("Fantasy Flock Rankings") wraps and makes the whole card grid
+    // jump height when isolating a source.
+    const rankTileLabel = soloSource
+      ? `${sourceTag(sources.find((s) => s.id === soloSource)?.name || "")} RANK`
+      : `RANK · ${r.sourceCount} SRC`;
+    const rankTileValue = displayRank != null ? displayRank.toFixed(1) : "—";
+    // Same Sleeper-vs-baseline metric and color scale as the tier board's
+    // VALUE bar (buildValueComparison) — the two surfaces used to show two
+    // different numbers both labeled "ADP", which read as a bug rather than
+    // two intentionally distinct metrics. Now they always agree.
+    const vc = valueMap ? valueMap.get(r.key) : null;
+    const deltaHtml = vc
+      ? ` <span style="color:${valueColor(vc.delta)}">${vc.delta > 0 ? "+" : ""}${vc.delta.toFixed(0)}</span>`
+      : "";
+    const adpTileValue = adpV !== undefined ? adpV.toFixed(1) : "—";
     return `<div class="bestCard" style="border-top-color:${m.color}">
-      <div class="medal" style="color:${m.color}">${m.label}</div>
+      <div class="bestTop">
+        <span class="medal" style="color:${m.color}">${m.label}</span>
+        <span class="posTeamChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}${r.team ? " · " + r.team : ""}</span>
+      </div>
       <div class="bestName">${flagBadge(flags[r.key])}${r.name}</div>
-      <div class="bestMeta">
-        <span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span>
-        ${r.team ? " " + r.team : ""} · ${rankLabel}
-        ${d !== null ? ` · <span style="color:${adpDeltaColor(d)}">ADP ${adpV} (${d > 0 ? "+" : ""}${d.toFixed(0)})</span>` : ""}
+      <div class="statTiles">
+        <div class="statTile">
+          <div class="statLabel">${rankTileLabel}</div>
+          <div class="statValue">${rankTileValue}</div>
+        </div>
+        <div class="statTile">
+          <div class="statLabel">ADP</div>
+          <div class="statValue">${adpTileValue}${deltaHtml}</div>
+        </div>
       </div>
       <div class="srcDots">${dots}</div>
     </div>`;
@@ -460,30 +508,155 @@ function renderTeamCountsWidget(el, opts) {
 }
 
 // ---------- ADP ----------
-// NOTE: Sleeper publishes NO public ADP endpoint (docs.sleeper.com lists none —
-// verified, don't go hunting for one again). ADP is therefore imported by the
-// user like any other file, and cached here until they replace it.
-async function loadAdp() {
+// Multiple ADP sources can be enabled at once (Sleeper live, FFC live, a
+// pasted FantasyPros export, ...) — same shape/pattern as ranking `sources`,
+// so the same toggle/rename/remove UI conventions apply.
+function makeAdpSource(name, players, opts = {}) {
+  return {
+    id: opts.id || `adp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name,
+    color: opts.color || SOURCE_PALETTE[0],
+    enabled: opts.enabled !== false,
+    players, // [{name,pos,rank}] — rank here means "ADP value"
+    importedAt: Date.now(),
+  };
+}
+async function loadAdpSources() {
   const v = await chrome.storage.local.get([K_ADP]);
-  const d = v[K_ADP];
-  if (!d || !Array.isArray(d.players)) return null;
+  const raw = v[K_ADP];
+  let list = Array.isArray(raw) ? raw : []; // pre-multi-source single-object shape is discarded, not migrated
+  // One-time cleanup: FFC was removed as a source (2026-08-23) — drop any
+  // leftover entry from a prior session rather than leaving a dead chip.
+  if (list.some((s) => s.id === "adp_ffc_live")) {
+    list = list.filter((s) => s.id !== "adp_ffc_live");
+    await saveAdpSources(list);
+  }
+  return list;
+}
+async function saveAdpSources(list) {
+  await chrome.storage.local.set({ [K_ADP]: list });
+}
+// Blends enabled ADP sources into one map, median across sources — same
+// blending rule as buildConsensus, minus tiers (ADP has no tier concept).
+// Returns Map<playerKey, { values: {sourceId: rank}, median }>.
+function buildAdpConsensus(adpSources) {
+  const enabled = (adpSources || []).filter((s) => s.enabled);
   const map = new Map();
-  d.players.forEach((p) => map.set(playerKey(p.name, p.pos), p.rank));
-  return { map, label: d.label || "ADP", importedAt: d.importedAt };
+  enabled.forEach((src) => {
+    src.players.forEach((p) => {
+      if (!p.pos) return;
+      const key = playerKey(p.name, p.pos);
+      if (!map.has(key)) map.set(key, { key, values: {} });
+      map.get(key).values[src.id] = p.rank;
+    });
+  });
+  map.forEach((e) => {
+    const vals = Object.values(e.values).filter((v) => isFinite(v));
+    e.median = vals.length ? median(vals) : null;
+  });
+  return map;
 }
 
-// Positive delta = market drafts them LATER than you rank them = value.
-function adpDelta(rank, adp) {
-  if (!isFinite(rank) || !isFinite(adp)) return null;
-  return adp - rank;
+// The value/reach signal compares Sleeper's OWN live ADP against a trusted
+// baseline (typically a manually-imported FantasyPros Real-Time export) —
+// not "my rank" at all. If Sleeper drafts someone LATER than the baseline
+// says he should go, Sleeper specifically is undervaluing him = a discount
+// (value). If Sleeper drafts him EARLIER than baseline, Sleeper drafters are
+// paying up for him relative to the wider market = a reach.
+// "Sleeper Live ADP" is recognized by its fixed id (adp_sleeper_live, set by
+// the auto-fetch button). The baseline is whichever OTHER enabled source(s)
+// exist, blended via median if more than one — so this still works if the
+// user only has a FantasyPros import enabled alongside Sleeper, without
+// needing to manually designate a "baseline" source.
+function buildValueComparison(adpSources) {
+  const enabled = (adpSources || []).filter((s) => s.enabled);
+  const sleeper = enabled.find((s) => s.id === "adp_sleeper_live");
+  const baselineSources = enabled.filter((s) => s.id !== "adp_sleeper_live");
+  const map = new Map(); // key -> { sleeperAdp, baselineAdp, delta }
+  if (!sleeper || !baselineSources.length) return map;
+
+  const sleeperMap = new Map();
+  sleeper.players.forEach((p) => {
+    if (!p.pos || !isFinite(p.rank)) return;
+    sleeperMap.set(playerKey(p.name, p.pos), p.rank);
+  });
+  const baselineVotes = new Map(); // key -> [rank, rank, ...]
+  baselineSources.forEach((src) => {
+    src.players.forEach((p) => {
+      if (!p.pos || !isFinite(p.rank)) return;
+      const key = playerKey(p.name, p.pos);
+      if (!baselineVotes.has(key)) baselineVotes.set(key, []);
+      baselineVotes.get(key).push(p.rank);
+    });
+  });
+  sleeperMap.forEach((sleeperAdp, key) => {
+    const votes = baselineVotes.get(key);
+    if (!votes || !votes.length) return;
+    const baselineAdp = median(votes);
+    map.set(key, { sleeperAdp, baselineAdp, delta: sleeperAdp - baselineAdp });
+  });
+  return map;
 }
-function adpDeltaColor(delta) {
-  if (delta === null) return "var(--dim)";
-  if (delta >= 12) return "#5FCF8A";
-  if (delta >= 5)  return "#8FBF7A";
-  if (delta <= -12) return "#C97A6E";
-  if (delta <= -5)  return "#B8907A";
+
+// Legacy single-map accessor, kept for the side panel's Best Picks widget
+// (which only needs one blended ADP number, not per-source columns) — median
+// across whichever ADP sources are enabled.
+async function loadAdp() {
+  const list = await loadAdpSources();
+  const enabled = list.filter((s) => s.enabled);
+  if (!enabled.length) return null;
+  const consensus = buildAdpConsensus(list);
+  const map = new Map();
+  consensus.forEach((e, key) => { if (e.median !== null) map.set(key, e.median); });
+  if (!map.size) return null;
+  const label = enabled.length === 1 ? enabled[0].name : `${enabled.length}-source ADP blend`;
+  return { map, label, sourceCount: enabled.length };
+}
+
+// Shared magnitude scale for ALL ADP-gap signals (the tier board's value bar
+// and the Best Picks card's ADP delta both use this) — a flat number of
+// picks apart, not a percentage of the ADP round. A percent-of-ADP scale was
+// tried first and measurably backfired: near the top of the draft ADP values
+// are clustered in a tiny range (1.1–3.0), so even a trivial half-pick gap
+// between sources computes as a huge percentage and lights up bright green,
+// while a genuinely large 5-10 pick gap in the middle rounds computes as a
+// small percentage and reads as gray/noise — the opposite of the real signal.
+// A flat pick-count scale doesn't have that blowup: "5 picks apart" means the
+// same thing whether it happens at pick 3 or pick 103.
+const VALUE_FULL_PICKS = 15;   // gap size (in picks) that maps to full-strength color + a full-width bar
+const VALUE_LIGHT_PICKS = 4;   // gap size that starts registering as a light color instead of gray
+function valueColor(delta) {
+  if (delta === null || delta === undefined) return "var(--dim)";
+  const mag = Math.abs(delta);
+  if (mag >= VALUE_FULL_PICKS)  return delta >= 0 ? "#5FCF8A" : "#C97A6E";
+  if (mag >= VALUE_LIGHT_PICKS) return delta >= 0 ? "#8FBF7A" : "#B8907A";
   return "var(--dim2)";
+}
+
+// Big diverging bar — chosen by the user over a solid badge and a full-row
+// tint (three variants rendered for comparison). Signed number on the left,
+// a wide track on the right with a fill growing from the center: right/green
+// for value, left/red for reach. Bigger and more literal than the original
+// thin-line meter this replaced, which read as too subtle to scan quickly.
+// delta comes from buildValueComparison — delta = sleeperAdp - baselineAdp;
+// positive (green) = Sleeper undervalues them = discount/value, negative
+// (red) = Sleeper drafters pay up for them vs the wider market = reach.
+// baselineAdp is only used to decide whether a comparison exists at all —
+// see the magnitude-scale comment above for why it's NOT used to scale the
+// bar's color/width anymore.
+function renderValueBadge(delta, baselineAdp) {
+  if (delta === null || delta === undefined || !isFinite(baselineAdp) || baselineAdp <= 0) {
+    return `<span class="vbig vbig-empty" title="Need both Sleeper Live ADP and another ADP source enabled">·</span>`;
+  }
+  const color = valueColor(delta);
+  const widthPct = delta === 0 ? 0 : Math.max(Math.min(Math.abs(delta) / VALUE_FULL_PICKS, 1) * 50, 2); // small tick even for a near-zero gap, so the bar never looks broken/empty
+  const side = delta >= 0 ? "left:50%;" : "right:50%;";
+  const sign = delta > 0 ? "+" : "";
+  const verdict = delta >= 0 ? "value (Sleeper drafts them later than baseline)" : "reach (Sleeper drafts them earlier than baseline)";
+  return `<span class="vbig" title="Sleeper ${sign}${delta.toFixed(0)} picks vs baseline — ${verdict}">
+    <span class="vbig-num" style="color:${color}">${sign}${delta.toFixed(0)}</span>
+    <span class="vbig-track"><span class="vbig-fill" style="${side}width:${widthPct}%;background:${color}"></span></span>
+  </span>`;
 }
 
 // ---------- shared draft state ----------

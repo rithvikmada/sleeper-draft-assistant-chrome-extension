@@ -64,6 +64,7 @@ let countdownTimer = null;
 // The manager curates these; this panel only reads them to build recommendations.
 let sources = [];
 let adp = null;
+let adpSources = []; // multiple ADP sources (Sleeper Live, a pasted FantasyPros export, ...) — for the board's per-row ADP columns + value badge
 let soloSource = null; // when set, best-picks are computed from just this source
 let lastSharedPicks = []; // source-agnostic record of every drafted player, by playerKey
 let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manager
@@ -109,6 +110,45 @@ function renderBoard() {
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   if (!showTaken) list = list.filter((r) => !isGone(r));
 
+  // Per-row ADP columns + value badge — one column per enabled ADP source
+  // (usually Sleeper Live ADP + a pasted FantasyPros export), plus the
+  // Sleeper-vs-baseline value/reach badge. Column count is dynamic, so the
+  // grid template is built here and applied per-row via inline style rather
+  // than a fixed CSS rule.
+  const adpCols = adpSources.filter((s) => s.enabled);
+  const adpConsensus = buildAdpConsensus(adpSources);
+  const valueMap = buildValueComparison(adpSources);
+  // Every track is a fixed length, deliberately — NOT "auto" for the pos-chip
+  // column. #adpColLabels and each .row are separate grid containers, so an
+  // "auto" track sizes independently per container: the label row's pos-chip
+  // slot is empty (~0px) while a real row's has actual chip content (~23px),
+  // which changes how much space the 1fr name column eats and shifts every
+  // column after it out of alignment between the header and the rows.
+  const gridColParts = ["34px", "1fr", ...adpCols.map(() => "48px")];
+  if (adpCols.length) gridColParts.push("96px"); // fits the bigger value bar (22px number + 56px track + gaps)
+  gridColParts.push("36px"); // pos-chip — fixed, see note above
+  const gridCols = gridColParts.join(" ");
+
+  // Column labels above the list — the board is otherwise just repeating
+  // rows with no header, so without this a raw ADP number column reads as
+  // unlabeled noise. Rendered once, not per tier, using the same grid
+  // template so it lines up with the actual columns below it.
+  const labelsEl = $("adpColLabels");
+  if (adpCols.length) {
+    labelsEl.style.display = "grid";
+    labelsEl.style.gridTemplateColumns = gridCols;
+    labelsEl.innerHTML = `<span></span><span></span>` +
+      adpCols.map((s) => `<span style="color:${s.color}" title="${s.name}">${sourceTag(s.name)}</span>`).join("") +
+      `<span>VALUE</span><span></span>`;
+    // Pull the first tier divider up toward the labels instead of leaving a
+    // big dead gap — #board's own top padding is meant for the space before
+    // an UNlabeled list, not on top of the label row's own spacing.
+    $("board").style.paddingTop = "0";
+  } else {
+    labelsEl.style.display = "none";
+    $("board").style.paddingTop = "";
+  }
+
   const groups = {};
   list.forEach((r) => { const t = r.tier || "?"; (groups[t] = groups[t] || []).push(r); });
 
@@ -122,9 +162,17 @@ function renderBoard() {
       const mine = taken[r.key] && taken[r.key].byMe;
       const pickLabel = taken[r.key] && taken[r.key].pickNo ? ` · pk ${taken[r.key].pickNo}` : "";
       const flag = flags[r.key];
-      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${r.key}" data-name="${r.name}" title="Double-click to cross off / undo" style="border-left-color:${c.text}">
+      const adpEntry = adpConsensus.get(r.key);
+      const vc = valueMap.get(r.key);
+      const adpCells = adpCols.map((s) =>
+        `<span class="adp-cell" style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}" title="${s.name}">${adpEntry?.values[s.id] ?? "·"}</span>`
+      ).join("");
+      const valueCell = adpCols.length ? renderValueBadge(vc?.delta ?? null, vc?.baselineAdp) : "";
+      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${r.key}" data-name="${r.name}" title="Double-click to cross off / undo" style="border-left-color:${c.text};grid-template-columns:${gridCols}">
         <span class="rk">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
         <span class="nm">${flagBadge(flag)}${r.name} <span class="tm">· ${r.team || ""}${pickLabel}</span></span>
+        ${adpCells}
+        ${valueCell}
         <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span>
       </div>`;
     }).join("");
@@ -173,6 +221,7 @@ function renderRecommendations() {
     sources,
     takenSet: takenKeySet(),
     adp,
+    valueMap: buildValueComparison(adpSources),
     soloSource,
     // renderAll (not renderRecommendations) so the tier board — which DOES isolate
     // to just the solo source — updates in the same tick instead of waiting for
@@ -242,7 +291,8 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
   if (changes[K_ADP]) {
     adp = await loadAdp();
-    renderRecommendations();
+    adpSources = await loadAdpSources();
+    renderAll(); // board's per-row ADP columns depend on adpSources too, not just the widgets
   }
   if (changes[K_FLAGS]) {
     flags = await loadFlags();
@@ -544,6 +594,7 @@ $("takenToggle").addEventListener("click", () => {
 
   sources = await loadSources();
   adp = await loadAdp();
+  adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
 

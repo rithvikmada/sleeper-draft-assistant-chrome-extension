@@ -12,7 +12,7 @@ const $ = (id) => document.getElementById(id);
 
 let sources = [];
 let draft = { picks: [], manualKeys: [], draftId: null, myRosterId: null };
-let adp = null;
+let adpSources = []; // multiple ADP sources can be enabled at once — see makeAdpSource in shared.js
 let flags = {}; // playerKey -> "favorite" | "avoid"
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let posFilter = "ALL";
@@ -67,13 +67,54 @@ function renderSourceBar() {
       <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
   }).join("");
 
-  const adpChip = `<span class="chip" data-adp="1" title="${adp ? "Replace ADP data" : "Import ADP data"}">
-      <span class="sw" style="background:var(--gold)"></span>ADP
-      <span style="color:var(--dim)">${adp ? adp.map.size : "none"}</span></span>`;
+  const adpChips = adpSources.map((s) => {
+    const cls = `chip${s.enabled ? "" : " disabled"}`;
+    const edit = `<span class="edit-src" data-editadp="${s.id}" title="Rename this ADP source" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const del = `<span class="x" data-deladp="${s.id}" title="Remove ADP source">✕</span>`;
+    return `<span class="${cls}" data-toggleadp="${s.id}" title="Click to enable/disable — each enabled ADP source gets its own column, and the value/reach meter blends whichever are on">
+      <span class="sw" style="background:${s.color}"></span>${s.name}${edit}
+      <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
+  }).join("");
 
-  bar.innerHTML = chips + adpChip +
+  bar.innerHTML = chips +
+    `<span style="width:1px;height:16px;background:var(--line2);margin:0 2px"></span>` +
+    adpChips +
+    `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ FETCH SLEEPER ADP</button>` +
+    `<button class="alt" id="addAdpBtn">+ ADD ADP SOURCE</button>` +
     `<button class="alt" id="addSrcBtn">+ ADD SOURCE</button>` +
     (soloSource ? `<button class="alt" id="showAllBtn">↺ SHOW ALL SOURCES</button>` : "");
+
+  bar.querySelectorAll("[data-toggleadp]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.dataset.deladp || e.target.dataset.editadp) return;
+      const s = adpSources.find((x) => x.id === el.dataset.toggleadp);
+      s.enabled = !s.enabled;
+      persistAdpSources();
+      renderAll();
+    });
+  });
+  bar.querySelectorAll("[data-deladp]").forEach((el) => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const s = adpSources.find((x) => x.id === el.dataset.deladp);
+      const confirmed = await showConfirm(`Remove "${s.name}"?`, `This ADP source will be permanently deleted. This can't be undone.`, "REMOVE");
+      if (!confirmed) return;
+      adpSources = adpSources.filter((x) => x.id !== el.dataset.deladp);
+      persistAdpSources();
+      renderAll();
+    });
+  });
+  bar.querySelectorAll("[data-editadp]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const s = adpSources.find((x) => x.id === el.dataset.editadp);
+      const newName = prompt(`Rename "${s.name}" to:`, s.name);
+      if (!newName || newName === s.name) return;
+      s.name = newName.trim();
+      persistAdpSources();
+      renderAll();
+    });
+  });
 
   bar.querySelectorAll("[data-toggle]").forEach((el) => {
     let clickTimeout;
@@ -121,13 +162,56 @@ function renderSourceBar() {
     });
   });
   $("addSrcBtn").addEventListener("click", () => openModal(false));
-  bar.querySelector("[data-adp]").addEventListener("click", () => openModal(true));
+  $("addAdpBtn").addEventListener("click", () => openModal(true));
+  $("fetchSleeperAdpBtn").addEventListener("click", fetchSleeperAdp);
   if ($("showAllBtn")) $("showAllBtn").addEventListener("click", () => { soloSource = null; renderAll(); });
+}
+
+// Auto-fetch live PPR ADP straight from Sleeper's own public API.
+// CORRECTION to earlier project notes: docs.sleeper.com's documented endpoint
+// list has no ADP route, which is what earlier sessions checked — but this
+// undocumented projections endpoint carries adp_ppr/adp_std/adp_half_ppr/etc
+// as fields inside each player's `stats` blob, is fully public (no auth
+// header needed), has open CORS (access-control-allow-origin: *), and lives
+// on api.sleeper.app — a domain already in manifest.json's host_permissions,
+// so no permission change was needed. Verified 2026-08-23 against real
+// current-season data (last_modified within the last day, top ADP order
+// matching FantasyPros/FFC's own consensus).
+async function fetchSleeperAdp() {
+  const btn = $("fetchSleeperAdpBtn");
+  btn.disabled = true;
+  btn.textContent = "⟳ FETCHING…";
+  try {
+    const year = new Date().getFullYear();
+    const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const players = (data || [])
+      .filter((p) => p.stats && isFinite(p.stats.adp_ppr) && p.player && POSITIONS.includes(p.player.position))
+      .map((p) => ({
+        name: `${p.player.first_name} ${p.player.last_name}`,
+        pos: p.player.position,
+        rank: p.stats.adp_ppr,
+      }));
+    if (!players.length) throw new Error(`No ADP data for ${year} season yet`);
+    await upsertAdpSource("adp_sleeper_live", "Sleeper Live ADP", "#5FA8E8", players);
+    renderAll();
+    toast(`ADP fetched — ${players.length} players from Sleeper's own PPR ADP`);
+  } catch (err) {
+    toast(`Sleeper ADP fetch failed: ${err.message} — try FFC or pasting instead`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⟳ FETCH SLEEPER ADP";
+  }
 }
 
 function renderTable(rows) {
   const taken = takenMap();
   const cols = activeSources();
+  const adpCols = adpSources.filter((s) => s.enabled);
+  const adpConsensus = buildAdpConsensus(adpSources);
+  const valueMap = buildValueComparison(adpSources);
 
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
@@ -147,16 +231,16 @@ function renderTable(rows) {
     <th>TIER</th>
     <th>CONSENSUS</th>
     ${cols.map((s) => `<th style="color:${s.color}">${s.name.toUpperCase()}</th>`).join("")}
-    <th>ADP</th>
-    <th>Δ</th>
+    ${adpCols.map((s) => `<th style="color:${s.color}">${s.name.toUpperCase()}</th>`).join("")}
+    <th title="Sleeper Live ADP vs. your other enabled ADP source(s) (baseline). Green = Sleeper drafts them later than baseline (a discount). Red = Sleeper drafts them earlier than baseline (a reach). Needs Sleeper Live ADP + at least one other ADP source enabled.">VALUE</th>
     <th></th>
   </tr>`;
 
   const body = list.slice(0, 400).map((r, i) => {
     const t = taken.get(r.key);
     const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
-    const adpV = adp ? adp.map.get(r.key) : undefined;
-    const d = adpV !== undefined ? adpDelta(r.consensus, adpV) : null;
+    const adpEntry = adpConsensus.get(r.key);
+    const vc = valueMap.get(r.key);
     const tier = r.tier && TIER_COLORS[r.tier]
       ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${r.tier}</span>` : "";
     const flag = flags[r.key];
@@ -168,8 +252,8 @@ function renderTable(rows) {
       <td>${tier}</td>
       <td style="color:var(--text)">${r.consensus?.toFixed(1) ?? "—"}</td>
       ${cols.map((s) => `<td style="color:${r.ranks[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${r.ranks[s.id] ?? "·"}</td>`).join("")}
-      <td style="color:var(--dim2)">${adpV ?? "·"}</td>
-      <td style="color:${adpDeltaColor(d)}">${d === null ? "·" : (d > 0 ? "+" : "") + d.toFixed(0)}</td>
+      ${adpCols.map((s) => `<td style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${adpEntry?.values[s.id] ?? "·"}</td>`).join("")}
+      <td>${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}</td>
       <td>
         <span class="flagBtn${flag === "favorite" ? " on fav" : ""}" data-flag="${r.key}" data-kind="favorite" title="Favorite">★</span>
         <span class="flagBtn${flag === "avoid" ? " on avoid" : ""}" data-flag="${r.key}" data-kind="avoid" title="Flag to avoid">⊘</span>
@@ -283,15 +367,33 @@ async function persistSources() {
   suppressEcho = false;
 }
 
+async function persistAdpSources() {
+  suppressEcho = true;
+  await saveAdpSources(adpSources);
+  suppressEcho = false;
+}
+// Adds a new ADP source, or updates one in place (by fixed id) if it already
+// exists — used by the live-fetch buttons so re-clicking "refresh" updates
+// the same source rather than piling up duplicate entries. Preserves the
+// existing enabled/disabled state across a refresh.
+async function upsertAdpSource(id, name, color, players) {
+  const idx = adpSources.findIndex((s) => s.id === id);
+  const enabled = idx !== -1 ? adpSources[idx].enabled : true;
+  const src = makeAdpSource(name, players, { id, color, enabled });
+  if (idx !== -1) adpSources[idx] = src; else adpSources.push(src);
+  await persistAdpSources();
+}
+
 // ---------- import modal ----------
 function openModal(isAdp) {
   editingAdp = isAdp;
-  $("modalTitle").textContent = isAdp ? "Import ADP data" : "Add a ranking source";
+  $("modalTitle").textContent = isAdp ? "Add an ADP source" : "Add a ranking source";
   $("modalHint").innerHTML = isAdp
-    ? `Sleeper publishes no public ADP endpoint, so ADP is imported here rather than fetched live. Paste or upload any ADP export — same flexible format as a ranking source, where the numeric column is the ADP.`
+    ? `Paste or upload an ADP export — same flexible format as a ranking source, where the numeric column is the ADP value. Multiple ADP sources can be enabled at once; each gets its own column, and the value/reach meter blends whichever are on.`
     : `Columns are detected automatically. A header row is optional, and comma or tab separated both work. Recognized: Name, Team, Position, Tier, Rank — only Name is required.`;
-  $("srcName").value = isAdp ? "ADP" : "";
-  $("srcName").disabled = isAdp;
+  $("srcName").value = "";
+  $("srcName").disabled = false;
+  $("srcName").placeholder = isAdp ? "e.g. FantasyPros Real-Time ADP" : "e.g. FantasyPros ECR";
   $("srcPaste").value = "";
   $("srcFile").value = "";
   $("parseNote").textContent = "";
@@ -331,7 +433,7 @@ $("srcFile").addEventListener("change", () => {
   const r = new FileReader();
   r.onload = () => {
     $("srcPaste").value = r.result;
-    if (!$("srcName").value && !editingAdp) $("srcName").value = f.name.replace(/\.[^.]+$/, "");
+    if (!$("srcName").value) $("srcName").value = f.name.replace(/\.[^.]+$/, "");
     previewParse();
   };
   r.readAsText(f);
@@ -356,17 +458,27 @@ $("saveSrcBtn").addEventListener("click", async () => {
   const text = $("srcPaste").value;
   const name = $("srcName").value.trim();
   if (!text.trim()) { $("parseNote").className = "err"; $("parseNote").textContent = "Nothing to import yet."; return; }
-  if (!editingAdp && !name) { $("parseNote").className = "err"; $("parseNote").textContent = "Give the source a name."; return; }
+  if (!name) { $("parseNote").className = "err"; $("parseNote").textContent = "Give the source a name."; return; }
 
   const { players } = parseRankings(text);
   if (!players.length) { $("parseNote").className = "err"; $("parseNote").textContent = "Couldn't parse any players."; return; }
 
   if (editingAdp) {
-    await chrome.storage.local.set({
-      [K_ADP]: { players: players.map((p) => ({ name: p.name, pos: p.pos, rank: p.rank })), importedAt: Date.now(), label: "ADP" },
-    });
-    adp = await loadAdp();
-    toast(`ADP imported — ${players.length} players.`);
+    // Re-importing under the same name (case-insensitive) updates that
+    // source in place instead of piling up duplicates — matters for a
+    // day-of-draft re-upload workflow (e.g. re-pasting a fresh FantasyPros
+    // Real-Time export right before the draft starts).
+    const cleaned = players.map((p) => ({ name: p.name, pos: p.pos, rank: p.rank }));
+    const existing = adpSources.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      await upsertAdpSource(existing.id, name, existing.color, cleaned);
+      toast(`Updated ADP source "${name}" — ${players.length} players.`);
+    } else {
+      const color = SOURCE_PALETTE[adpSources.length % SOURCE_PALETTE.length];
+      adpSources.push(makeAdpSource(name, cleaned, { color }));
+      await persistAdpSources();
+      toast(`Added ADP source "${name}" — ${players.length} players.`);
+    }
   } else {
     const color = SOURCE_PALETTE[sources.length % SOURCE_PALETTE.length];
     sources.push(makeSource(name, players, { color }));
@@ -409,7 +521,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     draft.myRosterId = changes[K_ROSTER].newValue;
   }
   if (changes[K_ADP] && !suppressEcho) {
-    adp = await loadAdp();
+    adpSources = await loadAdpSources();
     renderAll();
   }
   if (changes[K_FLAGS] && !suppressEcho) {
@@ -447,7 +559,7 @@ async function ensureBuiltinSources() {
   sources = await loadSources();
   await ensureBuiltinSources();
   draft = await loadDraftState();
-  adp = await loadAdp();
+  adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
   const v = await chrome.storage.local.get([K_ROSTER]);
