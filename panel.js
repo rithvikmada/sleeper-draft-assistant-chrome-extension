@@ -72,16 +72,16 @@ function valueDeltaHtml(value) {
 
 // A small pulsing dot next to the VALUE bar — colored to the player's
 // position, shown only once the current pick number has passed their
-// Sleeper live ADP (they were "supposed" to be off the board by now and
-// aren't). Purely a live-draft urgency cue, so it needs an actual current
-// pick number (from a real sync) and the Sleeper Live ADP source specifically
-// — not the blended baseline, which can include a manually-imported source
-// that has nothing to do with what Sleeper drafters are actually doing.
-function adpBlinkDotHtml(pos, sleeperAdp) {
-  if (currentPickNo == null || sleeperAdp == null || !isFinite(sleeperAdp)) return "";
-  if (currentPickNo <= sleeperAdp) return "";
+// BASELINE ADP (the manually-imported FantasyPros/other source, same
+// `baselineAdp` buildValueComparison already computes for the VALUE bar's
+// delta — not Sleeper's own live ADP, which is what the VALUE bar is
+// comparing baseline against in the first place). They were "supposed" to be
+// off the board by now per the wider market and aren't.
+function adpBlinkDotHtml(pos, baselineAdp) {
+  if (currentPickNo == null || baselineAdp == null || !isFinite(baselineAdp)) return "";
+  if (currentPickNo <= baselineAdp) return "";
   const t = posTint(pos);
-  return `<span class="adpBlinkDot" style="background:${t.fg};color:${t.fg}" title="Pick ${currentPickNo} has passed their Sleeper live ADP (${sleeperAdp.toFixed(1)}) — still on the board"></span>`;
+  return `<span class="adpBlinkDot" style="background:${t.fg};color:${t.fg}" title="Pick ${currentPickNo} has passed their baseline ADP (${baselineAdp.toFixed(1)}) — still on the board"></span>`;
 }
 
 function badgeHtml(tone, text) {
@@ -287,7 +287,7 @@ function renderBoard() {
       const flagIcon = flag === "favorite" ? "star" : flag === "avoid" ? "circle-x" : "flag";
       const flagColor = flag === "favorite" ? "var(--accent)" : flag === "avoid" ? "var(--red-500)" : "var(--text-disabled)";
       const valueCell = adpCols.length
-        ? `${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}${gone ? "" : adpBlinkDotHtml(r.pos, adpEntry?.values["adp_sleeper_live"])}`
+        ? `${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}${gone ? "" : adpBlinkDotHtml(r.pos, vc?.baselineAdp)}`
         : `<span class="valDelta flat">·</span>`;
       return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo">
         <button class="rowFlagBtn" data-key="${esc(r.key)}" aria-label="Flag player">${ico(flagIcon, { size: 13, color: flagColor })}</button>
