@@ -251,7 +251,7 @@ function renderRecommendations() {
   // asked for directly: filtering the board to RB mid-draft should surface the
   // best available RBs here, not the same overall-best-3 regardless of position.
   const consensusRows = buildConsensus(sources.filter((s) => s.enabled), merges);
-  const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos));
+  const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos, posFilter));
   renderBestPicksWidget($("bestPicks"), {
     rows: bestPicksRows,
     sources,
