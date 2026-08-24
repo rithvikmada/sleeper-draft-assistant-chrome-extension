@@ -113,7 +113,7 @@ function renderBest() {
     const p = best[pos];
     return `<div class="best-cell" style="background:${c.bg};border-color:${c.border}">
       <div class="best-pos" style="color:${c.text}">BEST ${pos}</div>
-      <div class="best-name">${p ? `${p.name}${p.tier ? ` <span style="color:${TIER_COLORS[p.tier]};font-size:10px">T-${p.tier}</span>` : ""}` : "—"}</div>
+      <div class="best-name">${p ? `${esc(p.name)}${p.tier ? ` <span style="color:${TIER_COLORS[p.tier] || "var(--dim2)"};font-size:10px">T-${esc(p.tier)}</span>` : ""}` : "—"}</div>
     </div>`;
   }).join("");
 }
@@ -174,7 +174,7 @@ function renderBoard() {
     labelsEl.style.display = "grid";
     labelsEl.style.gridTemplateColumns = gridCols;
     labelsEl.innerHTML = `<span></span><span></span>` +
-      adpCols.map((s) => `<span style="color:${s.color}" title="${s.name}">${sourceTag(s.name)}</span>`).join("") +
+      adpCols.map((s) => `<span style="color:${esc(s.color)}" title="${esc(s.name)}">${esc(sourceTag(s.name))}</span>`).join("") +
       `<span>VALUE</span>` +
       `<span></span>`;
     // Pull the first tier divider up toward the labels instead of leaving a
@@ -212,25 +212,25 @@ function renderBoard() {
       const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
       const gone = isGone(r);
       const mine = taken[r.key] && taken[r.key].byMe;
-      const pickLabel = taken[r.key] && taken[r.key].pickNo ? ` · pk ${taken[r.key].pickNo}` : "";
+      const pickLabel = taken[r.key] && taken[r.key].pickNo ? ` · pk ${esc(taken[r.key].pickNo)}` : "";
       const flag = flags[r.key];
       const adpEntry = adpConsensus.get(r.key);
       const vc = valueMap.get(r.key);
       const adpCells = adpCols.map((s) =>
-        `<span class="adp-cell" style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}" title="${s.name}">${adpEntry?.values[s.id] ?? "·"}</span>`
+        `<span class="adp-cell" style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}" title="${esc(s.name)}">${esc(adpEntry?.values[s.id] ?? "·")}</span>`
       ).join("");
       const valueCell = adpCols.length ? renderValueBadge(vc?.delta ?? null, vc?.baselineAdp) : "";
-      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${r.key}" data-name="${r.name}" title="Double-click to cross off / undo" style="border-left-color:${c.text};grid-template-columns:${gridCols}">
+      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo" style="border-left-color:${c.text};grid-template-columns:${gridCols}">
         <span class="rk">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
-        <span class="nm">${flagBadge(flag)}${r.name} <span class="tm">· ${r.team || ""}${pickLabel}</span></span>
+        <span class="nm">${flagBadge(flag)}${esc(r.name)} <span class="tm">· ${esc(r.team || "")}${pickLabel}</span></span>
         ${adpCells}
         ${valueCell}
-        <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span>
+        <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}</span>
       </div>`;
     }).join("");
     const badgeColor = TIER_COLORS[t] || "#4A4A4A";
     return `<div class="tier-head">
-      <div class="tier-badge" style="background:${badgeColor};color:#0B0D08">${t}</div>
+      <div class="tier-badge" style="background:${badgeColor};color:#0B0D08">${esc(t)}</div>
       <div class="tier-line"></div>
       <div class="tier-count">${groups[t].length}</div>
     </div>${rows}`;

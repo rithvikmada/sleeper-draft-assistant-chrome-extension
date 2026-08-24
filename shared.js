@@ -55,6 +55,32 @@ const K_ROSTER  = "myRosterId";     // which draft slot / roster id is the user'
 const K_FLAGS   = "playerFlags";    // playerKey -> "favorite" | "avoid", set in the manager, shown everywhere
 const K_MERGES  = "playerMerges";   // { variantKey: canonicalKey, ... } — unmatched player reconciliation
 
+// ---------- HTML escaping ----------
+// Everything rendered on both surfaces is built as HTML strings and assigned
+// via innerHTML, and the values going into those strings are not ours: player
+// names come from pasted CSVs and from Sleeper's API, source names are typed
+// freehand, and tier labels are whatever a source's tier column happened to
+// contain.
+//
+// This is NOT guarding against an attacker — an extension page runs under
+// Manifest V3's script-src 'self' policy, which blocks inline scripts and
+// inline event handlers outright, so injected markup cannot execute. What it
+// guards against is the board rendering garbage: a name carrying "<" or "&"
+// (exactly what you get from pasting a copied web page into the import box
+// instead of a CSV) otherwise lands mid-row as real markup and garbles a grid
+// whose columns are set per-row. Worse, the same values go into data-key /
+// data-name attributes, and if those break, crossing players off silently
+// stops working.
+//
+// Covers both contexts — element text and quoted attribute values — so one
+// helper is enough as long as every attribute stays quoted. Values written
+// into data-* attributes still round-trip exactly: the browser un-escapes
+// them when parsing, so element.dataset gives back the original string.
+const ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ESC_MAP[c]);
+}
+
 // ---------- player identity ----------
 // Sources disagree on punctuation and suffixes, so identity is normalized
 // name + position. This is the join key across every source and the live feed.
@@ -545,8 +571,8 @@ function sourceTag(name) {
 // same fallback pattern used for the manager's own chip swatches.
 function sourceDotHtml(s, { solo = false, title } = {}) {
   const cls = `dot${solo ? " solo" : ""}${s.icon ? " has-icon" : ""}`;
-  const inner = s.icon ? `<img src="${s.icon}" alt="" />` : sourceTag(s.name);
-  return `<span class="${cls}" data-solo="${s.id}" style="background:${s.color}" title="${title ?? s.name}">${inner}</span>`;
+  const inner = s.icon ? `<img src="${esc(s.icon)}" alt="" />` : esc(sourceTag(s.name));
+  return `<span class="${cls}" data-solo="${esc(s.id)}" style="background:${esc(s.color)}" title="${esc(title ?? s.name)}">${inner}</span>`;
 }
 
 // opts: { rows, sources, takenSet:Set<key>, adp, soloSource, posFilter, onSolo(id|null) }
@@ -664,12 +690,12 @@ function renderBestPicksWidget(el, opts) {
     return `<div class="bestCard" style="border-top-color:${m.color}">
       <div class="bestTop">
         <span class="medal" style="color:${m.color}">${m.label}</span>
-        <span class="posTeamChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}${r.team ? " · " + r.team : ""}</span>
+        <span class="posTeamChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}${r.team ? " · " + esc(r.team) : ""}</span>
       </div>
-      <div class="bestName">${flagBadge(flags[r.key])}${r.name}</div>
+      <div class="bestName">${flagBadge(flags[r.key])}${esc(r.name)}</div>
       <div class="statTiles">
         <div class="statTile">
-          <div class="statLabel">${rankTileLabel}</div>
+          <div class="statLabel">${esc(rankTileLabel)}</div>
           <div class="statValue">${rankTileValue}</div>
         </div>
         <div class="statTile">

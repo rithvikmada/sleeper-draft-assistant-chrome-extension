@@ -61,26 +61,26 @@ function renderSourceBar() {
   const chips = sources.map((s) => {
     const solo = soloSource === s.id;
     const cls = `chip${s.enabled ? "" : " disabled"}${solo ? " solo" : ""}`;
-    const edit = `<span class="edit-src" data-edit="${s.id}" title="Edit this source · ${formatLastUpdated(s.importedAt)}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
-    const del = s.builtin ? "" : `<span class="x" data-del="${s.id}" title="Remove source">✕</span>`;
+    const edit = `<span class="edit-src" data-edit="${esc(s.id)}" title="Edit this source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const del = s.builtin ? "" : `<span class="x" data-del="${esc(s.id)}" title="Remove source">✕</span>`;
     const swatch = s.icon
-      ? `<img src="${s.icon}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
-      : `<span class="sw" style="background:${s.color}"></span>`;
+      ? `<img src="${esc(s.icon)}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
+      : `<span class="sw" style="background:${esc(s.color)}"></span>`;
     const posOnlyBadge = s.positionOnly ? `<span style="color:var(--dim);font-size:9px;margin-left:3px" title="Position-only — reference column, doesn't affect blended rank/tier">POS</span>` : "";
-    return `<span class="${cls}" data-toggle="${s.id}" title="Click to enable/disable · double-click to isolate">
-      ${swatch}${s.name}${posOnlyBadge}${edit}
+    return `<span class="${cls}" data-toggle="${esc(s.id)}" title="Click to enable/disable · double-click to isolate">
+      ${swatch}${esc(s.name)}${posOnlyBadge}${edit}
       <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
   }).join("");
 
   const adpChips = adpSources.map((s) => {
     const cls = `chip${s.enabled ? "" : " disabled"}`;
-    const edit = `<span class="edit-src" data-editadp="${s.id}" title="Edit this ADP source · ${formatLastUpdated(s.importedAt)}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
-    const del = `<span class="x" data-deladp="${s.id}" title="Remove ADP source">✕</span>`;
+    const edit = `<span class="edit-src" data-editadp="${esc(s.id)}" title="Edit this ADP source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const del = `<span class="x" data-deladp="${esc(s.id)}" title="Remove ADP source">✕</span>`;
     const swatch = s.icon
-      ? `<img src="${s.icon}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
-      : `<span class="sw" style="background:${s.color}"></span>`;
-    return `<span class="${cls}" data-toggleadp="${s.id}" title="Click to enable/disable — each enabled ADP source gets its own column, and the value/reach meter blends whichever are on">
-      ${swatch}${s.name}${edit}
+      ? `<img src="${esc(s.icon)}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
+      : `<span class="sw" style="background:${esc(s.color)}"></span>`;
+    return `<span class="${cls}" data-toggleadp="${esc(s.id)}" title="Click to enable/disable — each enabled ADP source gets its own column, and the value/reach meter blends whichever are on">
+      ${swatch}${esc(s.name)}${edit}
       <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
   }).join("");
 
@@ -252,8 +252,8 @@ function renderTable(rows) {
     <th>POS</th>
     <th>TIER</th>
     <th>CONSENSUS</th>
-    ${cols.map((s) => `<th style="color:${s.color}" title="${s.positionOnly ? "Position-only source — shows this source's own within-position tier, not a rank. Reference only, never affects blended rank/tier." : ""}">${s.name.toUpperCase()}${s.positionOnly ? " ⓘ" : ""}</th>`).join("")}
-    ${adpCols.map((s) => `<th style="color:${s.color}">${s.name.toUpperCase()}</th>`).join("")}
+    ${cols.map((s) => `<th style="color:${esc(s.color)}" title="${s.positionOnly ? "Position-only source — shows this source's own within-position tier, not a rank. Reference only, never affects blended rank/tier." : ""}">${esc(s.name.toUpperCase())}${s.positionOnly ? " ⓘ" : ""}</th>`).join("")}
+    ${adpCols.map((s) => `<th style="color:${esc(s.color)}">${esc(s.name.toUpperCase())}</th>`).join("")}
     <th title="Sleeper Live ADP vs. your other enabled ADP source(s) (baseline). Green = Sleeper drafts them later than baseline (a discount). Red = Sleeper drafts them earlier than baseline (a reach). Needs Sleeper Live ADP + at least one other ADP source enabled.">VALUE</th>
     <th></th>
   </tr>`;
@@ -264,25 +264,25 @@ function renderTable(rows) {
     const adpEntry = adpConsensus.get(r.key);
     const vc = valueMap.get(r.key);
     const tier = r.tier && TIER_COLORS[r.tier]
-      ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${r.tier}</span>` : "";
+      ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${esc(r.tier)}</span>` : "";
     const flag = flags[r.key];
     const rowFlagClass = flag === "favorite" ? " favRow" : flag === "avoid" ? " avoidRow" : "";
-    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pname="${r.name}" data-ppos="${r.pos}">
+    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pname="${esc(r.name)}" data-ppos="${esc(r.pos)}">
       <td class="l" style="color:var(--dim)">${i + 1}</td>
-      <td class="l nm" title="Right-click to find & merge near-match orphans">${flagBadge(flag)}${r.name} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
-      <td><span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${r.pos}</span></td>
+      <td class="l nm" title="Right-click to find &amp; merge near-match orphans">${flagBadge(flag)}${esc(r.name)} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
+      <td><span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}</span></td>
       <td>${tier}</td>
       <td style="color:var(--text)">${r.consensus?.toFixed(1) ?? "—"}</td>
       ${cols.map((s) => {
         const val = s.positionOnly ? r.posOnlyTiers?.[s.id] : r.ranks[s.id];
-        return `<td style="color:${val !== undefined ? "var(--dim2)" : "var(--dim)"}">${val ?? "·"}</td>`;
+        return `<td style="color:${val !== undefined ? "var(--dim2)" : "var(--dim)"}">${esc(val ?? "·")}</td>`;
       }).join("")}
-      ${adpCols.map((s) => `<td style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${adpEntry?.values[s.id] ?? "·"}</td>`).join("")}
+      ${adpCols.map((s) => `<td style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${esc(adpEntry?.values[s.id] ?? "·")}</td>`).join("")}
       <td>${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}</td>
       <td>
-        <span class="flagBtn${flag === "favorite" ? " on fav" : ""}" data-flag="${r.key}" data-kind="favorite" title="Favorite">★</span>
-        <span class="flagBtn${flag === "avoid" ? " on avoid" : ""}" data-flag="${r.key}" data-kind="avoid" title="Flag to avoid">⊘</span>
-        <span class="xbtn" data-key="${r.key}" title="${t ? "Un-cross (manual only)" : "Cross off manually"}">${t ? "↺" : "✕"}</span>
+        <span class="flagBtn${flag === "favorite" ? " on fav" : ""}" data-flag="${esc(r.key)}" data-kind="favorite" title="Favorite">★</span>
+        <span class="flagBtn${flag === "avoid" ? " on avoid" : ""}" data-flag="${esc(r.key)}" data-kind="avoid" title="Flag to avoid">⊘</span>
+        <span class="xbtn" data-key="${esc(r.key)}" title="${t ? "Un-cross (manual only)" : "Cross off manually"}">${t ? "↺" : "✕"}</span>
       </td>
     </tr>`;
   }).join("");
@@ -375,11 +375,11 @@ function renderOrphans() {
       const player = src.players.find((p) => playerKey(p.name, p.pos) === key);
       const rank = player ? `(rank ${player.rank})` : "";
       return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-        <span style="flex:1">${name} ${pos} ${rank}</span>
-        <button data-merge="${key}" class="mergeBtn" style="padding:3px 8px;font-size:10px">MERGE</button>
+        <span style="flex:1">${esc(name)} ${esc(pos)} ${esc(rank)}</span>
+        <button data-merge="${esc(key)}" class="mergeBtn" style="padding:3px 8px;font-size:10px">MERGE</button>
       </div>`;
     }).join("");
-    return `<div style="margin-bottom:8px"><span style="color:var(--dim)">${srcName}</span>${pairs}</div>`;
+    return `<div style="margin-bottom:8px"><span style="color:var(--dim)">${esc(srcName)}</span>${pairs}</div>`;
   }).join("");
   $("orphansList").innerHTML = html;
   $("orphansList").style.display = orphansCollapsed ? "none" : "block";
@@ -426,9 +426,9 @@ function renderMergeCandidates(filterText) {
     return;
   }
   el.innerHTML = candidates.map((c) => `
-    <div class="mergeCandidate" data-name="${c.name}" data-pos="${c.pos}">
-      <span>${c.name}</span>
-      <span class="src">${c.sourceNames.join(", ")} · rank ${c.rank}</span>
+    <div class="mergeCandidate" data-name="${esc(c.name)}" data-pos="${esc(c.pos)}">
+      <span>${esc(c.name)}</span>
+      <span class="src">${esc(c.sourceNames.join(", "))} · rank ${esc(c.rank)}</span>
     </div>`).join("");
   el.querySelectorAll(".mergeCandidate").forEach((row) => {
     row.addEventListener("click", () => {
@@ -484,14 +484,14 @@ function openNearMergeMenu(x, y, name, pos) {
   menu.id = "nearMergeMenu";
   menu.className = "nearMergeMenu";
   if (!matches.length) {
-    menu.innerHTML = `<div class="nmm-title">No likely name-mismatch found for "${name}" in another source.</div>`;
+    menu.innerHTML = `<div class="nmm-title">No likely name-mismatch found for "${esc(name)}" in another source.</div>`;
   } else {
     menu.innerHTML = `
-      <div class="nmm-title">Found ${matches.length} likely match${matches.length > 1 ? "es" : ""} for "${name}" (${pos}) in other sources — merge into this player?</div>
+      <div class="nmm-title">Found ${matches.length} likely match${matches.length > 1 ? "es" : ""} for "${esc(name)}" (${esc(pos)}) in other sources — merge into this player?</div>
       ${matches.map((m, i) => `
         <div class="nmm-row">
           <input type="checkbox" id="nmm-${i}" data-idx="${i}" checked />
-          <label for="nmm-${i}">${m.name} <span class="nmm-src">${m.srcName} · rank ${m.rank}</span></label>
+          <label for="nmm-${i}">${esc(m.name)} <span class="nmm-src">${esc(m.srcName)} · rank ${esc(m.rank)}</span></label>
         </div>`).join("")}
       <div class="nmm-actions">
         <button class="nmm-merge">MERGE SELECTED</button>
@@ -625,7 +625,7 @@ function findEditingSource() {
   return list.find((x) => x.id === editingTarget.id);
 }
 function renderEditIconPreview(dataUrl) {
-  $("editIconPreview").innerHTML = dataUrl ? `<img src="${dataUrl}" />` : "";
+  $("editIconPreview").innerHTML = dataUrl ? `<img src="${esc(dataUrl)}" />` : "";
 }
 function formatLastUpdated(ts) {
   if (!ts) return "Never re-uploaded since import.";
