@@ -3,26 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>4th&amp;Go — Rankings Manager</title>
+<link rel="stylesheet" href="theme.css">
 <style>
-  /* Same "turf" palette as panel.html — extended, not replaced. */
-  :root {
-    --bg: #0B0D08;
-    --panel: #14170F;
-    --line: #22251B;
-    --line2: #2A2E22;
-    --text: #E9E7DC;
-    --dim: #5C6050;
-    --dim2: #8A8E7C;
-    --green: #5FCF8A;
-    --gold: #F5C242;
-    --red: #C97A6E;
-  }
-  * { box-sizing: border-box; margin: 0; }
-  body {
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, "Segoe UI", Inter, sans-serif;
-    font-size: 13px; padding: 0 0 60px;
-  }
+  /* :root tokens, *, body's base rules, button/.pf/.flagMark/#toast base
+     rules now live in theme.css (shared with panel.html). Only this page's
+     surface-specific sizing stays here. */
+  body { padding: 0 0 60px; } /* the manager scrolls a long table — needs room at the bottom the board doesn't */
   .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
 
   header {
@@ -33,15 +19,7 @@
   .sub { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: 1.4px; margin-top: 2px; }
   .head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
 
-  button {
-    background: var(--green); color: #0B0D08; border: none; border-radius: 4px;
-    font-weight: 700; font-size: 11px; padding: 7px 12px; cursor: pointer;
-    font-family: ui-monospace, monospace;
-  }
-  button.alt { background: transparent; color: var(--dim2); border: 1px solid var(--line2); }
-  button.alt:hover { color: var(--text); border-color: var(--dim2); }
-  button.ghost { background: transparent; color: var(--red); border: 1px solid #4A3030; }
-  button:active { transform: scale(0.97); }
+  button { padding: 7px 12px; } /* the manager's buttons run a little larger than the board's — base rule in theme.css */
 
   h2 { font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: 1.4px;
        color: var(--dim2); font-weight: 700; margin: 26px 0 10px; text-transform: uppercase; }
@@ -75,9 +53,7 @@
   }
   #playerSearch:focus { outline: 1px solid var(--green); }
   #playerSearch::placeholder { color: var(--dim); }
-  .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; }
-  .pf:hover { color: var(--dim); border-color: var(--dim); }
-  .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
+  .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; } /* :hover/.active states in theme.css */
 
   /* ---- table ---- */
   .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
@@ -101,9 +77,7 @@
   .flagBtn.fav.on { color: var(--gold); }
   .flagBtn.avoid.on { color: var(--red); }
   .flagBtn:not(.on):hover { color: var(--dim2); }
-  .flagMark { margin-right: 4px; }
-  .flagMark.fav { color: var(--gold); }
-  .flagMark.avoid { color: var(--red); }
+  .flagMark { margin-right: 4px; } /* .fav/.avoid colors in theme.css */
   tr.favRow { background: rgba(245,194,66,.05); }
   tr.avoidRow { background: rgba(201,122,110,.05); }
 
@@ -178,9 +152,7 @@
     background: var(--gold); color: var(--bg); padding: 8px 16px; border-radius: 5px;
     font-weight: 700; font-size: 11px; display: none; z-index: 200; font-family: ui-monospace, monospace;
     opacity: 0; transition: opacity .2s ease, transform .2s ease;
-  }
-  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  #toast.error { background: var(--red); }
+  } /* .show/.error states in theme.css */
 </style>
 </head>
 <body>

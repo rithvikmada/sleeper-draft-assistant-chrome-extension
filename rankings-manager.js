@@ -8,8 +8,6 @@
 // crossouts). This surface never polls Sleeper itself — panel.js owns that.
 // ============================================================
 
-const $ = (id) => document.getElementById(id);
-
 let sources = [];
 let draft = { picks: [], manualKeys: [], draftId: null, myRosterId: null };
 let adpSources = []; // multiple ADP sources can be enabled at once — see makeAdpSource in shared.js
@@ -42,22 +40,8 @@ function reportSaveFailure(what) {
   };
 }
 
-function toast(msg, isError = false) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.style.display = "block";
-  t.classList.toggle("error", isError);
-  clearTimeout(t._h);
-  clearTimeout(t._show);
-  t.classList.remove("show");
-  t._show = setTimeout(() => t.classList.add("show"), 10);
-  t._h = setTimeout(() => { t.classList.remove("show"); t._hide = setTimeout(() => (t.style.display = "none"), 200); }, 2600);
-}
-
 // ---------- rendering ----------
-function activeSources() {
-  return soloSource ? sources.filter((s) => s.id === soloSource) : sources.filter((s) => s.enabled);
-}
+// activeSources(sources, soloSource) now lives in shared.js — call as activeSources(sources, soloSource).
 
 function renderSyncLine() {
   const n = draft.picks.length;
@@ -72,7 +56,7 @@ function renderSourceBar() {
     const solo = soloSource === s.id;
     const cls = `chip${s.enabled ? "" : " disabled"}${solo ? " solo" : ""}`;
     const edit = `<span class="edit-src" data-edit="${esc(s.id)}" title="Edit this source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
-    const del = s.builtin ? "" : `<span class="x" data-del="${esc(s.id)}" title="Remove source">✕</span>`;
+    const del = s.undeletable ? "" : `<span class="x" data-del="${esc(s.id)}" title="Remove source">✕</span>`;
     const swatch = s.icon
       ? `<img src="${esc(s.icon)}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
       : `<span class="sw" style="background:${esc(s.color)}"></span>`;
@@ -234,22 +218,14 @@ async function fetchSleeperAdp() {
 const MAX_TABLE_ROWS = 400; // render cap — see the disclosure row at the bottom of this function
 function renderTable(rows) {
   const taken = takenMap();
-  const cols = activeSources();
+  const cols = activeSources(sources, soloSource);
   const adpCols = adpSources.filter((s) => s.enabled);
   const adpConsensus = buildAdpConsensus(adpSources);
   const valueMap = buildValueComparison(adpSources);
 
-  // Position and "show taken" are independent — TAKEN no longer replaces the
-  // position filter, it layers drafted players (crossed out) on top of it.
-  let list = rows;
-  if (posFilter !== "ALL") list = list.filter((r) => r.pos === posFilter);
-  if (!showTaken) list = list.filter((r) => !taken.has(r.key));
-  if (playerSearch) {
-    const q = playerSearch.toLowerCase();
-    list = list.filter((r) =>
-      r.name.toLowerCase().includes(q) || (r.team || "").toLowerCase().includes(q)
-    );
-  }
+  // Same applyFilters() path panel.js's board uses now (shared.js) — see
+  // claude.md for why this used to be a second, independently-drifting copy.
+  const list = applyFilters(rows, { posFilter, showTaken, playerSearch, isGone: (r) => taken.has(r.key) });
 
   if (!list.length) {
     $("tbl").innerHTML = `<tr><td class="empty">Nothing here.</td></tr>`;
@@ -548,7 +524,7 @@ $("tbl").addEventListener("contextmenu", (e) => {
 // so re-adding them here later is just a mount point away).
 function renderAll() {
   try {
-    const rows = buildConsensus(activeSources(), merges);
+    const rows = buildConsensus(activeSources(sources, soloSource), merges);
     renderSyncLine();
     renderSourceBar();
     renderTable(rows);
@@ -655,16 +631,18 @@ function openEditModal(kind, id) {
   $("editSrcFile").value = "";
   $("editParseNote").textContent = "";
   $("editParseNote").className = "";
-  // The two code-seeded ranking sources (this builtin, and FantasyPros ECR)
+  // The code-seeded ranking sources (this default, and FantasyPros ECR)
   // normally re-seed their player list from the bundled JS file on every
   // load. Replacing the CSV here now sets manualOverride (see makeSource in
   // shared.js), which tells loadSources()/ensureBuiltinSources() to stop
   // doing that and trust this upload instead — so the option can just stay
   // visible for every ranking source rather than being hidden for these two.
+  // Reads s.codeSeeded rather than a hardcoded id check (Stage 2 audit,
+  // batch 7) — a third bundled source now only needs the flag set on it,
+  // not this condition updated too.
   $("editCsvLabel").style.display = "";
   $("editSrcFile").style.display = "";
-  const isCodeSeeded = kind === "source" && (id === "default" || id === "fp");
-  $("editStatusLine").textContent = isCodeSeeded && !s.manualOverride
+  $("editStatusLine").textContent = s.codeSeeded && !s.manualOverride
     ? "Built in — re-seeded from the bundled rankings file on every load. Upload a CSV below to take over from here."
     : formatLastUpdated(s.importedAt);
   // Position-only doesn't apply to ADP sources — ADP never blends tiers at all.
@@ -915,7 +893,7 @@ async function ensureBuiltinSources() {
   if (existing && existing.manualOverride) return;
   const fpSource = makeSource("FantasyPros ECR", FP_RANKINGS, {
     id: "fp",
-    builtin: false,
+    codeSeeded: true, // undeletable stays false — this source has a real ✕, unlike the default
     color: existing ? existing.color : undefined,
     enabled: existing ? existing.enabled : true,
     icon: existing ? existing.icon : undefined,

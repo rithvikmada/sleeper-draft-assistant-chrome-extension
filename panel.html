@@ -2,26 +2,11 @@
 <html>
 <head>
 <meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
 <style>
-  :root {
-    --bg: #0B0D08;
-    --panel: #14170F;
-    --line: #22251B;
-    --line2: #2A2E22;
-    --text: #E9E7DC;
-    --dim: #5C6050;
-    --dim2: #8A8E7C;
-    --green: #5FCF8A;
-    --gold: #F5C242;
-    --red: #C97A6E;
-  }
-  * { box-sizing: border-box; margin: 0; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, "Segoe UI", Inter, sans-serif;
-    font-size: 13px;
-  }
+  /* :root tokens, *, body, button/.pf/.flagMark/#toast base rules now live
+     in theme.css (shared with rankings-manager.html). Only this page's
+     surface-specific sizing stays here. */
   #header {
     position: sticky; top: 0; z-index: 10;
     background: linear-gradient(180deg, #14170F, #0F1109);
@@ -52,21 +37,13 @@
     color: var(--text); padding: 6px 8px; font-size: 12px; font-family: ui-monospace, monospace;
   }
   #draftId:focus { outline: 1px solid var(--green); }
-  button {
-    background: var(--green); color: #0B0D08; border: none; border-radius: 4px;
-    font-weight: 700; font-size: 11px; padding: 6px 10px; cursor: pointer;
-    font-family: ui-monospace, monospace;
-  }
-  button:active { transform: scale(0.97); }
-  button.ghost { background: transparent; color: var(--red); border: 1px solid #4A3030; }
+  button { padding: 6px 10px; } /* board buttons run smaller than the manager's — base rule in theme.css */
   #metaRow { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
   #myRoster {
     width: 108px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
     color: var(--text); padding: 5px 7px; font-size: 11px; font-family: ui-monospace, monospace;
   }
   #myRoster:focus { outline: 1px solid var(--green); }
-  button.alt { background: transparent; color: var(--dim2); border: 1px solid var(--line2); }
-  button.alt:hover { color: var(--text); border-color: var(--dim2); }
   #refreshRow { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
   #refreshBtn {
     background: var(--gold); color: #1a1400; font-weight: 800; padding: 7px 12px; font-size: 12px;
@@ -139,9 +116,7 @@
   .pf {
     background: transparent; border: 1px solid var(--line2); color: var(--dim2);
     padding: 4px 9px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s;
-  }
-  .pf:hover { color: var(--dim); border-color: var(--dim); }
-  .pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
+  } /* :hover/.active states in theme.css */
   #board { padding: 10px 12px 30px; }
   .tier-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 5px; }
   #board > .tier-head:first-child { margin-top: 0; }
@@ -163,9 +138,7 @@
   .rk { font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim); }
   .nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .nm .tm { color: var(--dim); font-weight: 400; font-size: 10px; }
-  .flagMark { margin-right: 3px; }
-  .flagMark.fav { color: var(--gold); }
-  .flagMark.avoid { color: var(--red); }
+  .flagMark { margin-right: 3px; } /* .fav/.avoid colors in theme.css */
   .nm { cursor: context-menu; }
   /* ---- right-click flag menu (favorite/avoid) — right-click chosen specifically
      because double-click on the row already means "cross player off" (see the
@@ -212,9 +185,7 @@
     font-weight: 700; font-size: 11px; display: none; z-index: 50; max-width: 90%;
     font-family: ui-monospace, monospace; opacity: 0;
     transition: opacity .2s ease, transform .2s ease;
-  }
-  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  #toast.error { background: var(--red); }
+  } /* .show/.error states in theme.css */
 </style>
 </head>
 <body>

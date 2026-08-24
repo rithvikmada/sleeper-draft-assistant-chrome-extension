@@ -1,0 +1,68 @@
+/* ============================================================
+   4th&Go — shared "turf" theme
+   Linked by both panel.html and rankings-manager.html.
+
+   Split out in the Stage 2 audit (batch 7) — before this, panel.html and
+   rankings-manager.html each redefined the full color palette, button base
+   styles, and filter-button styles by hand in separate <style> blocks, with
+   no way to tell which differences between the two were deliberate sizing
+   (the board window runs narrower than the manager's full-tab table, so
+   some rules ARE meant to differ) and which were just drift nobody decided
+   on — .flagMark's margin-right was 3px in one file and 4px in the other
+   for no reason anyone could reconstruct.
+
+   Only rules that were byte-for-byte identical across both files are here.
+   Anything sized differently on purpose (button padding, #toast dimensions,
+   .pf padding, .empty padding) stays in each page's own <style> block, where
+   the difference is then visibly intentional rather than something a future
+   edit might "fix" into matching by accident.
+   ============================================================ */
+
+:root {
+  --bg: #0B0D08;
+  --panel: #14170F;
+  --line: #22251B;
+  --line2: #2A2E22;
+  --text: #E9E7DC;
+  --dim: #5C6050;
+  --dim2: #8A8E7C;
+  --green: #5FCF8A;
+  --gold: #F5C242;
+  --red: #C97A6E;
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Inter, sans-serif;
+  font-size: 13px;
+}
+
+button {
+  background: var(--green); color: #0B0D08; border: none; border-radius: 4px;
+  font-weight: 700; font-size: 11px; cursor: pointer;
+  font-family: ui-monospace, monospace;
+  /* padding is surface-specific (board buttons run smaller than the
+     manager's) — set it in each page's own button rule, after this file
+     loads, so the cascade lets it override just that one property. */
+}
+button:active { transform: scale(0.97); }
+button.ghost { background: transparent; color: var(--red); border: 1px solid #4A3030; }
+button.alt { background: transparent; color: var(--dim2); border: 1px solid var(--line2); }
+button.alt:hover { color: var(--text); border-color: var(--dim2); }
+
+/* Position/filter pill buttons (ALL/QB/RB/WR/TE, SHOW TAKEN). Padding and
+   font-size are surface-specific — set in each page's own .pf rule. */
+.pf:hover { color: var(--dim); border-color: var(--dim); }
+.pf.active { background: var(--green); color: var(--bg); border-color: var(--green); }
+
+/* Favorite/avoid marks next to a player's name (board rows, manager table). */
+.flagMark.fav { color: var(--gold); }
+.flagMark.avoid { color: var(--red); }
+
+/* Toast notification show/error states — position, sizing and z-index are
+   surface-specific (set in each page's own #toast rule). */
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { background: var(--red); }

@@ -46,17 +46,7 @@ let myRosterId = null; // user-entered draft slot / roster id — drives the "mi
 const echo = makeEchoGuard(); // per-key, so writing flags can't also swallow a live pick update
 let pollTimer = null;
 let posFilter = "ALL";
-// Most filter values are a single position, matched exactly. A grouped filter
-// (currently just the RB/WR flex view) maps to a set of positions instead —
-// everything downstream (renderBoard, renderRecommendations) calls
-// filterMatchesPos() rather than comparing r.pos === posFilter directly, so
-// adding another grouped filter later is a one-line addition here.
-const POS_FILTER_GROUPS = { "RB/WR": ["RB", "WR"] };
-function filterMatchesPos(pos) {
-  const group = POS_FILTER_GROUPS[posFilter];
-  return group ? group.includes(pos) : pos === posFilter;
-}
-let lastPickCount = 0;
+// POS_FILTER_GROUPS / filterMatchesPos now live in shared.js, shared with rankings-manager.js.let lastPickCount = 0;
 let unmatched = [];
 let currentDraftId = null;
 let inFlight = false;
@@ -89,8 +79,6 @@ let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 
-const $ = (id) => document.getElementById(id);
-
 // ---------- rendering ----------
 // Both the BEST grid and the tier board are built from the SAME blended
 // consensus rows the Best Picks widget uses (respecting soloSource isolation
@@ -98,7 +86,7 @@ const $ = (id) => document.getElementById(id);
 // rankings file only, which is why isolating a source or adding an import
 // never changed what the board showed.
 function bestAvailable() {
-  const rows = buildConsensus(activeSources(), merges);
+  const rows = buildConsensus(activeSources(sources, soloSource), merges);
   const out = {};
   ["QB","RB","WR","TE"].forEach((pos) => {
     out[pos] = rows.find((r) => r.pos === pos && !taken[r.key] && !manualTaken[r.key]);
@@ -121,22 +109,13 @@ function renderBest() {
 function renderBoard() {
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
-  const rows = buildConsensus(activeSources(), merges);
-  let list = rows;
-  if (posFilter !== "ALL") list = list.filter((r) => filterMatchesPos(r.pos));
-
+  const rows = buildConsensus(activeSources(sources, soloSource), merges);
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
-  if (!showTaken) list = list.filter((r) => !isGone(r));
-
-  // Search layers on top of position/taken filters, same independence pattern —
-  // matches on name or team, case-insensitive, substring (not just prefix) so
-  // "chase" finds "Ja'Marr Chase" and "det" finds every Lions player.
-  if (playerSearch) {
-    const q = playerSearch.toLowerCase();
-    list = list.filter((r) =>
-      r.name.toLowerCase().includes(q) || (r.team || "").toLowerCase().includes(q)
-    );
-  }
+  // posFilter/showTaken/playerSearch are applied via the shared applyFilters()
+  // in shared.js — same logic path rankings-manager.js's table uses now, so
+  // the two can't quietly drift the way they had (panel.js had grown an
+  // RB/WR grouped filter the manager never got — see claude.md).
+  const list = applyFilters(rows, { posFilter, showTaken, playerSearch, isGone });
 
   // Per-row ADP columns + value badge — one column per enabled ADP source
   // (usually Sleeper Live ADP + a pasted FantasyPros export), plus the
@@ -238,9 +217,7 @@ function renderBoard() {
 }
 
 // ---------- multi-source recommendation widgets ----------
-function activeSources() {
-  return soloSource ? sources.filter((s) => s.id === soloSource) : sources.filter((s) => s.enabled);
-}
+// activeSources() now lives in shared.js — call as activeSources(sources, soloSource).
 
 // Everything that's off the board, as playerKeys — the identity the shared
 // widgets and imported sources use (array indices only work for RANKINGS).
@@ -315,18 +292,6 @@ function renderAll() {
         Syncing and manual crossouts still work.</span>
       </div>`;
   }
-}
-
-function toast(msg, isError = false) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.style.display = "block";
-  t.classList.toggle("error", isError);
-  clearTimeout(t._h);
-  clearTimeout(t._show);
-  t.classList.remove("show");
-  t._show = setTimeout(() => t.classList.add("show"), 10);
-  t._h = setTimeout(() => { t.classList.remove("show"); t._hide = setTimeout(() => (t.style.display = "none"), 200); }, 2600);
 }
 
 // ---------- shared state bridge (board window <-> Rankings Manager tab) ----------
@@ -435,7 +400,7 @@ async function poll(draftId, { manual = false } = {}) {
 
     // Match against whatever sources are currently active — includes imported
     // sources, not just the bundled default.
-    const matchIndex = buildMatchIndex(buildConsensus(activeSources(), merges));
+    const matchIndex = buildMatchIndex(buildConsensus(activeSources(sources, soloSource), merges));
     const nextTaken = {};
     const sharedPicks = []; // source-agnostic record for the Rankings Manager
     unmatched = [];

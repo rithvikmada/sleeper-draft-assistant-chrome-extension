@@ -55,6 +55,66 @@ const K_ROSTER  = "myRosterId";     // which draft slot / roster id is the user'
 const K_FLAGS   = "playerFlags";    // playerKey -> "favorite" | "avoid", set in the manager, shown everywhere
 const K_MERGES  = "playerMerges";   // { variantKey: canonicalKey, ... } — unmatched player reconciliation
 
+// ---------- DOM helpers shared by both surfaces ----------
+// Identical in panel.js and rankings-manager.js before this — both are
+// classic scripts sharing one global scope, so moving them here just means
+// declaring them once instead of twice and trusting them to stay in sync.
+const $ = (id) => document.getElementById(id);
+
+// Both HTML pages have a #toast element with the same CSS-driven show/hide
+// transition (see the .show/.error classes in panel.html / rankings-manager.html).
+function toast(msg, isError = false) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  t.classList.toggle("error", isError);
+  clearTimeout(t._h);
+  clearTimeout(t._show);
+  t.classList.remove("show");
+  t._show = setTimeout(() => t.classList.add("show"), 10);
+  t._h = setTimeout(() => { t.classList.remove("show"); t._hide = setTimeout(() => (t.style.display = "none"), 200); }, 2600);
+}
+
+// Solo-isolating a source (double-click a chip/dot) shows just that one
+// source; otherwise every enabled source counts. Takes its state explicitly
+// rather than closing over module-level variables, since each surface keeps
+// its own `sources`/`soloSource`.
+function activeSources(sources, soloSource) {
+  return soloSource ? sources.filter((s) => s.id === soloSource) : sources.filter((s) => s.enabled);
+}
+
+// A grouped filter (currently just the board's RB/WR flex view) maps to a
+// SET of positions instead of one — everything that filters by position
+// should go through this rather than comparing r.pos === posFilter directly,
+// so adding another grouped filter later is a one-line addition here instead
+// of a second place to remember. Only panel.js currently exposes a button for
+// this group; rankings-manager.js gets the same matching logic for free by
+// routing through applyFilters below, without gaining a UI it never asked for.
+const POS_FILTER_GROUPS = { "RB/WR": ["RB", "WR"] };
+function filterMatchesPos(pos, posFilter) {
+  const group = POS_FILTER_GROUPS[posFilter];
+  return group ? group.includes(pos) : pos === posFilter;
+}
+
+// posFilter / showTaken / playerSearch were deliberately duplicated across
+// both surfaces (see claude.md) — reasonable when they were three near-
+// identical one-liners, less reasonable once panel.js grew the RB/WR group
+// and rankings-manager.js quietly didn't, which is real, if minor, behavior
+// drift between the two tables. `isGone` stays a caller-supplied predicate
+// because the two surfaces track "taken" differently (panel.js: two plain
+// objects; rankings-manager.js: a Map from takenMap()) and unifying THAT
+// shape wasn't in scope here — only the filter logic itself.
+function applyFilters(rows, { posFilter = "ALL", showTaken = false, playerSearch = "", isGone } = {}) {
+  let list = rows;
+  if (posFilter !== "ALL") list = list.filter((r) => filterMatchesPos(r.pos, posFilter));
+  if (!showTaken && isGone) list = list.filter((r) => !isGone(r));
+  if (playerSearch) {
+    const q = playerSearch.toLowerCase();
+    list = list.filter((r) => r.name.toLowerCase().includes(q) || (r.team || "").toLowerCase().includes(q));
+  }
+  return list;
+}
+
 // ---------- HTML escaping ----------
 // Everything rendered on both surfaces is built as HTML strings and assigned
 // via innerHTML, and the values going into those strings are not ours: player
@@ -104,15 +164,30 @@ function makeSource(name, players, opts = {}) {
     name,
     color: opts.color || SOURCE_PALETTE[0],
     enabled: opts.enabled !== false,
-    builtin: !!opts.builtin,
+    // Renamed from `builtin` (Stage 2 audit, batch 7) — that name read as
+    // "ships with the extension," but it only ever controlled whether the
+    // manager's ✕ button shows. It's genuinely a different question from
+    // `codeSeeded` below: FantasyPros ECR is code-seeded (re-derived from
+    // fp-rankings.js on every load) but NOT undeletable — it has a real ✕.
+    undeletable: !!opts.undeletable,
+    // True for the two sources whose player list is normally re-derived from
+    // a bundled JS file on every load (this default source from rankings.js,
+    // FantasyPros ECR from fp-rankings.js in rankings-manager.js) rather than
+    // trusted from storage — UNLESS manualOverride (below) is set. Previously
+    // there was no flag for this at all; loadSources()/ensureBuiltinSources()
+    // and the edit modal each separately hardcoded `id === "default"` /
+    // `id === "fp"` checks, so bundling a third code-seeded source meant
+    // finding and updating that id list in two files rather than setting one
+    // flag on the source itself.
+    codeSeeded: !!opts.codeSeeded,
     icon: opts.icon || null, // small square data URL, set via the manager's edit modal — falls back to the color swatch when absent
     importedAt: opts.importedAt || Date.now(), // when the player list was last (re-)uploaded, shown in the edit modal
-    // True once a user manually replaces this source's CSV through the edit
-    // modal. Only meaningful for the two code-seeded sources (this one and
-    // FantasyPros ECR in rankings-manager.js) — it's what tells loadSources()/
-    // ensureBuiltinSources() to stop re-seeding from the bundled JS file and
-    // trust the stored upload instead, so a manual replacement actually
-    // sticks rather than being silently overwritten on the next load.
+    // True once a user manually replaces a codeSeeded source's CSV through
+    // the edit modal — tells loadSources()/ensureBuiltinSources() to stop
+    // re-seeding from the bundled JS file and trust the stored upload
+    // instead, so a manual replacement actually sticks rather than being
+    // silently overwritten on the next load. Meaningless for a source that
+    // isn't codeSeeded (there's nothing to override).
     manualOverride: !!opts.manualOverride,
     // True for sources whose Rank column is only meaningful WITHIN a
     // position (e.g. "QB rank 3"), not comparable across positions the way
@@ -133,14 +208,14 @@ function defaultSource() {
     name: p.name, team: p.team, pos: p.pos, tier: p.tier, rank: p.rank,
   }));
   return makeSource("Fantasy Flock Rankings", players, {
-    id: "default", color: "#5FCF8A", builtin: true,
+    id: "default", color: "#5FCF8A", undeletable: true, codeSeeded: true,
   });
 }
 
 async function loadSources() {
   const v = await chrome.storage.local.get([K_SOURCES]);
   const stored = Array.isArray(v[K_SOURCES]) ? v[K_SOURCES] : [];
-  // Re-seed the builtin from rankings.js so a code update to the default
+  // Re-seed the default source from rankings.js so a code update to it
   // ranking set actually takes effect — UNLESS the user has manually replaced
   // its CSV through the edit modal, in which case that upload wins instead
   // (see manualOverride in makeSource).
@@ -159,13 +234,19 @@ async function loadSources() {
 }
 
 async function saveSources(sources) {
-  // Persist the builtin's enabled flag, icon, and — only once manually
-  // overridden — its player list too (normally left as [] since it's large
-  // and regenerable from rankings.js on every load).
+  // Persist the default source's enabled flag, icon, and — only once
+  // manually overridden — its player list too (normally left as [] since
+  // it's large and regenerable from rankings.js on every load). Keyed off
+  // `codeSeeded` rather than the id directly would also cover a future
+  // second built-in ranking source stored this way, but there's only ever
+  // one non-manager-added ranking source in K_SOURCES (the id === "default"
+  // check is still correct here, just no longer the ONLY place this
+  // decision gets made — see codeSeeded in makeSource).
   const toStore = sources.map((s) =>
     s.id === "default"
       ? {
-          id: "default", name: s.name, color: s.color, enabled: s.enabled, builtin: true,
+          id: "default", name: s.name, color: s.color, enabled: s.enabled,
+          undeletable: true, codeSeeded: true,
           icon: s.icon || null, manualOverride: !!s.manualOverride, importedAt: s.importedAt,
           players: s.manualOverride ? s.players : [],
         }
