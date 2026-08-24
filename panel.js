@@ -92,7 +92,11 @@ function badgeHtml(tone, text) {
 // shared.js's sourceDotHtml(), same fallback (icon if uploaded, else 2-letter
 // tag on the source's color), restyled for the new token set.
 function sourceChipHtml(s, { solo = false, title } = {}) {
-  const cls = `srcChip${solo ? " solo" : ""}`;
+  // has-icon zeroes the chip's padding (see .srcChip.has-icon in panel.html)
+  // so an uploaded icon fills the whole box edge-to-edge instead of sitting
+  // inset with the source color showing as a border around it — the 2-letter
+  // fallback tag still wants that padding, since it's real text, not an image.
+  const cls = `srcChip${solo ? " solo" : ""}${s.icon ? " has-icon" : ""}`;
   const inner = s.icon ? `<img src="${esc(s.icon)}" alt="" />` : esc(sourceTag(s.name));
   return `<span class="${cls}" data-solo="${esc(s.id)}" style="background:${esc(s.color)}" title="${esc(title ?? s.name)}">${inner}</span>`;
 }
