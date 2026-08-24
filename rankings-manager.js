@@ -3,7 +3,7 @@
 // Backlog #1 (importable rankings), #3 (multi-source side-by-side),
 // #9 (ADP delta column) and the "one best pick" half of #2.
 //
-// Reads/writes the same chrome.storage.local state the side panel uses, so a
+// Reads/writes the same chrome.storage.local state the board window uses, so a
 // pick synced there shows up here without a refresh (and vice versa for manual
 // crossouts). This surface never polls Sleeper itself — panel.js owns that.
 // ============================================================
@@ -53,7 +53,7 @@ function renderSyncLine() {
   const n = draft.picks.length;
   $("syncLine").textContent = draft.draftId
     ? `SYNCED · DRAFT ${draft.draftId} · ${n} PICK${n === 1 ? "" : "S"} OFF THE BOARD`
-    : "NOT SYNCED — START A SYNC IN THE SIDE PANEL";
+    : "NOT SYNCED — OPEN THE BOARD WINDOW (TOOLBAR ICON) AND HIT SYNC";
 }
 
 function renderSourceBar() {
@@ -194,7 +194,7 @@ async function fetchSleeperAdp() {
     renderAll();
     toast(`ADP fetched — ${players.length} players from Sleeper's own PPR ADP`);
   } catch (err) {
-    toast(`Sleeper ADP fetch failed: ${err.message} — try FFC or pasting instead`, true);
+    toast(`Sleeper ADP fetch failed: ${err.message} — use "+ ADD ADP SOURCE" to paste an export instead`, true);
   } finally {
     btn.disabled = false;
     btn.textContent = "⟳ FETCH SLEEPER ADP";
@@ -485,7 +485,7 @@ $("tbl").addEventListener("contextmenu", (e) => {
 });
 
 // This surface is curation-only: source management + the full side-by-side
-// comparison table. Live recommendations and team counts live in the side panel
+// comparison table. Live recommendations and team counts live in the board window
 // (they render from renderBestPicksWidget/renderTeamCountsWidget in shared.js,
 // so re-adding them here later is just a mount point away).
 function renderAll() {
@@ -797,7 +797,7 @@ $("playerSearch").addEventListener("input", () => {
   renderAll();
 });
 
-// ---------- live sync with the side panel ----------
+// ---------- live sync with the board window ----------
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
   if (changes[K_DRAFT] && !suppressEcho) {
@@ -810,7 +810,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
   if (changes[K_ROSTER]) {
     // Kept in sync for the "mine" row highlight in the comparison table; the
-    // position-count widget itself now lives in the side panel.
+    // position-count widget itself now lives in the board window.
     draft.myRosterId = changes[K_ROSTER].newValue;
   }
   if (changes[K_ADP] && !suppressEcho) {

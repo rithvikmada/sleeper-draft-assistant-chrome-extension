@@ -1,6 +1,6 @@
 // ============================================================
 // 4th&Go — shared constants + data helpers
-// Loaded by BOTH panel.html (side panel) and rankings-manager.html (full tab)
+// Loaded by BOTH panel.html (the board window) and rankings-manager.html (full tab)
 // so the two surfaces agree on colors, player identity, and storage schema.
 //
 // NOTE: this file must load BEFORE panel.js / rankings-manager.js, and it owns
@@ -468,7 +468,7 @@ function assignBlendedTiers(sortedRows) {
 
 // ---------- shared widgets ----------
 // Both surfaces render these from the SAME function against different DOM nodes,
-// so "the sidebar agrees with the manager" is true by construction rather than by
+// so "the board agrees with the manager" is true by construction rather than by
 // two copies of the markup drifting apart. Pass a container element, not an id.
 
 // Two-letter tag for a source's dot ("Fantasy Flock Rankings" -> "FF",
@@ -762,7 +762,7 @@ function buildValueComparison(adpSources) {
   return map;
 }
 
-// Legacy single-map accessor, kept for the side panel's Best Picks widget
+// Legacy single-map accessor, kept for the board window's Best Picks widget
 // (which only needs one blended ADP number, not per-source columns) — median
 // across whichever ADP sources are enabled.
 async function loadAdp() {

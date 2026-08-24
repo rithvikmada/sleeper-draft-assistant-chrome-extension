@@ -95,7 +95,7 @@
 
   /* ---- best picks right now (shared widget) ---- */
   #bestPicks { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px; }
-  /* Side panel width varies a lot (and pops out wider) — go 3-across only when there's room. */
+  /* The board window is user-resizable — go 3-across only when there's room. */
   @media (min-width: 560px) { #bestPicks { grid-template-columns: repeat(3, 1fr); } }
   .bestCard {
     background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;

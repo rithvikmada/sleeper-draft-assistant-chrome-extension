@@ -304,7 +304,7 @@ function toast(msg, isError = false) {
   t._h = setTimeout(() => { t.classList.remove("show"); t._hide = setTimeout(() => (t.style.display = "none"), 200); }, 2600);
 }
 
-// ---------- shared state bridge (side panel <-> Rankings Manager tab) ----------
+// ---------- shared state bridge (board window <-> Rankings Manager tab) ----------
 function manualKeys() {
   return Object.keys(manualTaken).filter((k) => manualTaken[k]);
 }
@@ -625,7 +625,7 @@ $("board").addEventListener("contextmenu", (e) => {
   openFlagMenu(e.clientX, e.clientY, row.dataset.key);
 });
 
-// ---------- settings drawer / pop-out ----------
+// ---------- settings drawer ----------
 $("settingsBtn").addEventListener("click", () => {
   const collapsed = $("settingsPanel").classList.toggle("collapsed");
   $("settingsBtn").classList.toggle("on", !collapsed);
@@ -718,9 +718,12 @@ $("playerSearch").addEventListener("input", () => {
     $("myRoster").value = myRosterId;
   }
 
-  // Carry over picks already synced by another open copy of this panel (the
-  // pop-out window and the docked panel each poll independently). Only when it's
-  // the SAME draft — otherwise a previous draft's crossouts would bleed through.
+  // Carry over picks already synced before this window was last closed (the
+  // Rankings Manager can also add manual crossouts while we're shut). Only when
+  // it's the SAME draft — otherwise a previous draft's crossouts would bleed
+  // through. Only one board window can exist at a time (background.js focuses
+  // the existing one rather than opening a second), so this is a resume path,
+  // not a two-copies-polling-concurrently path.
   const d = await loadDraftState();
   if (d.draftId && id && String(d.draftId) === String(id)) {
     lastSharedPicks = d.picks || [];

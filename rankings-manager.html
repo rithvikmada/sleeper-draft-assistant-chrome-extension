@@ -46,30 +46,6 @@
   h2 { font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: 1.4px;
        color: var(--dim2); font-weight: 700; margin: 26px 0 10px; text-transform: uppercase; }
 
-  /* ---- my team counts ---- */
-  #teamCounts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .cnt { font-family: ui-monospace, monospace; font-size: 11px; border: 1px solid var(--line2);
-         border-radius: 4px; padding: 4px 9px; background: var(--panel); }
-  .cnt b { font-size: 13px; }
-  #teamHint { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; }
-
-  /* ---- best picks ---- */
-  #best { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-  .bestCard {
-    background: var(--panel); border: 1px solid var(--line2); border-radius: 8px;
-    padding: 14px; position: relative; overflow: hidden; border-top: 3px solid;
-  }
-  .medal { font-family: ui-monospace, monospace; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
-  .bestName { font-size: 17px; font-weight: 700; margin-top: 6px; line-height: 1.2; }
-  .bestMeta { font-size: 11px; color: var(--dim2); font-family: ui-monospace, monospace; margin-top: 4px; }
-  .srcDots { display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap; }
-  .dot {
-    width: 20px; height: 20px; border-radius: 4px; font-size: 9px; font-weight: 800;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    font-family: ui-monospace, monospace; border: 1px solid transparent; color: #0B0D08;
-  }
-  .dot.off { opacity: .3; }
-
   /* ---- source chips ---- */
   #sourceBar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .chip {
@@ -154,7 +130,6 @@
     box-shadow: 0 6px 16px rgba(0,0,0,.5); font-family: ui-monospace, monospace; font-size: 11px;
   }
   .nearMergeMenu .nmm-title { color: var(--dim2); margin-bottom: 8px; line-height: 1.4; }
-  .nearMergeMenu .nmm-empty { color: var(--dim); padding: 4px 0; }
   .nearMergeMenu .nmm-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
   .nearMergeMenu .nmm-row label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nearMergeMenu .nmm-src { color: var(--dim); font-size: 9.5px; }
@@ -216,7 +191,7 @@
         <div class="sub" id="syncLine">NOT SYNCED</div>
       </div>
       <div class="sub" style="max-width:340px;text-align:right;line-height:1.5">
-        Curate ranking sources here. Live picks and recommendations live in the side panel.
+        Curate ranking sources here. Live picks and recommendations live in the board window (toolbar icon).
       </div>
     </div>
   </header>
