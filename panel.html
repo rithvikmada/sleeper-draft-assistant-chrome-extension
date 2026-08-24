@@ -2,217 +2,339 @@
 <html>
 <head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="theme.css">
+<!-- Design system: imported from claude.ai/design project "4th&Go Draft Board
+     Redesign" (file "Draft Board Wide.dc.html"). Tokens/voice below are
+     transcribed from that project's _ds tokens (colors/typography/spacing/
+     radii/elevation/motion) — see claude.md for the import record. This page
+     no longer links theme.css: rankings-manager.html keeps the old "turf"
+     theme untouched, this window gets its own self-contained stylesheet so
+     the two surfaces can't bleed into each other. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 <style>
-  /* :root tokens, *, body, button/.pf/.flagMark/#toast base rules now live
-     in theme.css (shared with rankings-manager.html). Only this page's
-     surface-specific sizing stays here. */
-  #header {
-    position: sticky; top: 0; z-index: 10;
-    background: linear-gradient(180deg, #14170F, #0F1109);
-    border-bottom: 2px solid var(--line2);
-    padding: 10px 12px;
-  }
-  .brand { font-family: ui-monospace, monospace; font-weight: 800; font-size: 15px; color: var(--green); letter-spacing: -0.3px; }
-  .sub { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: 1px; }
-  /* ---- status bar (always visible) + collapsible settings drawer ---- */
-  #statusBar { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
-  #statusBar #status { flex: 1; margin-top: 0; }
-  .iconBtn {
-    background: transparent; color: var(--dim2); border: 1px solid var(--line2);
-    padding: 4px 7px; font-size: 11px; line-height: 1; flex: none;
-  }
-  .iconBtn:hover { color: var(--text); border-color: var(--dim2); }
-  .iconBtn.on { color: var(--green); border-color: var(--green); }
-  #settingsPanel {
-    overflow: hidden; max-height: 250px; transition: max-height .2s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity .2s ease;
-    opacity: 1; border-top: 1px solid var(--line); margin-top: 7px; padding-top: 7px;
-  }
-  #settingsPanel.collapsed {
-    max-height: 0; opacity: 0; margin-top: 0; padding-top: 0; border-top-color: transparent;
-  }
-  #connect { display: flex; gap: 6px; }
-  #draftId {
-    flex: 1; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
-    color: var(--text); padding: 6px 8px; font-size: 12px; font-family: ui-monospace, monospace;
-  }
-  #draftId:focus { outline: 1px solid var(--green); }
-  button { padding: 6px 10px; } /* board buttons run smaller than the manager's — base rule in theme.css */
-  #metaRow { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
-  #myRoster {
-    width: 108px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
-    color: var(--text); padding: 5px 7px; font-size: 11px; font-family: ui-monospace, monospace;
-  }
-  #myRoster:focus { outline: 1px solid var(--green); }
-  #refreshRow { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
-  #refreshBtn {
-    background: var(--gold); color: #1a1400; font-weight: 800; padding: 7px 12px; font-size: 12px;
-    border-radius: 5px; letter-spacing: .5px;
-  }
-  #refreshBtn:active { transform: scale(0.96); }
-  #refreshBtn.spin { opacity: 0.6; }
-  #lastSync { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; }
-  #cacheCountdown { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; margin-left: 8px; }
-  #cacheCountdown.fresh { color: var(--green); }
-  #status { margin-top: 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--dim); }
-  #status.live { color: var(--green); }
-  #status.err { color: var(--red); }
-  #status.pulse { animation: pulse .5s ease; }
-  @keyframes pulse { 0%{opacity:.3} 100%{opacity:1} }
+:root {
+  /* ink — near-black with a faint field-green cast */
+  --ink-950:#070908; --ink-900:#0A0C0B; --ink-850:#0F1211; --ink-800:#141816; --ink-750:#191E1B;
+  --ink-700:#1C211E; --ink-600:#262C28; --ink-500:#343B36; --ink-400:#4B534E; --ink-300:#6E7873;
+  --ink-200:#9AA5A0; --ink-100:#C9D2CD; --ink-050:#EDF1EF; --white:#FFFFFF;
 
-  /* ---- my-team position counts (shared widget) ---- */
-  #teamCounts { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
-  #sourceList { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
-  .cnt {
-    font-family: ui-monospace, monospace; font-size: 10px; border: 1px solid var(--line2);
-    border-radius: 4px; padding: 3px 7px; background: var(--panel);
-  }
-  .cnt b { font-size: 12px; }
-  .teamHint { font-size: 9px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: .5px; }
+  /* chalk — the primary accent */
+  --chalk-700:#8C6E00; --chalk-600:#E6BE2E; --chalk-500:#FFD84D; --chalk-400:#FFE580; --chalk-300:#FFF0B8;
+  --chalk-a12:rgba(255,216,77,.12); --chalk-a24:rgba(255,216,77,.24); --chalk-a40:rgba(255,216,77,.40);
 
-  /* ---- best picks right now (shared widget) ---- */
-  #bestPicks { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px; }
-  /* The board window is user-resizable — go 3-across only when there's room. */
-  @media (min-width: 560px) { #bestPicks { grid-template-columns: repeat(3, 1fr); } }
-  .bestCard {
-    background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
-    padding: 8px 10px; border-top: 3px solid; min-width: 0;
-  }
-  .bestTop { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .medal { font-family: ui-monospace, monospace; font-size: 8.5px; font-weight: 800; letter-spacing: 1px; }
-  .posTeamChip {
-    font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px; border: 1px solid;
-    font-family: ui-monospace, monospace; white-space: nowrap; flex: none;
-  }
-  .bestName { font-size: 14px; font-weight: 700; margin-top: 5px; line-height: 1.15; }
-  .statTiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
-  .statTile { background: rgba(255,255,255,.03); border-radius: 4px; padding: 5px 7px; min-width: 0; }
-  .statLabel { font-size: 8px; color: var(--dim); letter-spacing: .5px; font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .statValue { font-size: 13px; font-weight: 700; margin-top: 1px; font-family: ui-monospace, monospace; }
-  .srcDots { display: flex; gap: 3px; margin-top: 7px; flex-wrap: wrap; }
-  .dot {
-    min-width: 20px; height: 17px; padding: 0 3px; border-radius: 4px; font-size: 8.5px; font-weight: 800;
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-    font-family: ui-monospace, monospace; border: 1px solid transparent; color: #0B0D08;
-  }
-  .dot.solo { outline: 1.5px solid var(--gold); outline-offset: 1px; }
-  .dot.has-icon { padding: 0; overflow: hidden; }
-  .dot.has-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  #soloBar { margin-top: 6px; font-size: 10px; font-family: ui-monospace, monospace; color: var(--gold); display: none; align-items: center; gap: 6px; }
-  .empty { color: var(--dim); text-align: center; padding: 14px; font-size: 11px; }
-  #best {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 8px;
-  }
-  .best-cell { border-radius: 4px; padding: 5px 8px; border: 1px solid; min-width: 0; }
-  .best-pos { font-size: 9px; font-family: ui-monospace, monospace; letter-spacing: 1px; opacity: .8; }
-  .best-name { font-size: 11.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #filters { display: flex; gap: 4px; margin-top: 8px; }
-  #playerSearch {
-    flex: 1; min-width: 80px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
-    color: var(--text); padding: 5px 8px; font-size: 11px; font-family: ui-monospace, monospace;
-  }
-  #playerSearch:focus { outline: 1px solid var(--green); }
-  #playerSearch::placeholder { color: var(--dim); }
-  .pf {
-    background: transparent; border: 1px solid var(--line2); color: var(--dim2);
-    padding: 4px 9px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s;
-  } /* :hover/.active states in theme.css */
-  #board { padding: 10px 12px 30px; }
-  .tier-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 5px; }
-  #board > .tier-head:first-child { margin-top: 0; }
-  .tier-badge {
-    width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-family: ui-monospace, monospace; font-size: 11px;
-  }
-  .tier-line { flex: 1; height: 1px; background: var(--line); }
-  .tier-count { font-size: 9px; color: var(--dim); font-family: ui-monospace, monospace; }
-  .row {
-    display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
-    background: var(--panel); border: 1px solid #1E2118; border-radius: 4px;
-    padding: 5px 8px; margin-bottom: 3px; border-left: 3px solid;
-    cursor: pointer; transition: opacity .15s, filter .15s;
-  }
-  .row:hover { filter: brightness(1.15); }
-  .row.gone { opacity: 0.28; text-decoration: line-through; }
-  .row.mine { outline: 1px solid var(--green); }
-  .rk { font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim); }
-  .nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .nm .tm { color: var(--dim); font-weight: 400; font-size: 10px; }
-  .flagMark { margin-right: 3px; } /* .fav/.avoid colors in theme.css */
-  .nm { cursor: context-menu; }
-  /* ---- right-click flag menu (favorite/avoid) — right-click chosen specifically
-     because double-click on the row already means "cross player off" (see the
-     dblclick handler in panel.js); a floating menu was picked over inline pills
-     or a tooltip so it never competes with the ADP columns/value bar for row space. */
-  .flagMenu {
-    position: fixed; z-index: 50; background: #1C1F16; border: 1px solid #3A3E2E; border-radius: 8px;
-    padding: 4px; display: flex; flex-direction: column; min-width: 130px;
-    box-shadow: 0 6px 16px rgba(0,0,0,.5); font-family: ui-monospace, monospace;
-  }
-  .flagMenu button {
-    all: unset; padding: 7px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; white-space: nowrap;
-  }
-  .flagMenu button:hover { background: rgba(255,255,255,.08); }
-  .flagMenu .fm-fav { color: var(--gold); }
-  .flagMenu .fm-avoid { color: var(--red); }
-  .flagMenu .fm-current { background: rgba(255,255,255,.06); }
-  .flagMenu .fm-clear { color: var(--dim2); border-top: 1px solid var(--line2); margin-top: 2px; padding-top: 8px; }
-  .pos-chip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
-  .adp-cell { font-family: ui-monospace, monospace; font-size: 10px; text-align: right; white-space: nowrap; }
-  /* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) — matches rankings-manager.html, sized down for the panel's narrower width ----
-     width:100% + justify-content:flex-end makes this right-align WITHIN its grid column, matching the numeric
-     columns and the "VALUE" header above it — it used to be wrapped in a separately-centered .value-cell,
-     which was the actual cause of the header/bar mismatch the user spotted (header right-aligned, bar centered). */
-  .vbig { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, monospace; justify-content: flex-end; width: 100%; }
-  .vbig-num { font-size: 9.5px; font-weight: 800; width: 22px; text-align: right; flex: none; }
-  .vbig-track { position: relative; width: 56px; height: 12px; background: #1E2118; border-radius: 3px; overflow: hidden; flex: none; }
-  .vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line2); }
-  .vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
-  .vbig-empty { color: var(--dim); font-size: 10px; }
-  /* ---- ADP column labels, shown once above the tiered board when any ADP source is enabled ----
-     Horizontal padding (20px) intentionally matches #board's 12px + .row's own 8px combined —
-     the label row lives OUTSIDE #board, so without this it drifts left of the actual columns. */
-  #adpColLabels {
-    display: grid; align-items: center; gap: 8px; padding: 4px 20px 2px;
-    font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--dim2);
-    font-family: ui-monospace, monospace;
-  }
-  #adpColLabels span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
-  #adpColLabels span:first-child, #adpColLabels span:nth-child(2) { text-align: left; }
-  #toast {
-    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%) translateY(120%);
-    background: var(--gold); color: var(--bg); padding: 7px 14px; border-radius: 5px;
-    font-weight: 700; font-size: 11px; display: none; z-index: 50; max-width: 90%;
-    font-family: ui-monospace, monospace; opacity: 0;
-    transition: opacity .2s ease, transform .2s ease;
-  } /* .show/.error states in theme.css */
+  /* signal */
+  --cyan-500:#22D3EE; --cyan-a12:rgba(34,211,238,.12);
+  --green-500:#35D07F; --green-a12:rgba(53,208,127,.12);
+  --red-500:#FF5A5A; --red-a12:rgba(255,90,90,.12);
+  --orange-500:#FF8A3D; --orange-a12:rgba(255,138,61,.12);
+  --violet-500:#A78BFA; --violet-a12:rgba(167,139,250,.12);
+
+  /* position palette */
+  --pos-qb:#F4527A; --pos-rb:#35D07F; --pos-wr:#22D3EE; --pos-te:#FF8A3D; --pos-flex:#FFD84D;
+  --pos-qb-tint:rgba(244,82,122,.14); --pos-rb-tint:rgba(53,208,127,.14);
+  --pos-wr-tint:rgba(34,211,238,.14); --pos-te-tint:rgba(255,138,61,.14);
+
+  --surface-app:var(--ink-900); --surface-panel:var(--ink-850); --surface-raised:var(--ink-800);
+  --surface-row-hover:rgba(255,255,255,.04); --surface-sunken:var(--ink-950);
+  --surface-scrim:rgba(7,9,8,.72); --surface-input:var(--ink-800);
+
+  --text-primary:var(--ink-050); --text-secondary:var(--ink-200); --text-muted:var(--ink-300);
+  --text-disabled:var(--ink-400); --text-accent:var(--chalk-500);
+
+  --border-subtle:rgba(255,255,255,.06); --border-default:rgba(255,255,255,.10);
+  --border-strong:rgba(255,255,255,.18); --border-accent:var(--chalk-a40);
+
+  --accent:var(--chalk-500); --accent-hover:var(--chalk-400); --accent-press:var(--chalk-600);
+  --accent-tint:var(--chalk-a12); --on-accent:var(--ink-950); --focus-ring:var(--chalk-a40);
+
+  --value-up:var(--green-500); --value-down:var(--red-500); --value-flat:var(--ink-300);
+
+  --font-display:"Chivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-body:"Chivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --text-2xs:11px; --text-xs:12px; --text-sm:13px; --text-base:14px; --text-md:16px; --text-lg:18px; --text-xl:22px;
+  --tracking-tight:-0.015em; --tracking-label:0.08em;
+  --type-heading:600 var(--text-md)/1.3 var(--font-body);
+  --type-body:400 var(--text-sm)/1.5 var(--font-body);
+  --type-ui:500 var(--text-sm)/1.3 var(--font-body);
+  --type-label:600 var(--text-2xs)/1 var(--font-body);
+  --type-numeric:500 var(--text-sm)/1 var(--font-mono);
+  --type-numeric-lg:700 var(--text-xl)/1 var(--font-mono);
+
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --radius-xs:3px; --radius-sm:5px; --radius-md:7px; --radius-lg:10px; --radius-xl:14px; --radius-pill:999px;
+  --radius-control:var(--radius-sm); --radius-card:var(--radius-lg);
+
+  --edge-top:inset 0 1px 0 rgba(255,255,255,.06);
+  --shadow-menu:0 16px 40px -12px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.08);
+  --ring-focus:0 0 0 3px var(--focus-ring);
+
+  --dur-fast:140ms; --dur-base:220ms; --ease-out:cubic-bezier(.2,.8,.24,1);
+  --transition-control:background-color var(--dur-fast) var(--ease-out),color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out);
+  --press-scale:0.985;
+
+  --row-height:40px;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--surface-app); color: var(--text-primary);
+  font: var(--type-body); -webkit-font-smoothing: antialiased;
+}
+[data-numeric], .numeric { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ink-600); border-radius: var(--radius-pill); border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-500); background-clip: content-box; }
+button, input { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--ring-focus); border-radius: var(--radius-xs); }
+
+/* ---------- primitives ---------- */
+.icon { display: inline-block; flex: none; background-repeat: no-repeat; background-position: center; background-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid transparent; border-radius: var(--radius-control);
+  font: var(--type-ui); letter-spacing: var(--tracking-tight); cursor: pointer;
+  white-space: nowrap; transition: var(--transition-control), transform 90ms var(--ease-out);
+  height: 30px; padding: 0 10px; font-size: var(--text-xs);
+}
+.btn:active { transform: scale(var(--press-scale)); }
+.btn.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; box-shadow: var(--edge-top); }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.secondary { background: var(--ink-700); color: var(--text-primary); border-color: var(--border-default); box-shadow: var(--edge-top); }
+.btn.secondary:hover { background: var(--ink-600); border-color: var(--border-strong); }
+.btn.outline { background: transparent; color: var(--text-primary); border-color: var(--border-strong); }
+.btn.outline:hover { background: var(--surface-row-hover); }
+.btn.danger { background: rgba(255,90,90,.12); color: var(--red-500); border-color: rgba(255,90,90,.32); }
+.btn.danger:hover { background: rgba(255,90,90,.20); }
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+
+.iconBtn2 {
+  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius-control); background: transparent;
+  color: var(--text-secondary); cursor: pointer; transition: var(--transition-control);
+}
+.iconBtn2:hover { background: var(--surface-row-hover); color: var(--text-primary); }
+.iconBtn2.on { background: var(--accent-tint); color: var(--accent); }
+
+.input2 {
+  display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px;
+  background: var(--surface-input); border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); transition: var(--transition-control);
+}
+.input2:focus-within { border-color: var(--border-accent); box-shadow: var(--ring-focus); }
+.input2 input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text-primary); font: var(--type-ui); font-size: var(--text-sm); }
+.input2 input::placeholder { color: var(--text-disabled); }
+.input2.sm { height: 28px; }
+
+.fieldLabel { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+
+.badge2 {
+  display: inline-flex; align-items: center; gap: 5px; height: 19px; padding: 0 6px;
+  border-radius: var(--radius-xs); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase;
+  border: 1px solid;
+}
+.badge2.t-accent { background: var(--chalk-a12); color: var(--chalk-500); border-color: var(--chalk-a24); }
+.badge2.t-positive { background: var(--green-a12); color: var(--green-500); border-color: rgba(53,208,127,.28); }
+.badge2.t-info { background: var(--cyan-a12); color: var(--cyan-500); border-color: rgba(34,211,238,.28); }
+.badge2.t-warning { background: var(--orange-a12); color: var(--orange-500); border-color: rgba(255,138,61,.28); }
+.badge2.t-neutral { background: rgba(255,255,255,.06); color: var(--text-secondary); border-color: var(--border-default); }
+.badge2.t-danger { background: var(--red-a12); color: var(--red-500); border-color: rgba(255,90,90,.28); }
+
+.posBadge2 {
+  display: inline-flex; align-items: center; gap: 3px; justify-content: center;
+  border-radius: var(--radius-xs); font-family: var(--font-mono); font-weight: 700; letter-spacing: .02em;
+  border: 1px solid; padding: 0 6px;
+}
+.posBadge2.sm { height: 18px; font-size: var(--text-2xs); }
+.posBadge2.md { height: 22px; font-size: var(--text-xs); }
+.posBadge2 .r { opacity: .7; }
+
+.valDelta { display: inline-flex; align-items: center; font-family: var(--font-mono); font-weight: 600; font-size: var(--text-xs); }
+.valDelta.up { color: var(--value-up); }
+.valDelta.down { color: var(--value-down); }
+.valDelta.flat { color: var(--value-flat); }
+
+.statBarWrap { display: inline-flex; align-items: center; gap: 6px; }
+.statBarTrack { height: 4px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; flex: none; }
+.statBarFill { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.statBarVal { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary); }
+
+/* value/reach bar — Sleeper live ADP vs. baseline ADP source, ported from the
+   original board's diverging-bar treatment (see shared.js's renderValueBadge,
+   which builds this markup) rather than the plain +/- ValueDelta text. */
+.vbig { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); }
+.vbig-num { font-size: 10px; font-weight: 700; width: 20px; text-align: right; flex: none; }
+.vbig-track { position: relative; width: 38px; height: 10px; background: var(--ink-700); border-radius: var(--radius-xs); overflow: hidden; flex: none; }
+.vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--border-default); }
+.vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-xs); }
+.vbig-empty { color: var(--text-muted); font-size: var(--text-2xs); }
+
+/* live-ADP dot — sits next to the value bar, blinks in the player's position
+   color when the CURRENT pick number has passed their Sleeper live ADP (they
+   were "supposed" to be gone by now and aren't — a falling/still-here cue). */
+.adpBlinkDot { width: 7px; height: 7px; border-radius: 999px; flex: none; animation: adpBlink 1.1s ease-in-out infinite; }
+@keyframes adpBlink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; } 50% { opacity: .35; box-shadow: 0 0 0 2px transparent; } }
+@media (prefers-reduced-motion: reduce) { .adpBlinkDot { animation: none; opacity: .85; } }
+
+.segmented { display: inline-flex; flex-wrap: wrap; padding: 2px; gap: 2px; min-height: 28px; background: var(--ink-800); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.segmented .seg { flex: none; padding: 0 9px; border: none; cursor: pointer; border-radius: var(--radius-sm); font: var(--type-ui); font-size: var(--text-xs); font-weight: 500; background: transparent; color: var(--text-muted); transition: var(--transition-control); }
+.segmented .seg.active { background: var(--ink-600); color: var(--text-primary); font-weight: 600; box-shadow: var(--edge-top); }
+.segmented .seg:hover:not(.active) { color: var(--text-secondary); }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: transparent; color: var(--text-muted); font: var(--type-ui); font-size: var(--text-xs); cursor: pointer; transition: var(--transition-control); white-space: nowrap; }
+.chip:hover { border-color: var(--border-default); color: var(--text-secondary); }
+.chip.active { border-color: var(--chalk-a24); background: var(--chalk-a12); color: var(--accent); }
+
+/* ---------- layout shell ---------- */
+#header { position: sticky; top: 0; z-index: 20; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+.headTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brandRow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand2 { font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: -0.02em; color: var(--text-primary); flex: none; }
+.brand2 .amp { color: var(--accent); }
+.syncLabel { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.headRight { display: flex; align-items: center; gap: 8px; flex: none; }
+#pickCounter { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+.statusRow { display: flex; align-items: center; gap: 6px; }
+.statusDot { width: 6px; height: 6px; border-radius: 999px; background: var(--ink-400); flex: none; }
+.statusDot.live { background: var(--green-500); }
+.statusDot.err { background: var(--red-500); }
+#status { font: var(--type-ui); font-size: var(--text-xs); color: var(--text-muted); }
+#status.live { color: var(--green-500); }
+#status.err { color: var(--red-500); }
+#status.pulse { animation: pulse2 .5s ease; }
+@keyframes pulse2 { 0% { opacity: .35; } 100% { opacity: 1; } }
+
+#settingsPanel { overflow: hidden; max-height: 200px; opacity: 1; transition: max-height var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out), margin var(--dur-base) var(--ease-out); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-top: 4px; }
+#settingsPanel.collapsed { max-height: 0; opacity: 0; margin-top: 0; border-color: transparent; }
+#settingsPanel .inner { padding: 12px 14px; display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+#settingsPanel .field { display: flex; flex-direction: column; gap: 4px; }
+#draftId { width: 260px; }
+#myRoster { width: 84px; }
+#refreshRow { display: flex; align-items: center; gap: 10px; padding: 0 14px 12px; }
+#lastSync, #cacheCountdown { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); }
+#cacheCountdown.fresh { color: var(--green-500); }
+#refreshBtn.spin { opacity: .55; }
+
+#teamCounts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.teamHint { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+#sourceList { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.srcChip { min-width: 22px; height: 19px; padding: 0 4px; border-radius: var(--radius-xs); display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--ink-950); cursor: pointer; border: 1px solid transparent; overflow: hidden; }
+.srcChip.solo { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+.srcChip img { width: 100%; height: 100%; object-fit: cover; }
+#soloBar { display: none; align-items: center; gap: 8px; font: var(--type-ui); font-size: var(--text-xs); color: var(--accent); }
+
+/* best-three cards */
+#bestPicks { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@media (min-width: 640px) { #bestPicks { grid-template-columns: repeat(3, 1fr); } }
+.bestCard2 { border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--edge-top); min-width: 0; }
+.bestCard2 header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); }
+.bestCard2 .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.bestCard2 .nameRow { display: flex; align-items: center; gap: 6px; }
+.bestCard2 .nameRow strong { font: var(--type-heading); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bestGrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bestGrid2 .cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bestGrid2 .val { font: var(--type-numeric-lg); color: var(--text-primary); display: flex; align-items: baseline; gap: 6px; }
+.bestCard2 .dots { display: flex; gap: 4px; flex-wrap: wrap; }
+.empty2 { grid-column: 1/-1; color: var(--text-muted); text-align: center; padding: 18px; font-size: var(--text-xs); }
+
+/* best-per-position quad */
+#best { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 480px) { #best { grid-template-columns: 1fr 1fr; } }
+.quadCell { border-radius: var(--radius-card); padding: 8px 10px; border: 1px solid; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.quadCell .lbl { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.quadCell .nm2 { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.quadCell .nm2 strong { font: var(--type-ui); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quadCell .nm2 span { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); flex: none; }
+
+/* filter bar */
+#filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#playerSearchWrap { flex: 1; min-width: 140px; }
+#playerSearchWrap input { width: 100%; }
+
+/* column header + rows */
+#colHead { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+#colHead .c-flag { width: 16px; flex: none; }
+#colHead .c-rank { width: 38px; text-align: right; flex: none; }
+#colHead .c-name { flex: 1; }
+#colHead .c-val { width: 90px; flex: none; }
+#colHead .c-pos { width: 52px; flex: none; text-align: right; }
+
+#board { padding: 0 0 24px; }
+.tierDiv { display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: rgba(255,255,255,.022); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+.tierDiv .num { color: var(--accent); }
+.tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
+
+.row2 { display: flex; align-items: center; gap: 10px; height: var(--row-height); padding: 0 16px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
+.row2:hover { background: var(--surface-row-hover); }
+.row2.gone { opacity: .42; }
+.row2.mine { background: var(--chalk-a12); box-shadow: inset 2px 0 0 var(--accent); }
+.rowFlagBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; }
+.rk2 { width: 38px; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); flex: none; }
+.nmCell2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
+.nmLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.nmLine .nmText { font: var(--type-ui); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row2.gone .nmText { text-decoration: line-through; }
+.nmLine .team2 { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); flex: none; }
+.nmLine .takenTag { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-disabled); flex: none; }
+.adpCap { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.valCell2 { width: 90px; flex: none; display: flex; align-items: center; gap: 8px; }
+.posCell2 { width: 52px; flex: none; display: flex; justify-content: flex-end; }
+
+/* flag menu (favorite / avoid) */
+.flagMenu { position: fixed; z-index: 50; min-width: 150px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 4px; display: flex; flex-direction: column; }
+.flagMenu button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: var(--radius-sm); font: var(--type-ui); font-size: var(--text-sm); cursor: pointer; width: 100%; color: var(--text-primary); }
+.flagMenu button:hover { background: var(--surface-row-hover); }
+.flagMenu .fm-fav.fm-current { color: var(--accent); font-weight: 700; }
+.flagMenu .fm-avoid.fm-current { color: var(--red-500); font-weight: 700; }
+.flagMenu .fm-clear { color: var(--text-disabled); border-top: 1px solid var(--border-subtle); margin-top: 2px; padding-top: 8px; border-radius: 0; }
+.flagMenu .fm-clear:disabled { cursor: not-allowed; }
+
+#toast {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%) translateY(120%);
+  background: var(--ink-700); color: var(--text-primary); border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-menu); padding: 9px 14px; border-radius: var(--radius-md);
+  font: var(--type-ui); font-size: var(--text-xs); display: none; z-index: 70; max-width: 90%;
+  opacity: 0; transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-base) var(--ease-out);
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { border-color: rgba(255,90,90,.4); color: var(--red-500); }
 </style>
 </head>
 <body>
   <div id="header">
-    <div style="display:flex;justify-content:space-between;align-items:baseline">
-      <span class="brand">4TH&amp;GO</span>
-      <span class="sub" id="pickCounter"></span>
+    <div class="headTop">
+      <div class="brandRow">
+        <span class="brand2">4th<span class="amp">&amp;</span>Go</span>
+        <span class="syncLabel">Sleeper live sync &middot; Full PPR</span>
+      </div>
+      <div class="headRight">
+        <span id="pickCounter"></span>
+        <button id="openManager" class="btn outline" title="Open the Rankings Manager">Manager</button>
+        <button id="settingsBtn" class="iconBtn2" title="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
+      </div>
     </div>
-    <div class="sub">SLEEPER LIVE SYNC · FULL PPR</div>
-
-    <div id="statusBar">
+    <div class="statusRow">
+      <span id="statusDot" class="statusDot"></span>
       <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
-      <button id="openManager" class="iconBtn" title="Open the Rankings Manager">↗ MANAGER</button>
-      <button id="settingsBtn" class="iconBtn" title="Show/hide setup &amp; sync settings">⚙</button>
     </div>
 
     <div id="settingsPanel">
-      <div id="connect">
-        <input id="draftId" placeholder="Sleeper draft ID (auto-detects from tab)" />
-        <button id="connectBtn">SYNC</button>
-        <button id="stopBtn" class="ghost" style="display:none">STOP</button>
-      </div>
-      <div id="metaRow">
-        <input id="myRoster" type="number" min="1" placeholder="My draft slot #" title="Your draft slot / roster number — used to mark your own picks" />
+      <div class="inner">
+        <div class="field">
+          <span class="fieldLabel">Sleeper draft ID</span>
+          <div class="input2"><input id="draftId" placeholder="auto-detects from tab" /></div>
+        </div>
+        <div class="field">
+          <span class="fieldLabel">Your slot</span>
+          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" title="Your draft slot / roster number" /></div>
+        </div>
+        <button id="connectBtn" class="btn primary">Sync</button>
+        <button id="stopBtn" class="btn danger" style="display:none">Stop</button>
       </div>
       <div id="refreshRow" style="display:none">
-        <button id="refreshBtn">⟳ REFRESH NOW</button>
+        <button id="refreshBtn" class="btn secondary">Refresh now</button>
         <span id="lastSync"></span>
         <span id="cacheCountdown"></span>
       </div>
@@ -221,20 +343,28 @@
     <div id="teamCounts"></div>
     <div id="sourceList"></div>
     <div id="bestPicks"></div>
-    <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="iconBtn">↺ SHOW ALL</button></div>
+    <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="btn outline">Show all</button></div>
     <div id="best"></div>
     <div id="filters">
-      <button class="pf active" data-pos="ALL">ALL</button>
-      <button class="pf" data-pos="RB/WR" title="RB and WR only — no QB, no TE">RB/WR</button>
-      <button class="pf" data-pos="QB">QB</button>
-      <button class="pf" data-pos="RB">RB</button>
-      <button class="pf" data-pos="WR">WR</button>
-      <button class="pf" data-pos="TE">TE</button>
-      <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
-      <input type="text" id="playerSearch" placeholder="Search name or team…" />
+      <div class="segmented" id="posSeg">
+        <button class="pf seg active" data-pos="ALL">All</button>
+        <button class="pf seg" data-pos="RB/WR" title="RB and WR only — no QB, no TE">RB/WR</button>
+        <button class="pf seg" data-pos="QB">QB</button>
+        <button class="pf seg" data-pos="RB">RB</button>
+        <button class="pf seg" data-pos="WR">WR</button>
+        <button class="pf seg" data-pos="TE">TE</button>
+      </div>
+      <button class="chip" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">Show taken</button>
+      <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>
     </div>
   </div>
-  <div id="adpColLabels" style="display:none"></div>
+  <div id="colHead">
+    <span class="c-flag"></span>
+    <span class="c-rank">Rank</span>
+    <span class="c-name">Player</span>
+    <span class="c-val">ADP Value</span>
+    <span class="c-pos">Pos</span>
+  </div>
   <div id="board"></div>
   <div id="toast"></div>
   <script src="rankings.js"></script>

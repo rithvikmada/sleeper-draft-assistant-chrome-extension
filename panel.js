@@ -3,10 +3,107 @@
 // Polls Sleeper's public read-only API (no login required):
 //   GET https://api.sleeper.app/v1/draft/{draft_id}/picks
 // Matches picks to your rankings by normalized name + position.
+//
+// Visuals below follow the "4th&Go Draft Board Redesign" project imported
+// from claude.ai/design (file "Draft Board Wide.dc.html") — see claude.md.
+// rankings-manager.html/js are untouched by this pass and keep the original
+// "turf" theme + shared.js widgets; the render helpers in this file (ico(),
+// posBadgeHtml(), valueDeltaHtml(), renderTeamCountsV2(), etc.) are local to
+// this surface for exactly that reason — shared.js's renderBestPicksWidget /
+// renderTeamCountsWidget / renderSourceListWidget still exist unmodified for
+// whatever needs the old visual, this file just no longer calls them.
 // ============================================================
 
-// TIER_ORDER / TIER_COLORS / POS_COLORS / norm() now live in shared.js,
-// which loads first — see the note at the top of that file.
+// TIER_ORDER / POS_COLORS / norm() / etc. live in shared.js, which loads first.
+
+// ---------- design-system render helpers (local to this surface) ----------
+// Icon set: Lucide (1.5-2px stroke, rounded caps, 24px grid) — same set the
+// design import specifies, substituted since no icon binaries shipped with
+// it (see the design system's own readme.md). The import's Icon component
+// pulls each glyph from unpkg.com/lucide-static at render time; that CDN
+// isn't reachable from every network (corporate proxies, offline, a flaky
+// connection mid-draft), and this is a tool meant to keep working exactly
+// then, so the handful of icons actually used here (7) are inlined as local
+// SVG data instead of fetched — same visual result, no runtime dependency on
+// a third-party host staying up.
+const ICON_SVG = {
+  "settings": `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>`,
+  "external-link": `<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>`,
+  "unplug": `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v3a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
+  "rotate-cw": `<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>`,
+  "star": `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>`,
+  "circle-x": `<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>`,
+  "flag": `<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>`,
+};
+function iconDataUri(name) {
+  const inner = ICON_SVG[name] || "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+  // Single-quoted url() deliberately — this sits inside a double-quoted HTML
+  // style="..." attribute (see ico() below), and a double-quoted url() there
+  // closes the attribute early.
+  return `url('data:image/svg+xml,${encodeURIComponent(svg)}')`;
+}
+function ico(name, { size = 14, color = "currentColor", extra = "" } = {}) {
+  const url = iconDataUri(name);
+  return `<span class="icon" aria-hidden="true" style="width:${size}px;height:${size}px;background-color:${color};-webkit-mask-image:${url};mask-image:${url};${extra}"></span>`;
+}
+
+// Position palette for this surface only — distinct object from shared.js's
+// POS_COLORS (which rankings-manager.js still uses for its old-style chips).
+const POS_V2 = {
+  QB: { fg: "var(--pos-qb)", bg: "var(--pos-qb-tint)" },
+  RB: { fg: "var(--pos-rb)", bg: "var(--pos-rb-tint)" },
+  WR: { fg: "var(--pos-wr)", bg: "var(--pos-wr-tint)" },
+  TE: { fg: "var(--pos-te)", bg: "var(--pos-te-tint)" },
+};
+function posTint(pos) { return POS_V2[pos] || { fg: "var(--pos-flex)", bg: "var(--chalk-a12)" }; }
+
+function posBadgeHtml(pos, rank, size = "md") {
+  const t = posTint(pos);
+  return `<span class="posBadge2 ${size}" style="background:${t.bg};color:${t.fg};border-color:${t.bg}">${esc(pos)}${rank != null ? `<span class="r">${esc(rank)}</span>` : ""}</span>`;
+}
+
+function valueDeltaHtml(value) {
+  if (value === null || value === undefined) return `<span class="valDelta flat">·</span>`;
+  const up = value > 0, flat = value === 0;
+  const cls = flat ? "flat" : up ? "up" : "down";
+  return `<span class="valDelta ${cls}">${up ? "+" : ""}${value.toFixed(0)}</span>`;
+}
+
+// A small pulsing dot next to the VALUE bar — colored to the player's
+// position, shown only once the current pick number has passed their
+// Sleeper live ADP (they were "supposed" to be off the board by now and
+// aren't). Purely a live-draft urgency cue, so it needs an actual current
+// pick number (from a real sync) and the Sleeper Live ADP source specifically
+// — not the blended baseline, which can include a manually-imported source
+// that has nothing to do with what Sleeper drafters are actually doing.
+function adpBlinkDotHtml(pos, sleeperAdp) {
+  if (currentPickNo == null || sleeperAdp == null || !isFinite(sleeperAdp)) return "";
+  if (currentPickNo <= sleeperAdp) return "";
+  const t = posTint(pos);
+  return `<span class="adpBlinkDot" style="background:${t.fg};color:${t.fg}" title="Pick ${currentPickNo} has passed their Sleeper live ADP (${sleeperAdp.toFixed(1)}) — still on the board"></span>`;
+}
+
+function badgeHtml(tone, text) {
+  return `<span class="badge2 t-${tone}">${esc(text)}</span>`;
+}
+
+// Small colored chip identifying a ranking source — this surface's version of
+// shared.js's sourceDotHtml(), same fallback (icon if uploaded, else 2-letter
+// tag on the source's color), restyled for the new token set.
+function sourceChipHtml(s, { solo = false, title } = {}) {
+  const cls = `srcChip${solo ? " solo" : ""}`;
+  const inner = s.icon ? `<img src="${esc(s.icon)}" alt="" />` : esc(sourceTag(s.name));
+  return `<span class="${cls}" data-solo="${esc(s.id)}" style="background:${esc(s.color)}" title="${esc(title ?? s.name)}">${inner}</span>`;
+}
+
+function setStatus(cls, text) {
+  const el = $("status");
+  el.className = cls;
+  el.textContent = text;
+  const dot = $("statusDot");
+  dot.className = "statusDot" + (cls.indexOf("live") !== -1 ? " live" : cls.indexOf("err") !== -1 ? " err" : "");
+}
 
 // ---------- name matching ----------
 // Matches a Sleeper pick (first/last/pos) against the CURRENT blended consensus
@@ -79,6 +176,7 @@ let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manage
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
+let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
 
 // ---------- rendering ----------
 // Both the BEST grid and the tier board are built from the SAME blended
@@ -98,86 +196,63 @@ function bestAvailable() {
 function renderBest() {
   const best = bestAvailable();
   $("best").innerHTML = ["QB","RB","WR","TE"].map((pos) => {
-    const c = POS_COLORS[pos];
+    const t = posTint(pos);
     const p = best[pos];
-    return `<div class="best-cell" style="background:${c.bg};border-color:${c.border}">
-      <div class="best-pos" style="color:${c.text}">BEST ${pos}</div>
-      <div class="best-name">${p ? `${esc(p.name)}${p.tier ? ` <span style="color:${TIER_COLORS[p.tier] || "var(--dim2)"};font-size:10px">T-${esc(p.tier)}</span>` : ""}` : "—"}</div>
+    return `<div class="quadCell" style="background:${t.bg};border-color:${t.bg}">
+      <span class="lbl" style="color:${t.fg}">Best ${esc(pos)}</span>
+      <div class="nm2">
+        <strong>${p ? esc(p.name) : "—"}</strong>
+        ${p && p.tier ? `<span>T-${esc(p.tier)}</span>` : ""}
+      </div>
     </div>`;
   }).join("");
+}
+
+// Position rank ("RB6", "WR12") among currently-available players at that
+// position — computed from the full (unfiltered) consensus so it doesn't
+// jump around as the position filter is toggled. "Available" excludes both
+// synced and manual crossouts, matching how the rest of the board treats
+// "gone".
+function computePosRanks(allRows) {
+  const byPos = {};
+  allRows.forEach((r) => {
+    if (taken[r.key] || manualTaken[r.key]) return;
+    (byPos[r.pos] = byPos[r.pos] || []).push(r);
+  });
+  const ranks = new Map();
+  Object.values(byPos).forEach((list) => {
+    list.forEach((r, i) => ranks.set(r.key, i + 1));
+  });
+  return ranks;
 }
 
 function renderBoard() {
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
-  const rows = buildConsensus(activeSources(sources, soloSource), merges);
+  const allRows = buildConsensus(activeSources(sources, soloSource), merges);
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
-  // posFilter/showTaken/playerSearch are applied via the shared applyFilters()
-  // in shared.js — same logic path rankings-manager.js's table uses now, so
-  // the two can't quietly drift the way they had (panel.js had grown an
-  // RB/WR grouped filter the manager never got — see claude.md).
-  const list = applyFilters(rows, { posFilter, showTaken, playerSearch, isGone });
+  const list = applyFilters(allRows, { posFilter, showTaken, playerSearch, isGone });
+  const posRanks = computePosRanks(allRows);
 
-  // Per-row ADP columns + value badge — one column per enabled ADP source
-  // (usually Sleeper Live ADP + a pasted FantasyPros export), plus the
-  // Sleeper-vs-baseline value/reach badge. Column count is dynamic, so the
-  // grid template is built here and applied per-row via inline style rather
-  // than a fixed CSS rule.
+  // Per-row ADP detail + value delta — one caption entry per enabled ADP
+  // source (usually Sleeper Live ADP + a pasted FantasyPros export), plus the
+  // Sleeper-vs-baseline value/reach delta in the fixed Value column. Column
+  // COUNT no longer drives layout (the header/row widths are fixed, matching
+  // the design import exactly) — extra ADP sources just add another
+  // "TAG value" pair to the caption line under the name, and any future
+  // per-player stat (PROJ, etc.) is a caption entry too, not a new grid track.
   const adpCols = adpSources.filter((s) => s.enabled);
   const adpConsensus = buildAdpConsensus(adpSources);
   const valueMap = buildValueComparison(adpSources);
-  // Position-only ranking sources are still full ranking sources — like Flock
-  // or FantasyPros, they don't get their own board column, they contribute
-  // to the tiered list (or, for position-only, to the Best Picks dot logic —
-  // see shared.js). Board columns are reserved for ADP and future per-player
-  // stat/projection data, not per-ranking-source detail (that's what the
-  // Rankings Manager table is for). A dedicated posOnly reference column was
-  // tried and reverted the same day it shipped — inconsistent with every
-  // other ranking source's total absence from the board's columns.
-  // Every track is a fixed length, deliberately — NOT "auto" for the pos-chip
-  // column. #adpColLabels and each .row are separate grid containers, so an
-  // "auto" track sizes independently per container: the label row's pos-chip
-  // slot is empty (~0px) while a real row's has actual chip content (~23px),
-  // which changes how much space the 1fr name column eats and shifts every
-  // column after it out of alignment between the header and the rows.
-  const gridColParts = ["34px", "1fr", ...adpCols.map(() => "48px")];
-  if (adpCols.length) gridColParts.push("96px"); // fits the bigger value bar (22px number + 56px track + gaps)
-  gridColParts.push("36px"); // pos-chip — fixed, see note above
-  const gridCols = gridColParts.join(" ");
-
-  // Column labels above the list — the board is otherwise just repeating
-  // rows with no header, so without this a raw ADP number column reads as
-  // unlabeled noise. Rendered once, not per tier, using the same grid
-  // template so it lines up with the actual columns below it.
-  const labelsEl = $("adpColLabels");
-  if (adpCols.length) {
-    labelsEl.style.display = "grid";
-    labelsEl.style.gridTemplateColumns = gridCols;
-    labelsEl.innerHTML = `<span></span><span></span>` +
-      adpCols.map((s) => `<span style="color:${esc(s.color)}" title="${esc(s.name)}">${esc(sourceTag(s.name))}</span>`).join("") +
-      `<span>VALUE</span>` +
-      `<span></span>`;
-    // Pull the first tier divider up toward the labels instead of leaving a
-    // big dead gap — #board's own top padding is meant for the space before
-    // an UNlabeled list, not on top of the label row's own spacing.
-    $("board").style.paddingTop = "0";
-  } else {
-    labelsEl.style.display = "none";
-    $("board").style.paddingTop = "";
-  }
 
   const groups = {};
   list.forEach((r) => { const t = r.tier || "?"; (groups[t] = groups[t] || []).push(r); });
 
   // Isolating to a single source passes that source's own raw tier label
   // through as-is (see buildConsensus) — which isn't guaranteed to be
-  // numeric. This used to only recognize TIER_ORDER's "1".."16" labels and
-  // silently dropped every other tier group entirely, so a source using
-  // letter tiers (S/A/B/C/...) rendered an empty board even though its
-  // players were right there in `list`. Every group now gets shown:
-  // TIER_ORDER's numeric tiers keep their defined order, any other label
-  // is ordered by that group's best (lowest) rank, and "?" (no tier at all)
-  // always goes last.
+  // numeric. Every group gets shown: TIER_ORDER's numeric tiers keep their
+  // defined order, any other label is ordered by that group's best (lowest)
+  // rank, and "?" (no tier at all) always goes last.
   const otherTierLabels = Object.keys(groups)
     .filter((t) => t !== "?" && !TIER_ORDER.includes(t))
     .sort((a, b) =>
@@ -187,34 +262,46 @@ function renderBoard() {
   const orderedTiers = [...TIER_ORDER.filter((t) => groups[t]), ...otherTierLabels];
   if (groups["?"]) orderedTiers.push("?"); // players no active source assigned a tier to
 
+  if (!list.length) {
+    $("board").innerHTML = `<div class="empty2" style="padding:32px 20px">Nothing here. Loosen a filter to see the rest of the board.</div>`;
+    return;
+  }
+
   $("board").innerHTML = orderedTiers.map((t) => {
     const rows = groups[t].map((r) => {
-      const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
       const gone = isGone(r);
       const mine = taken[r.key] && taken[r.key].byMe;
-      const pickLabel = taken[r.key] && taken[r.key].pickNo ? ` · pk ${esc(taken[r.key].pickNo)}` : "";
       const flag = flags[r.key];
       const adpEntry = adpConsensus.get(r.key);
       const vc = valueMap.get(r.key);
-      const adpCells = adpCols.map((s) =>
-        `<span class="adp-cell" style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}" title="${esc(s.name)}">${esc(adpEntry?.values[s.id] ?? "·")}</span>`
-      ).join("");
-      const valueCell = adpCols.length ? renderValueBadge(vc?.delta ?? null, vc?.baselineAdp) : "";
-      return `<div class="row ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo" style="border-left-color:${c.text};grid-template-columns:${gridCols}">
-        <span class="rk">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
-        <span class="nm">${flagBadge(flag)}${esc(r.name)} <span class="tm">· ${esc(r.team || "")}${pickLabel}</span></span>
-        ${adpCells}
-        ${valueCell}
-        <span class="pos-chip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}</span>
+      const takenTag = gone
+        ? `<span class="takenTag">${mine ? "Yours" : "Taken"}${taken[r.key] && taken[r.key].pickNo ? ` · pk ${esc(taken[r.key].pickNo)}` : ""}</span>`
+        : "";
+      const adpCaption = adpCols.length
+        ? `<span class="adpCap">${adpCols.map((s) => `${esc(sourceTag(s.name))} ${adpEntry?.values[s.id] !== undefined ? esc(adpEntry.values[s.id]) : "—"}`).join(" · ")}</span>`
+        : "";
+      const flagIcon = flag === "favorite" ? "star" : flag === "avoid" ? "circle-x" : "flag";
+      const flagColor = flag === "favorite" ? "var(--accent)" : flag === "avoid" ? "var(--red-500)" : "var(--text-disabled)";
+      const valueCell = adpCols.length
+        ? `${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}${gone ? "" : adpBlinkDotHtml(r.pos, adpEntry?.values["adp_sleeper_live"])}`
+        : `<span class="valDelta flat">·</span>`;
+      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo">
+        <button class="rowFlagBtn" data-key="${esc(r.key)}" aria-label="Flag player">${ico(flagIcon, { size: 13, color: flagColor })}</button>
+        <span class="rk2">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
+        <span class="nmCell2">
+          <span class="nmLine">
+            <span class="nmText">${esc(r.name)}</span>
+            <span class="team2">${esc(r.team || "")}</span>
+            ${takenTag}
+          </span>
+          ${adpCaption}
+        </span>
+        <span class="valCell2">${valueCell}</span>
+        <span class="posCell2">${posBadgeHtml(r.pos, posRanks.get(r.key) ?? null, "sm")}</span>
       </div>`;
     }).join("");
-    const badgeColor = TIER_COLORS[t] || "#4A4A4A";
-    return `<div class="tier-head">
-      <div class="tier-badge" style="background:${badgeColor};color:#0B0D08">${esc(t)}</div>
-      <div class="tier-line"></div>
-      <div class="tier-count">${groups[t].length}</div>
-    </div>${rows}`;
-  }).join("") || `<div style="color:var(--dim);text-align:center;padding:30px">Nothing here.</div>`;
+    return `<div class="tierDiv"><span class="num">Tier ${esc(t)}</span><span class="line"></span><span>${groups[t].length}</span></div>${rows}`;
+  }).join("");
 }
 
 // ---------- multi-source recommendation widgets ----------
@@ -236,27 +323,132 @@ function renderSoloBar() {
   $("soloLabel").textContent = `Showing ${s.name} only`;
 }
 
+// opts: { picks:[{pos,byMe}], myRosterId }
+function renderTeamCountsV2(el, { picks = [], myRosterId = null } = {}) {
+  if (myRosterId == null) {
+    el.innerHTML = `<span class="teamHint">Set your draft slot # in settings to track your own roster.</span>`;
+    return;
+  }
+  const mine = picks.filter((p) => p.byMe);
+  const tones = { QB: "accent", RB: "positive", WR: "info", TE: "warning" };
+  const counts = POSITIONS.map((pos) => badgeHtml(tones[pos], `${pos} ${mine.filter((p) => p.pos === pos).length}`)).join("");
+  el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${badgeHtml("neutral", `Tot ${mine.length}`)}`;
+}
+
+// A persistent, always-visible list of every enabled source — the per-card
+// dots on the Best Picks cards below only show a source when it agrees with
+// that specific pick, so a source with no dot anywhere still needs a way to
+// be selected.
+function renderSourceListV2(el, { sources = [], soloSource = null, onSolo } = {}) {
+  const enabled = sources.filter((s) => s.enabled);
+  if (enabled.length < 2) { el.innerHTML = ""; return; }
+  el.innerHTML = enabled.map((s) => sourceChipHtml(s, { solo: soloSource === s.id })).join("");
+  if (onSolo) {
+    el.querySelectorAll("[data-solo]").forEach((chip) => {
+      chip.addEventListener("click", () => onSolo(soloSource === chip.dataset.solo ? null : chip.dataset.solo));
+    });
+  }
+}
+
+// opts: { rows, sources, takenSet, valueMap, soloSource, posFilter, onSolo, flags }
+// Same selection logic as shared.js's renderBestPicksWidget (kept for
+// rankings-manager.js's own possible future use, but unused by this file now)
+// — reimplemented here so this surface's markup can follow the design import
+// exactly without touching that shared function.
+function renderBestPicksV2(el, opts) {
+  const { rows = [], sources = [], takenSet = new Set(), valueMap = null, soloSource = null, posFilter = "ALL", onSolo, flags = {}, posRanks = new Map() } = opts || {};
+  const soloIsPosOnly = soloSource && sources.find((s) => s.id === soloSource)?.positionOnly;
+  const soloRank = (r) => (soloIsPosOnly ? r.posOnlyRanks?.[soloSource] : r.ranks[soloSource]);
+  let displayRows = rows;
+  if (soloSource) {
+    displayRows = rows.filter((r) => soloRank(r) !== undefined).slice().sort((a, b) => soloRank(a) - soloRank(b));
+  }
+  const top = displayRows.filter((r) => !takenSet.has(r.key)).slice(0, 3);
+  const posLabel = posFilter && posFilter !== "ALL" ? ` ${posFilter}` : "";
+  const ordinals = [`1st — best${posLabel} available`, "2nd", "3rd"];
+  if (!top.length) {
+    el.innerHTML = `<div class="empty2">${posLabel ? `No available${posLabel} players — everyone's off the board.` : "No available players — add a ranking source in the Rankings Manager."}</div>`;
+    return;
+  }
+  const sourceTopPick = new Map();
+  sources.filter((s) => s.enabled).forEach((s) => {
+    if (s.positionOnly) {
+      const byPos = new Map();
+      top.forEach((r) => {
+        const rk = r.posOnlyRanks?.[s.id];
+        if (rk === undefined) return;
+        const cur = byPos.get(r.pos);
+        if (!cur || rk < cur.rk) byPos.set(r.pos, { key: r.key, rk, consensus: r.consensus ?? Infinity });
+      });
+      let bestKey = null, bestConsensus = Infinity;
+      byPos.forEach((c) => { if (bestKey === null || c.consensus < bestConsensus) { bestKey = c.key; bestConsensus = c.consensus; } });
+      if (bestKey) sourceTopPick.set(s.id, bestKey);
+      return;
+    }
+    let bestKey = null, bestRank = Infinity;
+    rows.forEach((r) => {
+      if (takenSet.has(r.key)) return;
+      const rk = r.ranks[s.id];
+      if (rk !== undefined && rk < bestRank) { bestRank = rk; bestKey = r.key; }
+    });
+    if (bestKey) sourceTopPick.set(s.id, bestKey);
+  });
+  el.innerHTML = top.map((r, i) => {
+    const t = posTint(r.pos);
+    const dots = sources
+      .filter((s) => s.enabled && (s.id === soloSource || sourceTopPick.get(s.id) === r.key))
+      .map((s) => sourceChipHtml(s, {
+        solo: soloSource === s.id,
+        title: s.positionOnly ? `${s.name}: ${r.pos}${r.posOnlyRanks?.[s.id] ?? "—"}` : `${s.name}: rank ${r.ranks[s.id] ?? "—"}`,
+      })).join("");
+    const displayRank = soloSource ? soloRank(r) : r.consensus;
+    const rankLabel = soloSource ? `Rank · ${esc(sourceTag(sources.find((s) => s.id === soloSource)?.name || ""))}` : `Rank · ${r.sourceCount} src`;
+    const vc = valueMap ? valueMap.get(r.key) : null;
+    const adpVal = vc ? vc.sleeperAdp : null;
+    const isFav = flags[r.key] === "favorite";
+    return `<section class="bestCard2" style="background:${i === 0 ? "var(--surface-raised)" : "var(--surface-panel)"};border:1px solid ${i === 0 ? "var(--chalk-a24)" : "var(--border-subtle)"}">
+      <header>
+        <span class="fieldLabel" style="color:${i === 0 ? "var(--accent)" : "var(--text-muted)"}">${esc(ordinals[i])}</span>
+        ${posBadgeHtml(r.pos, posRanks.get(r.key) ?? null, "md")}
+      </header>
+      <div class="body">
+        <div class="nameRow">
+          ${ico("star", { size: 14, color: isFav ? "var(--accent)" : "var(--text-disabled)" })}
+          <strong>${esc(r.name)}</strong>
+        </div>
+        <div class="bestGrid2">
+          <div class="cell"><span class="fieldLabel">${esc(rankLabel)}</span><span class="val">${displayRank != null ? displayRank.toFixed(1) : "—"}</span></div>
+          <div class="cell"><span class="fieldLabel">ADP</span><span class="val">${adpVal != null ? adpVal.toFixed(1) : "—"}${valueDeltaHtml(vc ? vc.delta : null)}</span></div>
+        </div>
+        <div class="dots">${dots}</div>
+      </div>
+    </section>`;
+  }).join("");
+  if (onSolo) {
+    el.querySelectorAll("[data-solo]").forEach((chip) => {
+      chip.addEventListener("click", () => onSolo(soloSource === chip.dataset.solo ? null : chip.dataset.solo));
+    });
+  }
+}
+
 function renderRecommendations() {
-  renderTeamCountsWidget($("teamCounts"), { picks: lastSharedPicks, myRosterId });
-  renderSourceListWidget($("sourceList"), {
+  renderTeamCountsV2($("teamCounts"), { picks: lastSharedPicks, myRosterId });
+  renderSourceListV2($("sourceList"), {
     sources,
     soloSource,
     onSolo: (id) => { soloSource = id; renderAll(); },
   });
   // Always the FULL blended consensus (every enabled source), never solo-filtered —
-  // the widget itself re-sorts/re-labels for soloSource, but every source's dot
-  // needs to stay visible so you can see what other sources think of the same pick.
-  // Position-filtering it here (not inside the widget) means "each source's own
-  // #1 pick" naturally becomes "each source's own #1 pick AT THIS POSITION" too —
-  // asked for directly: filtering the board to RB mid-draft should surface the
-  // best available RBs here, not the same overall-best-3 regardless of position.
+  // every source's dot needs to stay visible so you can see what other sources
+  // think of the same pick. Position-filtering it here (not inside the widget)
+  // means "each source's own #1 pick" naturally becomes "each source's own
+  // #1 pick AT THIS POSITION" too.
   const consensusRows = buildConsensus(sources.filter((s) => s.enabled), merges);
   const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos, posFilter));
-  renderBestPicksWidget($("bestPicks"), {
+  renderBestPicksV2($("bestPicks"), {
     rows: bestPicksRows,
     sources,
     takenSet: takenKeySet(),
-    adp,
     valueMap: buildValueComparison(adpSources),
     soloSource,
     posFilter,
@@ -265,6 +457,11 @@ function renderRecommendations() {
     // the next poll cycle.
     onSolo: (id) => { soloSource = id; renderAll(); },
     flags,
+    // Same "RB1"/"WR2" position-rank tag the board rows show, computed off
+    // this widget's own full-blend consensus (not the board's, which can be
+    // solo-filtered) so a card's tag always matches what's actually driving
+    // this widget's picks.
+    posRanks: computePosRanks(consensusRows),
   });
   renderSoloBar();
 }
@@ -282,14 +479,14 @@ function renderAll() {
     renderBoard();
     renderRecommendations();
     const total = Object.keys(taken).length + Object.keys(manualTaken).length;
-    $("pickCounter").textContent = total ? `${total} OFF BOARD` : "";
+    $("pickCounter").textContent = total ? `${total} off board` : "";
   } catch (e) {
     console.error("[4th&Go] render failed", e);
     $("board").innerHTML =
-      `<div style="color:var(--red);padding:24px;line-height:1.6;font-size:12px">
+      `<div style="color:var(--red-500);padding:24px;line-height:1.6;font-size:12px">
         <b>Couldn't draw the board.</b><br>${esc(e.message)}<br><br>
-        <span style="color:var(--dim2)">Your saved ranking data may be damaged. Open the Rankings Manager
-        (↗ MANAGER, top right) and remove or re-upload the most recently changed source.
+        <span style="color:var(--text-muted)">Your saved ranking data may be damaged. Open the Rankings Manager
+        (Manager, top right) and remove or re-upload the most recently changed source.
         Syncing and manual crossouts still work.</span>
       </div>`;
   }
@@ -384,7 +581,7 @@ async function poll(draftId, { manual = false } = {}) {
   inFlight = true;
   if (manual) {
     $("refreshBtn").classList.add("spin");
-    $("refreshBtn").textContent = "⟳ …";
+    $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refreshing…";
   }
   try {
     const res = await fetch(`https://api.sleeper.app/v1/draft/${draftId}/picks?_=${Date.now()}`, {
@@ -438,6 +635,7 @@ async function poll(draftId, { manual = false } = {}) {
     });
 
     taken = nextTaken;
+    currentPickNo = picks.length + 1;
     persistDraftState(draftId, sharedPicks);
 
     console.debug(`[4th&Go] check #${checkCount + 1} — ${picks.length} picks — ${new Date().toISOString()}`);
@@ -461,16 +659,15 @@ async function poll(draftId, { manual = false } = {}) {
     // while nothing ever crosses off and nothing explains why: the skipped
     // picks return early, so they never reach the `unmatched` counter either.
     const wrongSport = picks.length > 0 && skippedPos === picks.length;
-    $("status").className = wrongSport ? "err" : "live pulse";
-    if (!wrongSport) setTimeout(() => $("status").classList.remove("pulse"), 500);
     let msg;
     if (wrongSport) {
-      msg = `⚠ ${picks.length} picks synced, but none are QB/RB/WR/TE — is this an NFL draft? Check the draft ID.`;
+      msg = `${picks.length} picks synced, but none are QB/RB/WR/TE — is this an NFL draft? Check the draft ID.`;
     } else {
-      msg = `● LIVE — ${picks.length} picks synced`;
+      msg = `Live — ${picks.length} picks synced`;
       if (unmatched.length) msg += ` · ${unmatched.length} not in your rankings (ignored)`;
     }
-    $("status").textContent = msg;
+    setStatus(wrongSport ? "err" : "live pulse", msg);
+    if (!wrongSport) setTimeout(() => $("status").classList.remove("pulse"), 500);
     $("lastSync").textContent =
       `checked ${fmtTime(new Date())} (#${checkCount})` +
       (cfAge !== null ? ` · Sleeper cache age: ${cfAge}s` : "") +
@@ -483,13 +680,12 @@ async function poll(draftId, { manual = false } = {}) {
     }
   } catch (e) {
     errorStreak++;
-    $("status").className = "err";
-    $("status").textContent = `Sync error: ${e.message}. Check the draft ID. Retrying…`;
+    setStatus("err", `Sync error: ${e.message}. Check the draft ID. Retrying…`);
   } finally {
     inFlight = false;
     if (manual) {
       $("refreshBtn").classList.remove("spin");
-      $("refreshBtn").textContent = "⟳ REFRESH NOW";
+      $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refresh now";
     }
     if (pollTimer !== null) scheduleNext(draftId);
   }
@@ -522,9 +718,7 @@ function updateStaleness() {
   if (errorStreak > 0) return; // the error message is more specific — don't stomp it
   const staleFor = Math.floor((Date.now() - lastSuccessAt.getTime()) / 1000);
   if (staleFor < STALE_AFTER_S) return;
-  $("status").className = "err";
-  $("status").textContent =
-    `⚠ NO UPDATE IN ${staleFor}s — the board may be behind. Try REFRESH NOW, or STOP and re-SYNC.`;
+  setStatus("err", `No update in ${staleFor}s — the board may be behind. Try Refresh now, or Stop and re-sync.`);
 }
 
 function tickStatus() {
@@ -566,12 +760,12 @@ function stopPolling() {
   cacheAgeAtFetch = null;
   cacheAgeFetchedAt = null;
   lastSuccessAt = null;
+  currentPickNo = null;
   $("cacheCountdown").textContent = "";
   $("connectBtn").style.display = "";
   $("stopBtn").style.display = "none";
   $("refreshRow").style.display = "none";
-  $("status").className = "";
-  $("status").textContent = "Sync stopped. Manual mode: double-click rows to cross players off.";
+  setStatus("", "Sync stopped. Manual mode: double-click rows to cross players off.");
   $("settingsPanel").classList.remove("collapsed");
   $("settingsBtn").classList.add("on");
 }
@@ -580,8 +774,7 @@ function stopPolling() {
 $("connectBtn").addEventListener("click", () => {
   const id = $("draftId").value.trim();
   if (!/^\d{6,}$/.test(id)) {
-    $("status").className = "err";
-    $("status").textContent = "That doesn't look like a draft ID. It's the long number in the draft room URL: sleeper.com/draft/nfl/<ID>";
+    setStatus("err", "That doesn't look like a draft ID. It's the long number in the draft room URL: sleeper.com/draft/nfl/<ID>");
     return;
   }
   startPolling(id);
@@ -595,9 +788,13 @@ $("refreshBtn").addEventListener("click", () => {
 });
 
 // Double-click, not click: a whole row is a big target and a stray single click
-// used to silently remove a player mid-draft with no undo signal.
+// used to silently remove a player mid-draft with no undo signal. Ignores the
+// row's flag button, which has its own single-click behavior (open the
+// favorite/avoid menu) — otherwise a fast double-click there would also
+// register as a row dblclick and cross the player off by accident.
 $("board").addEventListener("dblclick", (e) => {
-  const row = e.target.closest(".row");
+  if (e.target.closest(".rowFlagBtn")) return;
+  const row = e.target.closest(".row2");
   if (!row) return;
   const key = row.dataset.key;
   if (taken[key]) return; // synced picks can't be un-clicked (they're real)
@@ -613,13 +810,12 @@ $("board").addEventListener("dblclick", (e) => {
   persistDraftState(); // keep the manager tab in step
 });
 
-// ---------- flag context menu (favorite/avoid) ----------
-// Right-click on a player's name, not double-click — double-click on the row
-// already means "cross player off" (see the dblclick handler above), so
-// right-click was picked specifically to avoid a gesture collision. Flags
-// used to be settable only from the Rankings Manager tab; this lets you set
-// them mid-draft without switching tabs, while the manager stays the only
-// place to browse/edit them in bulk.
+// ---------- flag menu (favorite/avoid) ----------
+// Two entry points: click the row's dedicated flag icon (its own column, so
+// it never competes with the ADP/value cells for space), or right-click the
+// player's name — kept as a secondary path for anyone used to the old
+// gesture. Either way this is separate from double-click, which already
+// means "cross player off" (see the dblclick handler above).
 function closeFlagMenu() {
   const el = $("flagMenu");
   if (el) el.remove();
@@ -645,8 +841,8 @@ function openFlagMenu(x, y, key) {
   menu.id = "flagMenu";
   menu.className = "flagMenu";
   menu.innerHTML = `
-    <button class="fm-fav${current === "favorite" ? " fm-current" : ""}" data-kind="favorite">★ Favorite</button>
-    <button class="fm-avoid${current === "avoid" ? " fm-current" : ""}" data-kind="avoid">⊘ Avoid</button>
+    <button class="fm-fav${current === "favorite" ? " fm-current" : ""}" data-kind="favorite">${ico("star", { size: 13, color: "var(--accent)" })}Favorite</button>
+    <button class="fm-avoid${current === "avoid" ? " fm-current" : ""}" data-kind="avoid">${ico("circle-x", { size: 13, color: "var(--red-500)" })}Avoid</button>
     ${current ? `<button class="fm-clear" data-kind="clear">Clear flag</button>` : ""}
   `;
   document.body.appendChild(menu);
@@ -668,10 +864,17 @@ function openFlagMenu(x, y, key) {
     document.addEventListener("keydown", onFlagMenuKey);
   }, 0);
 }
+$("board").addEventListener("click", (e) => {
+  const btn = e.target.closest(".rowFlagBtn");
+  if (!btn) return;
+  e.stopPropagation();
+  const r = btn.getBoundingClientRect();
+  openFlagMenu(r.left, r.bottom + 6, btn.dataset.key);
+});
 $("board").addEventListener("contextmenu", (e) => {
-  const nameEl = e.target.closest(".nm");
+  const nameEl = e.target.closest(".nmText");
   if (!nameEl) return;
-  const row = nameEl.closest(".row");
+  const row = nameEl.closest(".row2");
   if (!row) return;
   e.preventDefault();
   openFlagMenu(e.clientX, e.clientY, row.dataset.key);
@@ -757,13 +960,18 @@ $("playerSearch").addEventListener("input", () => {
 
 // ---------- init: restore settings, then load the curated sources ----------
 (async function init() {
+  $("settingsBtn").innerHTML = ico("settings", { size: 15 });
+  $("openManager").innerHTML = ico("external-link", { size: 13 }) + "Manager";
+  $("connectBtn").innerHTML = ico("unplug", { size: 13, color: "var(--on-accent)" }) + "Sync";
+  $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refresh now";
+
   const v = await chrome.storage.local.get(["detectedDraftId", "savedDraftId", K_ROSTER]);
   const id = v.detectedDraftId || v.savedDraftId;
   if (id) {
     $("draftId").value = id;
-    $("status").textContent = v.detectedDraftId
-      ? "Draft detected from your open Sleeper tab. Hit SYNC."
-      : "Restored last draft ID. Hit SYNC.";
+    setStatus("", v.detectedDraftId
+      ? "Draft detected from your open Sleeper tab. Hit Sync."
+      : "Restored last draft ID. Hit Sync.");
   }
   if (v[K_ROSTER] != null) {
     myRosterId = Number(v[K_ROSTER]);
