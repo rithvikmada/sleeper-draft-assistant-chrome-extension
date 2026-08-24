@@ -212,15 +212,17 @@ function renderBest() {
   }).join("");
 }
 
-// Position rank ("RB6", "WR12") among currently-available players at that
-// position — computed from the full (unfiltered) consensus so it doesn't
-// jump around as the position filter is toggled. "Available" excludes both
-// synced and manual crossouts, matching how the rest of the board treats
-// "gone".
+// Position rank ("RB6", "WR12") — each player's FIXED slot in the blended
+// rankings at their position, from the full consensus (unfiltered, and
+// deliberately including taken/crossed-off players). Not recomputed to only
+// count who's still available: a drafted player keeps the slot they had, so
+// a visible run like RB3, RB6, RB7 (RB4/RB5 gone) tells you at a glance how
+// many were taken at that position, instead of the numbering silently
+// closing the gap and relabeling RB6 as RB4 the moment RB4/RB5 come off the
+// board.
 function computePosRanks(allRows) {
   const byPos = {};
   allRows.forEach((r) => {
-    if (taken[r.key] || manualTaken[r.key]) return;
     (byPos[r.pos] = byPos[r.pos] || []).push(r);
   });
   const ranks = new Map();
