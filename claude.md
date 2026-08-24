@@ -47,12 +47,25 @@ K/DST rows are dropped everywhere a source is parsed or fetched.
   Usage: `node build-fp-source.js` after replacing the source CSV. Not a live
   test suite — see Testing below.
 - `4thGo-feature-backlog.md` — the actual backlog, with sequencing notes. Don't
-  re-derive priorities from scratch; read that file.
+  re-derive priorities from scratch; read that file. **Stale as of the Stage 2
+  audit fixes below** — still says Sleeper has no ADP endpoint and that VORP
+  needs a projections source to be found; both are wrong (see "Engineering
+  audit" below). Not yet reconciled — that reconciliation was explicitly
+  deferred, so don't trust this file's premises about ADP or VORP without
+  cross-checking the sections here first.
 - `rankings-manager-prompt.md` — the **original implementation spec** for the
   Rankings Manager, from before it existed. Fully superseded by the real
   code now; kept for history only, not a live reference.
-- `test-fp-parse.js` / `test-fp-parse2.js` — disposable ad-hoc debug scripts
-  from one parser-debugging session, not a maintained test suite (see Testing).
+- `codebase-audit-prompt.md` — the original engineering-audit brief that
+  scoped the review below. Historical now — the audit it describes has run;
+  see "Engineering audit" below for what actually happened and what's left.
+- `AUDIT.md` — the Stage 1 audit report itself (33 findings, rated
+  must-fix/worth-fixing/minor-polish). Most items are now fixed — see
+  "Engineering audit" below for which. Keep it as the historical record of
+  what was found and why; don't edit findings after the fact to match fixes,
+  that's what this section of claude.md is for.
+- `test.js` — a real regression suite now (`node test.js`), not a stale
+  reference to files that don't exist. See Testing below.
 - `icon128.png` — placeholder icon.
 
 ## Sleeper's public API
@@ -401,16 +414,20 @@ Settled after using the extension in a real draft.
   `#orphansHeader` row) so it doesn't eat vertical space above the main
   player table by default; the header's count reflects how many are hidden
   by the rank cutoff so it's clear filtering happened, not that reconciliation
-  stopped working. **Important gap this creates**: because the whole section
-  hides itself (`display:none`) rather than just showing "0" when nothing
-  qualifies under the rank cutoff, a source whose EVERY mismatch happens to
-  be ranked below 150 makes the entire UNMATCHED PLAYERS section disappear
-  from the page — not just show empty. A real user hit this after importing
-  Boone/Smyth (analyst rank sources with abbreviated first names like
-  "K. Gainwell" that don't normalize-match "Kenneth Gainwell") and reported
-  "I don't see it" because the section wasn't collapsed-and-empty, it was
-  gone. See the next entry for the fix actually shipped instead of raising
-  the cutoff.
+  stopped working. **Gap fixed in the Stage 2 audit pass (see "Engineering
+  audit" below)** — this used to hide the whole section (`display:none`)
+  rather than showing "0" when nothing qualified under the rank cutoff, so a
+  source whose every mismatch happened to be ranked below 150 made the entire
+  UNMATCHED PLAYERS section disappear from the page, not just show empty. A
+  real user hit this after importing Boone/Smyth (analyst rank sources with
+  abbreviated first names like "K. Gainwell" that don't normalize-match
+  "Kenneth Gainwell") and reported "I don't see it" because the section
+  wasn't collapsed-and-empty, it was gone. `renderOrphans()` now shows the
+  section whenever 2+ sources are enabled (the same condition `findOrphans`
+  itself requires), reporting "(0)" and pointing at the right-click merge
+  path below when there's genuinely nothing to reconcile. See the next entry
+  for that right-click path, which is the OTHER fix that landed the same day
+  for the underlying "abbreviated names never match" problem.
   **Right-click "merge near matches" (2026-08-23)** — added as the fix for
   the gap above, and as a fundamentally faster path than the orphans list for
   any source with abbreviated names: right-click a player's name in the main
@@ -623,6 +640,87 @@ evidence for why. When that pass happens:
   lives in both `panel.html` and `rankings-manager.html`, kept in sync
   manually — there's no shared stylesheet (see Technical debt).
 
+## Engineering audit (ran 2026-08-23, Stage 2 in progress)
+A full engineering review ran ahead of the VORP (#8) build, per
+`codebase-audit-prompt.md`'s two-stage process. Stage 1 wrote `AUDIT.md` — 33
+findings, no code changes. Stage 2 is fixing them in small reviewable
+batches, each its own commit, pausing for confirmation between batches — see
+`AUDIT.md`'s findings index for the full list and severities.
+**Landed so far (batches 1-5 of the planned 7):**
+- **Batch 1 — stale strings, dead code, comments.** The three user-facing
+  strings still pointing at the removed side panel ("try FFC", "START A SYNC
+  IN THE SIDE PANEL", the manager's header copy) are fixed.
+  `test-fp-parse.js`/`test-fp-parse2.js` (broken one-offs, hardcoded a path
+  that no longer exists) are deleted. ~25 lines of dead CSS in
+  `rankings-manager.html` (the `.bestCard`/`.dot`/`#teamCounts` family, left
+  over from the surface split) are gone — `.posChip` was correctly identified
+  as still-live and kept.
+- **Batch 2 — silent failures made loud.** `validateParsedSource()` in
+  `shared.js` now blocks importing a ranking/ADP source whose rows have no
+  usable position — previously this "succeeded," showed a player count on
+  the chip, and the source silently contributed nothing to anything, since
+  `buildConsensus`/`buildAdpConsensus` both skip position-less rows. Same
+  function also warns (without blocking) on garbage input like a pasted HTML
+  page or a recipe. `poll()` in `panel.js` now flags when a synced draft
+  yields zero QB/RB/WR/TE picks (a wrong-sport or wrong-ID draft used to read
+  as a healthy green "LIVE — N picks synced" with nothing ever crossing off).
+  A staleness indicator (`STALE_AFTER_S`, `updateStaleness()`) turns the sync
+  line red if 30s pass with no successful poll — see the throttling note
+  below for why this was built. The Rankings Manager's 400-row table cap is
+  now disclosed instead of silently truncating. `fetchSleeperAdp()`
+  distinguishes "no ADP data published yet" from "Sleeper renamed the
+  field" (previously both produced the same misleading message), and flags
+  an implausibly small result. The unmatched-players section no longer hides
+  itself when nothing clears the rank cutoff — see the correction above.
+- **Batch 3 — HTML escaping.** `esc()` in `shared.js`, applied at every
+  interpolation of a name, source name, team, tier, player key, or API value
+  across all three files (~46 sites). **Not an XSS fix** — MV3's
+  `script-src 'self'` already blocks inline scripts/handlers, so injected
+  markup could never execute — this is a rendering-integrity fix: a name
+  containing `<b>` or a source name breaking out of a `title="..."`
+  attribute used to garble the board and could break the `data-key`
+  attribute crossouts depend on. Verified in a browser, before/after: 2
+  injected elements → 0, 3 injected attributes (including a live `onx="1"`)
+  → 0, with `data-key`/`data-name` still round-tripping exactly.
+- **Batch 4 — math and storage robustness.** `median()` coerced numeric
+  strings via string concatenation instead of arithmetic
+  (`median([1,"3"])` was `6.5`, not `2`) — fixed, and now total (always
+  returns a Number or null). `usableSources()` normalizes a corrupted stored
+  source (missing/null/non-array `players`) instead of letting
+  `buildConsensus` throw and blank the board on every load with no way back
+  short of DevTools. The `suppressEcho`/`suppressStorageEcho` booleans (one
+  per surface, each guarding all six storage keys) are replaced by
+  `makeEchoGuard()` — per-key, so saving sources in the manager can no
+  longer swallow a genuine live-pick update from the board. `persistDraftState`
+  now skips the write when nothing actually changed, which stops the manager
+  rebuilding its full table every ~3s all draft (`updatedAt` used to change on
+  every write regardless). Both surfaces' `renderAll()` now catch and show a
+  readable recovery message instead of a blank page if a render does fail.
+- **Batch 5 — `test.js`.** A real regression suite (`node test.js`, 56
+  checks, no dependencies) replacing what was previously just a note that no
+  tests exist. Covers the parser against real bundled data plus the garbage
+  cases above, `median`'s fix, `buildConsensus`'s position-only isolation and
+  missing-source handling, `buildValueComparison`'s sign convention,
+  `findNearMatchOrphans`'s ambiguity rule, and the echo guard. Deliberately
+  not a full sweep — see AUDIT.md §11a and the file's own header comment for
+  why it leans on real bundled data rather than synthetic fixtures.
+- **The must-fix that was a live question, not a code fix, is closed.**
+  `AUDIT.md` §11g flagged a real risk: Chrome throttles JS timers in occluded
+  windows, and the board window sits behind the Sleeper tab during a real
+  draft. Tested directly (2026-08-23): the poll counter went from #9 to #213
+  in ~10 minutes — 204 polls at ~2.9s each, the full un-throttled rate. Not
+  throttled. The staleness indicator above was still built, since it makes
+  any future stall visible regardless of cause, but the conditional must-fix
+  itself is withdrawn.
+- **Not yet done — batch 6 (docs) was explicitly skipped, batch 7
+  (duplication/naming) is next.** `4thGo-feature-backlog.md` is therefore
+  **still wrong** about the ADP endpoint and VORP's data source (see the file
+  structure note above) — the second must-fix from `AUDIT.md` is NOT closed.
+  No README exists yet. `manifest.json` is still `1.0.0`. Batch 7 (shared CSS
+  token file, shared `toast()`/`activeSources()`/filter-trio helpers, the
+  `builtin` → `undeletable` rename) is smaller than originally scoped, since
+  batch 4 already moved `usableSources`/`makeEchoGuard` into `shared.js`.
+
 ## Feature backlog
 Full list with sequencing lives in `4thGo-feature-backlog.md`. Don't re-derive
 priorities from scratch. Notable status since it was last summarized here:
@@ -739,24 +837,50 @@ two related tools for this — use the right one:
     in the ADP section above) — this project's league has none.
 
 ## Testing
-**There is no automated test suite in this repo currently** — earlier notes in
-this file referenced `test.js`/`widget-test.js`/`flag-test.js`/
-`merge-test-final.js`, but those files were never committed and don't exist.
-Don't assume they can be run. What actually exists:
-- `test-fp-parse.js` / `test-fp-parse2.js` — disposable one-off scripts from a
-  single CSV-parsing debug session (hardcode an old absolute path,
-  `/Users/rithvikmada/Repos/sleeper-draft-ext 4/` — stale, don't reuse as-is).
-- Verification during this project has mostly been: (a) real unpacked-extension
-  testing by the user against live/mock Sleeper drafts, and (b) for grid/layout
-  bugs specifically, an isolated static-HTML harness measured via
-  `getBoundingClientRect()` (see "Design & alignment lessons").
+**`test.js` is a real, committed regression suite now (added in the
+Stage 2 audit, 2026-08-23)** — `node test.js`, 56 checks, no dependencies,
+no build step. Earlier notes in this file referenced `test.js`/`widget-test.js`/
+`flag-test.js`/`merge-test-final.js` as never having been committed; that's
+still true of the other three, but `test.js` itself is real now and should be
+run after any change to `shared.js`, especially `parseRankings`,
+`buildConsensus`, or `median`. It loads `shared.js` (plus `rankings.js` /
+`fp-rankings.js`) via Node's `vm` module as a classic script, the same way the
+extension itself loads it — so it only tests what actually ships. Deliberately
+not a coverage sweep; it covers what has actually broken in this project's
+history (three separate real parser bugs, `median`'s numeric-string bug, the
+position-only isolation fix, the value-comparison sign convention) plus what
+the Stage 1 audit found being silently accepted (garbage CSV imports). See the
+file's own header comment and `AUDIT.md` §11a for the full reasoning,
+including why it leans on the real bundled rankings data rather than
+synthetic fixtures — this project's own tiering-rewrite failure (a synthetic
+simulation passed, real data didn't) is the cautionary tale behind that
+choice.
+- `test-fp-parse.js` / `test-fp-parse2.js` — **deleted** in the Stage 2 audit
+  (batch 1). They were broken one-offs (hardcoded a path that no longer
+  exists, and `test-fp-parse.js` called `.length` on `parseRankings()`'s
+  `{players, warnings}` object, so it could never have printed a correct
+  count) and a tracked `test-*.js` file implied a suite that didn't exist.
+- Verification during this project has otherwise mostly been: (a) real
+  unpacked-extension testing by the user against live/mock Sleeper drafts,
+  (b) for grid/layout bugs specifically, an isolated static-HTML harness
+  measured via `getBoundingClientRect()` (see "Design & alignment lessons"),
+  and (c), new in the Stage 2 audit, loading the real `panel.html`/
+  `rankings-manager.html` against a stubbed `chrome.storage` served over
+  `python3 -m http.server`, for verifying actual rendered DOM/attributes
+  (used to confirm the escaping fixes and the render-guard recovery path).
 - Mock drafts (bot-filled) work identically to real drafts for API purposes and
   pick much faster — good for stress-testing polling/matching logic.
-- Still not verified against a real draft: the new single-window icon-click/
-  focus behavior (does clicking the icon while the window is already open
-  and behind other windows actually bring it to front on this OS/Chrome
-  version?), and the cache-expiry countdown/fresh-vs-cached toast against a
-  real `Age` header over a full draft.
+- **The single-window icon-click/focus behavior has now been indirectly
+  verified**: a real ten-minute poll test (see "Engineering audit" above)
+  confirmed the poll counter kept advancing at the full ~3s rate the whole
+  time, which rules out Chrome throttling this window's timers while it's
+  occluded — the scenario that behavior test was actually worried about.
+  Still not directly verified: whether a click on the toolbar icon reliably
+  brings the window to front on every OS/Chrome version.
+- Still not verified against a real draft: the cache-expiry countdown/
+  fresh-vs-cached toast against a real `Age` header over a full draft, and
+  the new staleness indicator (`STALE_AFTER_S`) actually firing during a
+  genuine stall rather than only in the manual test used to build it.
 
 ## Build/deployment workflow
 - All edits happen directly on the local filesystem Chrome's "Load unpacked"
