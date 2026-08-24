@@ -47,18 +47,8 @@ K/DST rows are dropped everywhere a source is parsed or fetched.
   Usage: `node build-fp-source.js` after replacing the source CSV. Not a live
   test suite — see Testing below.
 - `4thGo-feature-backlog.md` — the actual backlog, with sequencing notes. Don't
-  re-derive priorities from scratch; read that file. **Stale as of the Stage 2
-  audit fixes below** — still says Sleeper has no ADP endpoint and that VORP
-  needs a projections source to be found; both are wrong (see "Engineering
-  audit" below). Not yet reconciled — that reconciliation was explicitly
-  deferred, so don't trust this file's premises about ADP or VORP without
-  cross-checking the sections here first.
-- `rankings-manager-prompt.md` — the **original implementation spec** for the
-  Rankings Manager, from before it existed. Fully superseded by the real
-  code now; kept for history only, not a live reference.
-- `codebase-audit-prompt.md` — the original engineering-audit brief that
-  scoped the review below. Historical now — the audit it describes has run;
-  see "Engineering audit" below for what actually happened and what's left.
+  re-derive priorities from scratch; read that file. Note: some items (ADP
+  endpoint, VORP) are now unblocked (see Feature backlog section below).
 - `AUDIT.md` — the Stage 1 audit report itself (33 findings, rated
   must-fix/worth-fixing/minor-polish). Most items are now fixed — see
   "Engineering audit" below for which. Keep it as the historical record of
@@ -595,50 +585,78 @@ Settled after using the extension in a real draft.
      Picks call now correctly surfaces its own WR ranking instead of going
      blank.
 
-## Design language
-Dark "stadium/scoreboard" theme, not a generic AI-template look:
-- Background near-black (`#0B0D08`), panel surfaces `#14170F`, hairlines
-  `#22251B`/`#2A2E22`.
-- Monospace (JetBrains Mono) for data/labels, Inter for body text.
-- Position colors: QB gold `#F5C242`, RB green `#5FCF8A`, WR blue `#5FA8E8`,
-  TE pink `#E88AC9`.
-- Tiers are numbered 1 (best) through 16 (not letters — FantasyPros' numeric
-  tier column lines up directly), colored gold→orange→green→blue→purple→gray
-  as they descend.
-- Preserve/extend this theme in future design work — don't replace it.
+## Design language (redesigned 2026-08-24)
+Imported from a Claude Design system ("4th&Go Draft Board Redesign" project):
+dark ink/chalk theme with field-green undertones, deliberately not a generic
+template. The board window (`panel.html`) got a complete visual redesign via
+this imported system; the Rankings Manager (`rankings-manager.html`) kept the
+original "turf" theme untouched.
 
-## Design & alignment lessons (read before touching board/column layout again)
-The ADP-columns-in-the-side-panel work went through five rounds of alignment
-bugs before it was actually right, each a genuinely different root cause
-(padding mismatch → independent `auto`-track sizing between two separate grid
-containers → a wrapper div silently overriding alignment). **The user has
-explicitly flagged that the current layout should be revisited in a future
-full design pass**, built with the complete picture of what the board needs to
-show (rank, name, N ADP columns, value bar, pos chip, and whatever gets added
-next) rather than bolted on incrementally — this file's own history is the
-evidence for why. When that pass happens:
-- Don't eyeball alignment fixes. Build the exact markup+CSS in an isolated
-  static HTML file, serve it locally (`python3 -m http.server`), open in a
-  real browser, and read `getBoundingClientRect()` values for whatever needs
-  to line up. Screenshot only as a final sanity check, not as the verification
-  method.
-- Never mix an `auto`-sized grid track with content that's empty in one
-  context (e.g. a header/label row) and non-empty in another (a real data
-  row), across two separate grid containers meant to align. Fixed lengths (or
-  matching `minmax`) on every track are the only way to guarantee two
-  independent grid containers land on the same column boundaries.
-- Full source-name labels (vs. 2-letter tags) were tried and measurably don't
-  fit at the panel's default ~380px width without crushing the name column to
-  1-2 characters — the math: content width 340px, minus rank (34px) + pos-chip
-  (36px) + gaps (40px) leaves ~230px for [name + N ADP cols + value bar], and
-  the name needs the majority of that. This math was specific to the docked
-  side panel, which no longer exists (see "Window architecture") — the board
-  now always runs in a user-resizable window, so this constraint doesn't
-  automatically apply anymore. Still worth checking actual available width
-  before adding new columns, since the window can still be resized narrow.
-- CSS for `.vbig`/`.vbig-num`/`.vbig-track`/`.vbig-fill`/`.vbadge`-family rules
-  lives in both `panel.html` and `rankings-manager.html`, kept in sync
-  manually — there's no shared stylesheet (see Technical debt).
+**Board window (panel.html) — new design tokens:**
+- Ink palette: near-black with green cast (`#070908`–`#C9D2CD`), 11 steps
+- Chalk accent: primary gold (`#FFD84D`), from muted to bright
+- Signal colors: cyan (`#22D3EE`), green (`#35D07F`), red (`#FF5A5A`), orange
+  (`#FF8A3D`), violet (`#A78BFA`)
+- Position colors: QB pink (`#F4527A`), RB green (`#35D07F`), WR cyan (`#22D3EE`),
+  TE orange (`#FF8A3D`), FLEX gold (`#FFD84D`) — matches Sleeper's own scheme
+- Typography: Chivo (sans-serif, 7 weights) for UI/labels/body, JetBrains Mono
+  (monospace) for data/ranks/ADP
+- Spacing: 4px base scale (space-1 through space-4), radius 3px–14px, shadows
+  and edges consistent
+- Icons: Lucide set (24px grid, 1.5–2px stroke, rounded caps), inlined as local
+  SVG data instead of CDN-fetched to avoid network dependency mid-draft
+
+**Rankings Manager (rankings-manager.html) — original theme unchanged:**
+- Kept the existing "turf" theme (dark stadium/scoreboard look) as-is
+- No redesign applied; continues to work exactly as before
+- Both surfaces coexist with independent stylesheets (no shared theme.css)
+- This separation was deliberate — board window needed a fresh design pass,
+  manager didn't
+
+**Design pass notes:**
+The "Design & alignment lessons" section (below) noted that the board layout
+should be "revisited in a future full design pass." That redesign happened
+2026-08-24, imported from a premade Claude Design system rather than
+hand-authored. All the grid-alignment gotchas documented there were solved
+by starting fresh with semantic HTML + CSS custom properties, rather than
+bolting columns onto the old grid incrementally.
+
+New features included in the redesign:
+- Best Picks cards now show position-rank tags (RB1, WR2) matching the board
+- ADP Value column header (was "Value"), with original green/red diverging bar
+  restored (no raw Sleeper ADP text)
+- Live-ADP blink dot: small position-colored dot pulses next to the value bar
+  when current pick has passed the baseline (FantasyPros) ADP — flags that the
+  player should've been gone but isn't
+- Position-rank tags are FIXED SLOTS (RB1, RB2, RB3...) not renumbered as
+  players are drafted — gaps in the numbering show you how many were taken at
+  that position
+- Source icon chips now render uploaded images edge-to-edge (not inset with a
+  colored border) and stay at their correct 22×19px size even with large
+  intrinsic images
+
+## Design & alignment lessons (redesign completed 2026-08-24)
+The redesign work mentioned below as "should be revisited in a future full
+design pass" was completed 2026-08-24 — the board window now imports design
+tokens from a Claude Design system and uses semantic HTML + CSS custom properties
+instead of the incremental grid-column bolting-on that caused the original
+alignment issues.
+
+**Past gotchas (for reference, now resolved):**
+The old incremental ADP-columns work went through five rounds of misalignment
+bugs (padding mismatch → independent `auto`-track sizing between grid containers
+→ a wrapper div silently overriding alignment). These are no longer relevant
+after the 2026-08-24 redesign, but documented here for understanding why a
+fresh layout was needed rather than patching the old one:
+- Never mix `auto`-sized grid tracks with content that's empty in one context
+  and non-empty in another, across two separate grid containers. Fixed lengths
+  (or matching `minmax`) are the only way to guarantee alignment.
+- Eyeballing is insufficient for column alignment — verify with
+  `getBoundingClientRect()` in a local test harness (`python3 -m http.server`),
+  not screenshots.
+- Side-panel width constraints (old: ~380px fixed panel, ~230px for content)
+  no longer apply — the board runs in a user-resizable window now. Still worth
+  checking actual width before adding new columns, since users can resize narrow.
 
 ## Engineering audit (ran 2026-08-23, Stage 2 in progress)
 A full engineering review ran ahead of the VORP (#8) build, per
