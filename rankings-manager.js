@@ -20,7 +20,7 @@ let showTaken = false; // independent toggle, layered on top of posFilter — no
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let soloSource = null;   // when set, the whole page shows just this source
 let editingAdp = false;  // the add/import modal is in "ADP" mode
-let suppressEcho = false;
+const echo = makeEchoGuard(); // per-key — saving sources must not swallow a live pick update (see shared.js)
 
 // ---------- derived draft state ----------
 function takenMap() {
@@ -30,6 +30,16 @@ function takenMap() {
     if (!m.has(k)) m.set(k, { byMe: false, pickNo: null, manual: true });
   });
   return m;
+}
+
+// Storage writes were fire-and-forget: a failure showed up only as an
+// unhandled rejection in a console nobody has open, while the UI carried on
+// as if the change had been saved.
+function reportSaveFailure(what) {
+  return (e) => {
+    console.error(`[4th&Go] couldn't save ${what}`, e);
+    toast(`Couldn't save ${what} — your change may not stick.`, true);
+  };
 }
 
 function toast(msg, isError = false) {
@@ -189,7 +199,7 @@ async function fetchSleeperAdp() {
       .map((p) => ({
         name: `${p.player.first_name} ${p.player.last_name}`,
         pos: p.player.position,
-        rank: p.stats.adp_ppr,
+        rank: Number(p.stats.adp_ppr), // coerced at the boundary — see median() in shared.js
       }));
     // Two very different failures used to share one message. If Sleeper ever
     // renames adp_ppr, every player fails the shape guard and the old code
@@ -310,8 +320,7 @@ function toggleFlag(key, kind) {
   if (next[key] === kind) delete next[key];
   else next[key] = kind;
   flags = next;
-  suppressEcho = true;
-  saveFlags(flags).finally(() => { suppressEcho = false; });
+  echo.write(K_FLAGS, () => saveFlags(flags)).catch(reportSaveFailure("flags"));
   renderAll();
 }
 
@@ -437,8 +446,7 @@ function renderMergeCandidates(filterText) {
       const next = { ...merges };
       next[mergingOrphanKey] = canonicalKey;
       merges = next;
-      suppressEcho = true;
-      saveMerges(merges).finally(() => { suppressEcho = false; });
+      echo.write(K_MERGES, () => saveMerges(merges)).catch(reportSaveFailure("merges"));
       toast(`Merged "${orphanName}" into "${row.dataset.name}".`);
       closeMergeModal();
       renderAll();
@@ -511,8 +519,7 @@ function openNearMergeMenu(x, y, name, pos) {
       const next = { ...merges };
       checked.forEach((m) => { next[m.key] = canonicalKey; });
       merges = next;
-      suppressEcho = true;
-      saveMerges(merges).finally(() => { suppressEcho = false; });
+      echo.write(K_MERGES, () => saveMerges(merges)).catch(reportSaveFailure("merges"));
       toast(`Merged ${checked.length} player${checked.length > 1 ? "s" : ""} into "${name}".`);
       closeNearMergeMenu();
       renderAll();
@@ -540,11 +547,23 @@ $("tbl").addEventListener("contextmenu", (e) => {
 // (they render from renderBestPicksWidget/renderTeamCountsWidget in shared.js,
 // so re-adding them here later is just a mount point away).
 function renderAll() {
-  const rows = buildConsensus(activeSources(), merges);
-  renderSyncLine();
-  renderSourceBar();
-  renderTable(rows);
-  renderOrphans();
+  try {
+    const rows = buildConsensus(activeSources(), merges);
+    renderSyncLine();
+    renderSourceBar();
+    renderTable(rows);
+    renderOrphans();
+  } catch (e) {
+    // Same reasoning as panel.js's renderAll: fail legibly and leave a way
+    // out, rather than showing an empty page on every load.
+    console.error("[4th&Go] render failed", e);
+    $("tbl").innerHTML =
+      `<tr><td class="empty" colspan="99" style="color:var(--red)">
+        <b>Couldn't draw the table.</b><br>${esc(e.message)}<br>
+        <span style="color:var(--dim2)">One of your saved sources may be damaged — try removing the most
+        recently added one from the chips above.</span>
+      </td></tr>`;
+  }
 }
 
 // ---------- manual crossouts ----------
@@ -557,21 +576,16 @@ function toggleManual(key) {
   const set = new Set(draft.manualKeys || []);
   set.has(key) ? set.delete(key) : set.add(key);
   draft.manualKeys = [...set];
-  suppressEcho = true;
-  saveDraftState(draft).finally(() => { suppressEcho = false; });
+  echo.write(K_DRAFT, () => saveDraftState(draft)).catch(reportSaveFailure("crossouts"));
   renderAll();
 }
 
 async function persistSources() {
-  suppressEcho = true;
-  await saveSources(sources);
-  suppressEcho = false;
+  await echo.write(K_SOURCES, () => saveSources(sources)).catch(reportSaveFailure("sources"));
 }
 
 async function persistAdpSources() {
-  suppressEcho = true;
-  await saveAdpSources(adpSources);
-  suppressEcho = false;
+  await echo.write(K_ADP, () => saveAdpSources(adpSources)).catch(reportSaveFailure("ADP sources"));
 }
 // Adds a new ADP source, or updates one in place (by fixed id) if it already
 // exists — used by the live-fetch buttons so re-clicking "refresh" updates
@@ -860,11 +874,11 @@ $("playerSearch").addEventListener("input", () => {
 // ---------- live sync with the board window ----------
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-  if (changes[K_DRAFT] && !suppressEcho) {
+  if (changes[K_DRAFT] && !echo.isEcho(K_DRAFT)) {
     draft = changes[K_DRAFT].newValue || draft;
     renderAll();
   }
-  if (changes[K_SOURCES] && !suppressEcho) {
+  if (changes[K_SOURCES] && !echo.isEcho(K_SOURCES)) {
     sources = await loadSources();
     renderAll();
   }
@@ -873,15 +887,15 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     // position-count widget itself now lives in the board window.
     draft.myRosterId = changes[K_ROSTER].newValue;
   }
-  if (changes[K_ADP] && !suppressEcho) {
+  if (changes[K_ADP] && !echo.isEcho(K_ADP)) {
     adpSources = await loadAdpSources();
     renderAll();
   }
-  if (changes[K_FLAGS] && !suppressEcho) {
+  if (changes[K_FLAGS] && !echo.isEcho(K_FLAGS)) {
     flags = await loadFlags();
     renderAll();
   }
-  if (changes[K_MERGES] && !suppressEcho) {
+  if (changes[K_MERGES] && !echo.isEcho(K_MERGES)) {
     merges = await loadMerges();
     renderAll();
   }
@@ -907,9 +921,7 @@ async function ensureBuiltinSources() {
     icon: existing ? existing.icon : undefined,
   });
   sources = [...sources.filter((s) => s.id !== "fp"), fpSource];
-  suppressEcho = true;
-  await saveSources(sources);
-  suppressEcho = false;
+  await echo.write(K_SOURCES, () => saveSources(sources)).catch(reportSaveFailure("sources"));
 }
 
 // ---------- init ----------

@@ -384,10 +384,36 @@ function validateParsedSource(players, warnings = []) {
   };
 }
 
+// A stored source whose `players` is missing or isn't an array used to throw
+// straight out of buildConsensus ("Cannot read properties of undefined"), and
+// because that call sits under every render, the board went blank on EVERY
+// load with no way back that didn't involve DevTools. Normalizing once, where
+// source lists enter the math, keeps the source visible (its chip shows 0
+// players, which is diagnosable and fixable through the edit modal) instead of
+// taking the whole surface down.
+function usableSources(sources) {
+  return (sources || [])
+    .filter((s) => s && typeof s === "object")
+    .map((s) => (Array.isArray(s.players) ? s : { ...s, players: [] }));
+}
+
 // ---------- consensus ----------
+// Coerces to Number explicitly, which is not fussiness. Callers filter with
+// the loose global isFinite(), and isFinite("3") is true — so a numeric STRING
+// could reach this function, and then:
+//   median([1, "3"])      -> 6.5   because 1 + "3" is "13", not 4
+//   median([1, "3", "5"]) -> "3"   a string, whose .toFixed() then throws and
+//                                  blanks the whole board on the next render
+// The first is the worse one: a blended rank that is simply wrong while
+// looking entirely plausible, with nothing on screen to hint at it.
+//
+// Coerces rather than discards, matching how forgiving the rest of the import
+// path is — a rank that arrived as "3" should count as 3, not quietly stop
+// counting. Non-numeric values are dropped so this is total: it always returns
+// a Number or null, whatever it is handed.
 function median(nums) {
-  if (!nums.length) return null;
-  const s = [...nums].sort((a, b) => a - b);
+  const s = (nums || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!s.length) return null;
   const mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
@@ -397,7 +423,7 @@ function median(nums) {
 // A player missing from a source simply doesn't contribute — they are NOT
 // treated as unranked/infinity, which would unfairly bury them.
 function buildConsensus(sources, merges = {}) {
-  const enabled = sources.filter((s) => s.enabled);
+  const enabled = usableSources(sources).filter((s) => s.enabled);
   // Position-only sources (Rank/Tier only meaningful within one position,
   // e.g. a QB-only or RB-only guide) never touch rank/tier blending —
   // mixing a positional rank or tier into the cross-position math would
@@ -788,7 +814,7 @@ async function saveAdpSources(list) {
 // blending rule as buildConsensus, minus tiers (ADP has no tier concept).
 // Returns Map<playerKey, { values: {sourceId: rank}, median }>.
 function buildAdpConsensus(adpSources) {
-  const enabled = (adpSources || []).filter((s) => s.enabled);
+  const enabled = usableSources(adpSources).filter((s) => s.enabled);
   const map = new Map();
   enabled.forEach((src) => {
     src.players.forEach((p) => {
@@ -817,7 +843,7 @@ function buildAdpConsensus(adpSources) {
 // user only has a FantasyPros import enabled alongside Sleeper, without
 // needing to manually designate a "baseline" source.
 function buildValueComparison(adpSources) {
-  const enabled = (adpSources || []).filter((s) => s.enabled);
+  const enabled = usableSources(adpSources).filter((s) => s.enabled);
   const sleeper = enabled.find((s) => s.id === "adp_sleeper_live");
   const baselineSources = enabled.filter((s) => s.id !== "adp_sleeper_live");
   const map = new Map(); // key -> { sleeperAdp, baselineAdp, delta }
@@ -907,6 +933,49 @@ function renderValueBadge(delta, baselineAdp) {
   </span>`;
 }
 
+// ---------- storage echo guard ----------
+// Both surfaces write the same chrome.storage.local keys and both listen for
+// changes, so each has to ignore the change event its own write produces.
+// That was a single boolean per surface — which meant that while the manager
+// was saving its sources, it also dropped GENUINE updates to every other key,
+// including live picks arriving from the board window. A missed pick update
+// isn't corrected until the next write, which during a real draft can be a
+// minute away, and nothing on screen says the tab went stale.
+//
+// Tracking keys individually fixes that: writing sources only ever suppresses
+// the sources event. The count (rather than a flag) matters because writes to
+// one key can overlap — persistDraftState can fire again before the previous
+// one settles, and a plain boolean would be cleared by whichever finished
+// first, un-guarding the other.
+//
+// NOTE — still unresolved: this assumes chrome.storage.onChanged fires before
+// the set() promise resolves, which Chrome does not document. If it fires
+// after, the guard never matches and each surface simply re-reads and
+// re-renders its own write: harmless, but wasted work. Confirming it needs a
+// loaded extension (log inside the listener and check whether it runs while a
+// key is still marked pending). If it turns out to fire after, switch this to
+// comparing the incoming newValue against what the surface already holds,
+// which doesn't depend on ordering at all.
+function makeEchoGuard() {
+  const pending = new Map(); // storage key -> number of our writes still in flight
+  return {
+    // Marks `keys` as ours for the duration of `fn()`, whatever the outcome.
+    async write(keys, fn) {
+      const list = [].concat(keys);
+      list.forEach((k) => pending.set(k, (pending.get(k) || 0) + 1));
+      try {
+        return await fn();
+      } finally {
+        list.forEach((k) => {
+          const n = (pending.get(k) || 1) - 1;
+          if (n <= 0) pending.delete(k); else pending.set(k, n);
+        });
+      }
+    },
+    isEcho(key) { return pending.has(key); },
+  };
+}
+
 // ---------- shared draft state ----------
 // panel.js owns writing this (it's the surface that polls Sleeper).
 // rankings-manager.js reads it and can add/remove manual crossouts.
@@ -953,7 +1022,7 @@ function applyMerge(key, merges) {
 // Find orphans: players appearing in only 1 source (candidates for merging).
 // Returns { sourceId: [playerKeys...], ... } grouped by source they appear in.
 function findOrphans(sources, merges = {}) {
-  const enabled = sources.filter((s) => s.enabled);
+  const enabled = usableSources(sources).filter((s) => s.enabled);
   if (enabled.length < 2) return {}; // No merges needed with 0-1 sources.
 
   const sourceMap = new Map(); // key → Set of sourceIds it appears in
@@ -998,7 +1067,7 @@ function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {})
   const lastName = tokens[tokens.length - 1];
   const firstInitial = normed.charAt(0);
   const matches = [];
-  sources.filter((s) => s.enabled).forEach((src) => {
+  usableSources(sources).filter((s) => s.enabled).forEach((src) => {
     // If this source already resolves (directly or via an existing merge) to
     // the canonical key, there's nothing to find here.
     const hasExact = src.players.some(

@@ -43,7 +43,7 @@ function matchPick(first, last, pos, index) {
 let taken = {};        // playerKey -> { byMe: bool, pickNo: number|null }
 let manualTaken = {};  // playerKey -> true, clicks made by hand (kept separate so a re-poll doesn't wipe them)
 let myRosterId = null; // user-entered draft slot / roster id — drives the "mine" highlight and the manager's position counts
-let suppressStorageEcho = false; // ignore the onChanged event fired by our own write
+const echo = makeEchoGuard(); // per-key, so writing flags can't also swallow a live pick update
 let pollTimer = null;
 let posFilter = "ALL";
 // Most filter values are a single position, matched exactly. A grouped filter
@@ -291,12 +291,30 @@ function renderRecommendations() {
   renderSoloBar();
 }
 
+// A throw anywhere in here used to propagate out to whatever called it. From
+// poll() that meant a rendering bug was reported as "Sync error", pointing the
+// user at their draft ID for a problem that had nothing to do with Sleeper;
+// from init() it meant a blank window with no explanation at all. Catching it
+// keeps the failure legible and, crucially, keeps it recoverable — the
+// settings drawer and the Manager button stay usable, so there's a way out
+// that doesn't involve opening DevTools mid-draft.
 function renderAll() {
-  renderBest();
-  renderBoard();
-  renderRecommendations();
-  const total = Object.keys(taken).length + Object.keys(manualTaken).length;
-  $("pickCounter").textContent = total ? `${total} OFF BOARD` : "";
+  try {
+    renderBest();
+    renderBoard();
+    renderRecommendations();
+    const total = Object.keys(taken).length + Object.keys(manualTaken).length;
+    $("pickCounter").textContent = total ? `${total} OFF BOARD` : "";
+  } catch (e) {
+    console.error("[4th&Go] render failed", e);
+    $("board").innerHTML =
+      `<div style="color:var(--red);padding:24px;line-height:1.6;font-size:12px">
+        <b>Couldn't draw the board.</b><br>${esc(e.message)}<br><br>
+        <span style="color:var(--dim2)">Your saved ranking data may be damaged. Open the Rankings Manager
+        (↗ MANAGER, top right) and remove or re-upload the most recently changed source.
+        Syncing and manual crossouts still work.</span>
+      </div>`;
+  }
 }
 
 function toast(msg, isError = false) {
@@ -316,15 +334,42 @@ function manualKeys() {
   return Object.keys(manualTaken).filter((k) => manualTaken[k]);
 }
 
+// Every successful poll used to write this unconditionally, and saveDraftState
+// always stamps a fresh updatedAt — so the value always differed, so
+// storage.onChanged always fired, so the Rankings Manager rebuilt its whole
+// source bar and ~400-row table every 3 seconds for the entire draft even when
+// no pick had come in. That destroys any text selection in the table and burns
+// CPU on a laptop for a page nobody is looking at. Writing only on an actual
+// change fixes it at the source rather than making the manager smarter.
+let lastPersistedSig = null;
+function draftStateSignature(draftId, picks) {
+  const last = picks.length ? picks[picks.length - 1].pickNo : "";
+  return [draftId, picks.length, last, manualKeys().sort().join(","), myRosterId].join("|");
+}
+
 function persistDraftState(draftId, sharedPicks) {
-  suppressStorageEcho = true;
-  saveDraftState({
-    draftId: draftId || currentDraftId,
-    picks: sharedPicks !== undefined ? sharedPicks : lastSharedPicks,
-    manualKeys: manualKeys(),
-    myRosterId,
-  }).finally(() => { suppressStorageEcho = false; });
+  const picks = sharedPicks !== undefined ? sharedPicks : lastSharedPicks;
+  const id = draftId || currentDraftId;
   if (sharedPicks !== undefined) lastSharedPicks = sharedPicks;
+
+  const sig = draftStateSignature(id, picks);
+  if (sig === lastPersistedSig) return; // nothing actually changed — don't wake the other surface
+  // Claimed BEFORE awaiting the write, not after. Recording it on success
+  // instead left a window in which several calls landing before the first
+  // write resolved all saw the old signature and all wrote — which is exactly
+  // what a burst of activity looks like. Cleared on failure so the next call
+  // retries rather than assuming a write that never happened.
+  lastPersistedSig = sig;
+  echo.write(K_DRAFT, () =>
+    saveDraftState({ draftId: id, picks, manualKeys: manualKeys(), myRosterId })
+  ).catch((e) => {
+    // Storage writes were previously fire-and-forget with no catch at all, so
+    // a failure surfaced only as an unhandled rejection in a console nobody
+    // has open mid-draft.
+    lastPersistedSig = null;
+    console.error("[4th&Go] couldn't save draft state", e);
+    toast("Couldn't save draft state — the Rankings Manager may be out of date.", true);
+  });
 }
 
 // The manager can cross players off too — mirror its manual list back into ours.
@@ -337,7 +382,7 @@ function applyManualKeysFromStorage(keys) {
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-  if (changes[K_DRAFT] && !suppressStorageEcho) {
+  if (changes[K_DRAFT] && !echo.isEcho(K_DRAFT)) {
     const v = changes[K_DRAFT].newValue;
     if (v) applyManualKeysFromStorage(v.manualKeys);
   }
@@ -353,7 +398,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     adpSources = await loadAdpSources();
     renderAll(); // board's per-row ADP columns depend on adpSources too, not just the widgets
   }
-  if (changes[K_FLAGS]) {
+  if (changes[K_FLAGS] && !echo.isEcho(K_FLAGS)) {
     flags = await loadFlags();
     renderAll();
   }
@@ -623,7 +668,8 @@ function setFlag(key, kind) {
   if (kind === null || next[key] === kind) delete next[key];
   else next[key] = kind;
   flags = next;
-  saveFlags(flags);
+  echo.write(K_FLAGS, () => saveFlags(flags))
+    .catch((e) => { console.error("[4th&Go] couldn't save flags", e); toast("Couldn't save that flag.", true); });
   renderAll();
 }
 function openFlagMenu(x, y, key) {
