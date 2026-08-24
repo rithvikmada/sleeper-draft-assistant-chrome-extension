@@ -46,7 +46,8 @@ let myRosterId = null; // user-entered draft slot / roster id — drives the "mi
 const echo = makeEchoGuard(); // per-key, so writing flags can't also swallow a live pick update
 let pollTimer = null;
 let posFilter = "ALL";
-// POS_FILTER_GROUPS / filterMatchesPos now live in shared.js, shared with rankings-manager.js.let lastPickCount = 0;
+// POS_FILTER_GROUPS / filterMatchesPos now live in shared.js, shared with rankings-manager.js.
+let lastPickCount = 0;
 let unmatched = [];
 let currentDraftId = null;
 let inFlight = false;

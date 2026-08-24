@@ -41,7 +41,7 @@ function reportSaveFailure(what) {
 }
 
 // ---------- rendering ----------
-// activeSources(sources, soloSource) now lives in shared.js — call as activeSources(sources, soloSource).
+// activeSources() now lives in shared.js — call as activeSources(sources, soloSource).
 
 function renderSyncLine() {
   const n = draft.picks.length;
