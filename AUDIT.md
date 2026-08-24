@@ -941,11 +941,16 @@ If that happens, the board silently falls behind by up to a minute during the
 part of the draft where seconds matter, and the only visible clue is the
 `checked 8:47:03 (#412)` timestamp in small grey text, which nobody watches.
 
-**I am flagging this as a question, not a finding** — it depends on Chrome
-version, OS, and whether a `type:"popup"` window occluded by another window
-actually reports itself hidden. **It's a 5-minute test:** start a mock draft,
-sync, bury the board window behind another window for ten minutes, then bring it
-forward and look at whether the check counter kept climbing at ~3s intervals.
+> **TESTED 2026-08-23 — not throttled. This finding is closed.**
+> Over roughly ten minutes the check counter went from **#9 to #213** — 204
+> polls, about **2.9 seconds each**, which is the full `FAST_INTERVAL_MS` rate.
+> Intensive throttling would have produced ~10 polls (about `#19`) over the same
+> span. Chrome is not throttling this window's timers.
+>
+> The staleness indicator was still built (below), because it costs almost
+> nothing and converts *every* silent-stall failure mode into a visible one —
+> including causes nobody has thought of yet. But it is no longer urgent, and
+> the conditional must-fix is withdrawn.
 
 If it does throttle, the fix is small and worth doing regardless: listen for
 `document.visibilitychange`, force an immediate poll when the window becomes
@@ -966,13 +971,13 @@ step.
 
 ## Findings index
 
-**must-fix (3)**
+**must-fix (2, plus 1 closed by testing)**
 
 | § | Finding |
 |---|---|
 | 4a | A source imported with no position column is silently inert — import reports success, contributes nothing |
 | 7b | `4thGo-feature-backlog.md` contradicts reality, including telling the next build that Sleeper has no ADP endpoint |
-| 11g | *(conditional)* Timer throttling of the background board window — **verify first**; if real, it's the worst failure mode here |
+| ~~11g~~ | ~~Timer throttling of the background board window~~ — **TESTED AND CLOSED**: 204 polls in ~10 min (#9 → #213) is the full 3s rate, not throttled |
 
 **worth-fixing (20)**
 

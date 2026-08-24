@@ -300,6 +300,64 @@ function parseRankings(text) {
   return { players, warnings };
 }
 
+// Sanity-check a parse result BEFORE it becomes a real source.
+//
+// parseRankings is deliberately forgiving — that's why real exports import
+// without reformatting — but forgiving also means a recipe, a copied HTML
+// page, or a grid of bare numbers all "parse" into players. Verified in the
+// Stage 1 audit: pasting an HTML page yields one player literally named
+// "<!DOCTYPE html>...", and it saves without complaint.
+//
+// Position is the load-bearing field. buildConsensus and buildAdpConsensus
+// both open their player loops with `if (!p.pos) return;`, so a row without a
+// position contributes NOTHING — no rank vote, no board row, no ADP value.
+// A source where no row has a position is therefore 100% inert while still
+// showing a confident player count on its chip, which is exactly the kind of
+// silent failure you can't debug with a pick clock running.
+//
+// Returns { level: "ok"|"warn"|"error", message }. Callers block on "error"
+// and show "warn" in the same red-ish note area without blocking — the rule
+// is: refuse only what is PROVABLY useless, warn loudly about what merely
+// looks wrong, since a legitimate-but-odd export shouldn't be unimportable.
+const IMPORT_LOW_POS_COVERAGE = 0.5; // below this share of rows having a position, it's probably the wrong file
+function validateParsedSource(players, warnings = []) {
+  const total = players.length;
+  if (!total) return { level: "error", message: "Couldn't parse any players. " + warnings.join(" ") };
+
+  const withPos = players.filter((p) => p.pos).length;
+  if (!withPos) {
+    return {
+      level: "error",
+      message:
+        `None of these ${total} rows have a position (QB/RB/WR/TE), so none of them can be ` +
+        `matched to players or appear anywhere — the source would import but do nothing. ` +
+        `Add a Position column, or check you pasted the right file.`,
+    };
+  }
+
+  const ignored = total - withPos;
+  const sample = players.filter((p) => p.pos).slice(0, 3)
+    .map((p) => `${p.name} (${p.pos} ${p.rank})`).join(", ");
+
+  if (withPos / total < IMPORT_LOW_POS_COVERAGE) {
+    return {
+      level: "warn",
+      message:
+        `Only ${withPos} of ${total} rows have a position — the other ${ignored} will be ignored ` +
+        `completely. That usually means this isn't a rankings export. Parsed so far: ${sample}. ` +
+        warnings.join(" "),
+    };
+  }
+
+  return {
+    level: warnings.length || ignored ? "warn" : "ok",
+    message:
+      `Parsed ${withPos} players — e.g. ${sample}.` +
+      (ignored ? ` ${ignored} row(s) without a position will be ignored.` : "") +
+      (warnings.length ? " " + warnings.join(" ") : ""),
+  };
+}
+
 // ---------- consensus ----------
 function median(nums) {
   if (!nums.length) return null;

@@ -68,6 +68,13 @@ const MAX_INTERVAL_MS = 8000;    // backoff ceiling if Sleeper errors out
 const CACHE_MAXAGE_S = 15;       // Sleeper's edge cache s-maxage
 let cacheAgeAtFetch = null;      // Sleeper's "age" header from the last response
 let cacheAgeFetchedAt = null;    // local Date when that response was received
+let lastSuccessAt = null;        // local Date of the last poll that actually came back OK — drives the staleness warning
+// If polling silently stops (a timer that never fires, a wedged request, the
+// tab being throttled), nothing on screen changes: the board keeps showing its
+// last good state and the status line keeps saying LIVE. That's the worst
+// shape a draft-day failure can take. Past this many seconds without a
+// successful poll, say so loudly instead.
+const STALE_AFTER_S = 30;
 let countdownTimer = null;
 
 // Multi-source ranking state, shared with the Rankings Manager tab via storage.
@@ -387,13 +394,14 @@ async function poll(draftId, { manual = false } = {}) {
     const nextTaken = {};
     const sharedPicks = []; // source-agnostic record for the Rankings Manager
     unmatched = [];
+    let skippedPos = 0; // picks dropped for not being QB/RB/WR/TE — normally K/DST, but ALL of them means wrong sport
     picks.forEach((pk) => {
       const md = pk.metadata || {};
       const first = md.first_name || "";
       const last = md.last_name || "";
       const pos = (md.position || "").toUpperCase();
       if (!first && !last) return;
-      if (!["QB","RB","WR","TE"].includes(pos)) return; // skip K/DEF picks entirely
+      if (!["QB","RB","WR","TE"].includes(pos)) { skippedPos++; return; } // skip K/DEF picks entirely
       // A pick is "mine" if its roster_id or draft_slot matches what the user entered.
       // Sleeper populates these differently across real vs. mock drafts, so accept either.
       const mine =
@@ -435,10 +443,22 @@ async function poll(draftId, { manual = false } = {}) {
 
     checkCount++;
     errorStreak = 0;
-    $("status").className = "live pulse";
-    setTimeout(() => $("status").classList.remove("pulse"), 500);
-    let msg = `● LIVE — ${picks.length} picks synced`;
-    if (unmatched.length) msg += ` · ${unmatched.length} not in your rankings (ignored)`;
+    lastSuccessAt = new Date();
+    // Every pick skipped for position means this isn't an NFL skill-position
+    // draft at all (a basketball draft, or the wrong ID entirely). Without
+    // this the status line reads a healthy green "LIVE — 137 picks synced"
+    // while nothing ever crosses off and nothing explains why: the skipped
+    // picks return early, so they never reach the `unmatched` counter either.
+    const wrongSport = picks.length > 0 && skippedPos === picks.length;
+    $("status").className = wrongSport ? "err" : "live pulse";
+    if (!wrongSport) setTimeout(() => $("status").classList.remove("pulse"), 500);
+    let msg;
+    if (wrongSport) {
+      msg = `⚠ ${picks.length} picks synced, but none are QB/RB/WR/TE — is this an NFL draft? Check the draft ID.`;
+    } else {
+      msg = `● LIVE — ${picks.length} picks synced`;
+      if (unmatched.length) msg += ` · ${unmatched.length} not in your rankings (ignored)`;
+    }
     $("status").textContent = msg;
     $("lastSync").textContent =
       `checked ${fmtTime(new Date())} (#${checkCount})` +
@@ -482,6 +502,25 @@ function updateCacheCountdown() {
   }
 }
 
+// Runs on the same 1s tick as the cache countdown — no second timer. Only
+// speaks up when polling has actually stalled: an in-flight request or a
+// normal 3s gap is fine, and a reported sync error already says more than
+// this would, so that message is left alone.
+function updateStaleness() {
+  if (pollTimer === null || lastSuccessAt === null) return; // not polling, or nothing succeeded yet
+  if (errorStreak > 0) return; // the error message is more specific — don't stomp it
+  const staleFor = Math.floor((Date.now() - lastSuccessAt.getTime()) / 1000);
+  if (staleFor < STALE_AFTER_S) return;
+  $("status").className = "err";
+  $("status").textContent =
+    `⚠ NO UPDATE IN ${staleFor}s — the board may be behind. Try REFRESH NOW, or STOP and re-SYNC.`;
+}
+
+function tickStatus() {
+  updateCacheCountdown();
+  updateStaleness();
+}
+
 function scheduleNext(draftId) {
   clearTimeout(pollTimer);
   // back off if Sleeper is erroring, otherwise run fast
@@ -502,7 +541,7 @@ function startPolling(draftId) {
   $("refreshRow").style.display = "flex";
   chrome.storage.local.set({ savedDraftId: draftId });
   if (countdownTimer) clearInterval(countdownTimer);
-  countdownTimer = setInterval(updateCacheCountdown, 1000);
+  countdownTimer = setInterval(tickStatus, 1000);
   // Setup only matters once — give the space back to the board now that we're live.
   $("settingsPanel").classList.add("collapsed");
   $("settingsBtn").classList.remove("on");
@@ -515,6 +554,7 @@ function stopPolling() {
   countdownTimer = null;
   cacheAgeAtFetch = null;
   cacheAgeFetchedAt = null;
+  lastSuccessAt = null;
   $("cacheCountdown").textContent = "";
   $("connectBtn").style.display = "";
   $("stopBtn").style.display = "none";

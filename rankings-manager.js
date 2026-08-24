@@ -172,6 +172,7 @@ function renderSourceBar() {
 // so no permission change was needed. Verified 2026-08-23 against real
 // current-season data (last_modified within the last day, top ADP order
 // matching FantasyPros/FFC's own consensus).
+const MIN_PLAUSIBLE_ADP_PLAYERS = 100; // below this, the response is partial/degraded, not a real ADP set
 async function fetchSleeperAdp() {
   const btn = $("fetchSleeperAdpBtn");
   btn.disabled = true;
@@ -182,17 +183,36 @@ async function fetchSleeperAdp() {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const players = (data || [])
+    const raw = Array.isArray(data) ? data : [];
+    const players = raw
       .filter((p) => p.stats && isFinite(p.stats.adp_ppr) && p.player && POSITIONS.includes(p.player.position))
       .map((p) => ({
         name: `${p.player.first_name} ${p.player.last_name}`,
         pos: p.player.position,
         rank: p.stats.adp_ppr,
       }));
-    if (!players.length) throw new Error(`No ADP data for ${year} season yet`);
+    // Two very different failures used to share one message. If Sleeper ever
+    // renames adp_ppr, every player fails the shape guard and the old code
+    // reported "No ADP data for 2026 season yet" — which in August is an
+    // entirely believable thing to read, so you'd shrug and move on instead of
+    // noticing their API changed. Tell them apart by whether the response had
+    // players in it at all.
+    if (!players.length) {
+      throw new Error(raw.length
+        ? `Sleeper returned ${raw.length} players but none carried a usable adp_ppr value — their API may have changed`
+        : `No ADP data for the ${year} season yet`);
+    }
     await upsertAdpSource("adp_sleeper_live", "Sleeper Live ADP", "#5FA8E8", players);
     renderAll();
-    toast(`ADP fetched — ${players.length} players from Sleeper's own PPR ADP`);
+    // A real ADP set from this endpoint is several hundred players. A handful
+    // is a partial/degraded response, which otherwise looks identical to
+    // normal: the column just shows "·" for everyone missing, exactly like a
+    // player simply not being in that source.
+    if (players.length < MIN_PLAUSIBLE_ADP_PLAYERS) {
+      toast(`ADP fetched, but only ${players.length} players came back — that's far fewer than expected. Check the column before trusting it.`, true);
+    } else {
+      toast(`ADP fetched — ${players.length} players from Sleeper's own PPR ADP`);
+    }
   } catch (err) {
     toast(`Sleeper ADP fetch failed: ${err.message} — use "+ ADD ADP SOURCE" to paste an export instead`, true);
   } finally {
@@ -201,6 +221,7 @@ async function fetchSleeperAdp() {
   }
 }
 
+const MAX_TABLE_ROWS = 400; // render cap — see the disclosure row at the bottom of this function
 function renderTable(rows) {
   const taken = takenMap();
   const cols = activeSources();
@@ -237,7 +258,7 @@ function renderTable(rows) {
     <th></th>
   </tr>`;
 
-  const body = list.slice(0, 400).map((r, i) => {
+  const body = list.slice(0, MAX_TABLE_ROWS).map((r, i) => {
     const t = taken.get(r.key);
     const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
     const adpEntry = adpConsensus.get(r.key);
@@ -266,7 +287,15 @@ function renderTable(rows) {
     </tr>`;
   }).join("");
 
-  $("tbl").innerHTML = head + body;
+  // Silently dropping the tail is the problem, not the cap itself: the rows
+  // past the cutoff are exactly the deep-bench and name-mismatch players you'd
+  // open this table to go looking for. Four sources — two of them using
+  // abbreviated first names, which don't merge into existing rows — measured
+  // 651 merged rows, so this IS reachable, not theoretical.
+  const truncated = list.length > MAX_TABLE_ROWS
+    ? `<tr><td class="empty" colspan="99">Showing the first ${MAX_TABLE_ROWS} of ${list.length} players — use the position filters or the search box to narrow this down.</td></tr>`
+    : "";
+  $("tbl").innerHTML = head + body + truncated;
 
   $("tbl").querySelectorAll("[data-key]").forEach((el) => {
     el.addEventListener("click", () => toggleManual(el.dataset.key));
@@ -308,14 +337,36 @@ function renderOrphans() {
     return [srcId, keptKeys];
   }).filter(([, keys]) => keys.length);
 
-  if (!orphanList.length) {
-    $("orphansSection").style.display = "none";
+  // Hiding the whole section when nothing qualifies is what made this feature
+  // impossible to find: a user who imported sources full of abbreviated names
+  // ("K. Gainwell") had every mismatch land below the rank cutoff, so the
+  // section didn't render collapsed-and-empty — it vanished from the page, and
+  // reconciliation looked like it had stopped existing. A feature you can't
+  // see is a feature you don't have. It now always shows whenever it COULD
+  // have something to say (2+ enabled sources, which is what findOrphans
+  // itself requires), and says plainly when it has nothing.
+  const enabledCount = sources.filter((s) => s.enabled).length;
+  if (enabledCount < 2) {
+    $("orphansSection").style.display = "none"; // genuinely N/A — nothing to cross-match against
     return;
   }
   $("orphansSection").style.display = "block";
   const totalKept = orphanList.reduce((n, [, keys]) => n + keys.length, 0);
   const hidden = totalRaw - totalKept;
   $("orphansCount").textContent = `(${totalKept}${hidden ? ` · ${hidden} below rank ${ORPHAN_RANK_LIMIT} hidden` : ""})`;
+
+  if (!orphanList.length) {
+    // The empty state doubles as the only visible advertisement that the
+    // right-click merge path exists at all — it's otherwise a hidden gesture
+    // with no affordance anywhere on the page.
+    $("orphansList").innerHTML =
+      `<div style="color:var(--dim)">Every player is matched across your enabled sources` +
+      (hidden ? `, apart from ${hidden} ranked below ${ORPHAN_RANK_LIMIT} (too deep to matter).` : ".") +
+      ` To reconcile a name yourself, right-click any player in the table below and choose "merge near matches".</div>`;
+    $("orphansList").style.display = orphansCollapsed ? "none" : "block";
+    $("orphansToggle").textContent = orphansCollapsed ? "▸" : "▾";
+    return;
+  }
   const html = orphanList.map(([srcId, keys]) => {
     const src = sources.find((s) => s.id === srcId);
     const srcName = src ? src.name : `Source ${srcId}`;
@@ -657,15 +708,19 @@ $("editSrcFile").addEventListener("change", () => {
   r.onload = () => {
     const { players, warnings } = parseRankings(r.result);
     const note = $("editParseNote");
-    if (!players.length) {
+    // Same rule as the add-source path — replacing a working source's CSV with
+    // an inert one is worse than a bad first import, since it silently guts a
+    // source that was previously contributing.
+    const v = validateParsedSource(players, warnings);
+    if (v.level === "error") {
       note.className = "err";
-      note.textContent = "Couldn't parse any players. " + warnings.join(" ");
+      note.textContent = v.message;
       editingNewPlayers = null;
       return;
     }
     editingNewPlayers = players;
-    note.className = warnings.length ? "warn" : "ok";
-    note.textContent = `Parsed ${players.length} players — will replace the current list on save. ${warnings.join(" ")}`;
+    note.className = v.level === "warn" ? "warn" : "ok";
+    note.textContent = v.message + " Will replace the current list on save.";
   };
   r.readAsText(f);
 });
@@ -733,13 +788,13 @@ function previewParse() {
   if (!text.trim()) { $("parseNote").textContent = ""; $("parseNote").className = ""; return; }
   const { players, warnings } = parseRankings(text);
   const note = $("parseNote");
-  if (!players.length) {
-    note.className = "err";
-    note.textContent = "Couldn't parse any players. " + warnings.join(" ");
-    return;
-  }
-  note.className = warnings.length ? "warn" : "ok";
-  note.textContent = `Parsed ${players.length} players — e.g. ${players.slice(0, 3).map((p) => `${p.name} (${p.pos || "?"} ${p.rank})`).join(", ")}. ${warnings.join(" ")}`;
+  // validateParsedSource (shared.js) owns the "is this actually a rankings
+  // file" judgement so the preview, the save button and the edit modal all
+  // apply the identical rule — the preview showing green while the save
+  // refuses (or vice versa) would be worse than either alone.
+  const v = validateParsedSource(players, warnings);
+  note.className = v.level === "error" ? "err" : v.level === "warn" ? "warn" : "ok";
+  note.textContent = v.message;
 }
 
 $("saveSrcBtn").addEventListener("click", async () => {
@@ -748,8 +803,13 @@ $("saveSrcBtn").addEventListener("click", async () => {
   if (!text.trim()) { $("parseNote").className = "err"; $("parseNote").textContent = "Nothing to import yet."; return; }
   if (!name) { $("parseNote").className = "err"; $("parseNote").textContent = "Give the source a name."; return; }
 
-  const { players } = parseRankings(text);
-  if (!players.length) { $("parseNote").className = "err"; $("parseNote").textContent = "Couldn't parse any players."; return; }
+  const { players, warnings } = parseRankings(text);
+  // Refuse the import outright when the result is provably inert (no row has a
+  // position). Previously this only checked for zero players, so a source that
+  // parsed "fine" but could never contribute anything saved happily and then
+  // sat on the board doing nothing.
+  const v = validateParsedSource(players, warnings);
+  if (v.level === "error") { $("parseNote").className = "err"; $("parseNote").textContent = v.message; return; }
 
   if (editingAdp) {
     // Re-importing under the same name (case-insensitive) updates that
