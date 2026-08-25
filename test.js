@@ -67,7 +67,7 @@ const NAMES = [
   "validateParsedSource", "usableSources", "median", "norm", "playerKey", "esc",
   "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans",
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
-  "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS",
+  "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -75,7 +75,7 @@ const {
   validateParsedSource, usableSources, median, norm, playerKey, esc,
   makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans,
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
-  buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS,
+  buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -393,6 +393,45 @@ const mk = (id, name, arr) =>
   const rows = [{ key: "x|QB", pos: "QB", name: "No Projection Guy" }];
   const { values } = buildBeerValues(rows, {}, new Set());
   eq(values.has("x|QB"), false, "a player missing from the projections map is excluded from values, not defaulted to 0");
+}
+
+// ============================================================
+// buildTeamPositionRanks — backlog #13 (team grade vs. league-mates).
+// ============================================================
+
+{
+  const beerValues = new Map([
+    ["qb-a|QB", 40], ["qb-b|QB", 30], ["qb-c|QB", 10],
+    ["rb-a|RB", 20], ["rb-b|RB", 5],
+  ]);
+  const picks = [
+    { key: "qb-a|QB", pos: "QB", rosterId: 1 }, // team 1: QB total 40
+    { key: "qb-b|QB", pos: "QB", rosterId: 2 }, // team 2: QB total 30
+    { key: "qb-c|QB", pos: "QB", rosterId: 3 }, // team 3: QB total 10
+    { key: "rb-a|RB", pos: "RB", rosterId: 2 }, // team 2: RB total 20
+    { key: "rb-b|RB", pos: "RB", rosterId: 1 }, // team 1: RB total 5
+    { key: "unknown|QB", pos: "QB", rosterId: 4 }, // no BEER value — excluded
+    { key: "no-team|QB", pos: "QB", rosterId: null }, // no rosterId — excluded
+  ];
+  const ranks = buildTeamPositionRanks(picks, beerValues);
+  eq(ranks[1].QB, { rank: 1, of: 3, total: 40 }, "highest QB total in the league ranks 1st");
+  eq(ranks[2].QB, { rank: 2, of: 3, total: 30 }, "middle QB total ranks 2nd");
+  eq(ranks[3].QB, { rank: 3, of: 3, total: 10 }, "lowest QB total ranks 3rd");
+  // "of" reflects every team seen anywhere in picks, not just teams with a
+  // pick at THIS position — a team with zero RBs should count toward the
+  // denominator and rank last, not be excluded from it entirely.
+  eq(ranks[2].RB, { rank: 1, of: 3, total: 20 }, "team 2's RB total (20) beats team 1's (5) for 1st of 3 teams total");
+  eq(ranks[3].RB, { rank: 3, of: 3, total: 0 }, "a team with zero RB picks still counts toward the denominator and ranks last");
+  ok(ranks[4] === undefined, "a pick with no computed BEER value doesn't create a team entry off it alone");
+
+  // Live recompute: if team 3's QB value rises above team 1's and 2's
+  // (replacement level shifted, or a stronger backup got added), the rank
+  // ordering should update with zero changes to picks — same "live, not a
+  // snapshot" requirement as buildBeerValues itself.
+  const beerValuesAfter = new Map(beerValues);
+  beerValuesAfter.set("qb-c|QB", 100);
+  const ranksAfter = buildTeamPositionRanks(picks, beerValuesAfter);
+  eq(ranksAfter[3].QB.rank, 1, "team 3's QB rank improves once its BEER value rises, with no new picks");
 }
 
 // ============================================================

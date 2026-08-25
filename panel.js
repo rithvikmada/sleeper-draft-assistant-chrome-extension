@@ -179,12 +179,12 @@ let lastSharedPicks = []; // source-agnostic record of every drafted player, by 
 let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manager
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let projMap = {}; // playerKey -> projected PPR points, feeds buildBeerValues() (BEER/VBD, shared.js)
-// Easter egg state for the "On tap" card (see renderBest()) — tracked by
-// player key, not re-rolled on every render, so it only has a chance to
-// trigger when the objective-best player actually changes (a handful of
-// times per draft), not every ~3s poll tick.
-let lastBestKey = null;
-let rareTagActive = false;
+// "Last call" state for the "On tap" card (see renderBest()) — was a random
+// 1-in-12 roll, changed to a real threshold (crossing RARE_BEER_VALUE) per
+// direct feedback: a random trigger with no meaning read as "is something
+// wrong" rather than a fun flourish. rareAlerted just prevents re-toasting
+// on every ~3s poll tick while the SAME activation is still ongoing.
+let rareAlerted = false;
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
@@ -204,26 +204,81 @@ function bestAvailable() {
   return out;
 }
 
+// Per-team roster-need weighting for the crown ONLY — see claude.md before
+// touching this. Direct user feedback: plain BEER has no idea what's
+// already on your roster, so the "objective best" crown kept landing on RB
+// almost every single render (RB's replacement pool is deep — 43 — so an
+// early/mid RB's gap over replacement tends to run bigger than other
+// positions', regardless of how many RBs you already have), and reading
+// that over and over nudges you to keep taking RBs. This does NOT touch the
+// actual BEER numbers shown anywhere (cards, manager table) — it only
+// discounts a position's SCORE when picking which card gets the crown, so
+// the methodology itself stays pure and inspectable; only the "which one
+// wins" decision gets roster-aware.
+//
+// TEAM_TARGET_SLOTS is this team's own rough target depth per position —
+// starters (LEAGUE_SETTINGS.starters) + this team's share of its own 2 FLEX
+// spots (using the same FLEX_SHARE ratios as the league-wide replacement
+// calc, rounded) + 1 bench buffer. Documented assumption, not derived, same
+// as FLEX_SHARE/AVG_GAMES_PLAYED — revisit if it feels off in practice.
+const TEAM_TARGET_SLOTS = { QB: 2, RB: 4, WR: 4, TE: 2 };
+// Each pick beyond target multiplies the crown-selection score by 0.6 —
+// not a hard cutoff, so a truly exceptional value can still win the crown,
+// it just needs to be that much bigger to overcome the discount rather than
+// being disqualified outright once you're "full" at a position.
+function crownNeedMultiplier(pos, draftedCount) {
+  const over = draftedCount - TEAM_TARGET_SLOTS[pos];
+  return over > 0 ? Math.pow(0.6, over) : 1;
+}
+
+// A BEER value has to cross this to trigger the rare "Last call" card
+// treatment (see below) — was a random 1-in-12 roll, changed to a real
+// threshold per direct feedback: randomness with no meaning read as
+// confusing/"is something wrong" rather than a fun flourish. This number is
+// a rough judgment call (comfortably above what a normal early/mid-round
+// pick's value looks like in practice), not derived from anything — tune it
+// if it fires too often or too rarely once used against real drafts.
+const RARE_BEER_VALUE = 150;
+
 // BEST QB/RB/WR/TE grid — each card is that position's best-available player
 // BY BEER VALUE (not consensus rank, per the decision logged in claude.md:
 // this grid's job is "best pick if I want this specific position," which is
-// a value question, not a rank one — a separate value-sorted mode elsewhere
-// was considered and rejected in favor of this). Whichever ONE of the four
-// cards has the single highest value across all four positions gets a
-// small "TOP PICK" tag and an accent border — that's the answer to "what's
-// the objective best pick right now, any position," computed by comparing
-// the four already-chosen per-position players against each other rather
-// than needing a second, differently-sorted widget. The one-sentence "what
-// is BEER" explanation lives in a single info-icon tooltip above this grid
-// (panel.html, `.bestHead .infoDot`) — deliberately not repeated per-card.
+// a value question, not a rank one). Whichever ONE of the four cards has the
+// single highest NEED-WEIGHTED value (see crownNeedMultiplier above) gets an
+// "On tap" tag and an accent border — that's the answer to "what's the
+// objective best pick right now, any position, given what I already have."
+// The one-sentence "what is BEER" explanation lives in a single info-icon
+// tooltip above this grid (panel.html, `.bestHead .infoDot`) — deliberately
+// not repeated per-card.
+// Crown/rare highlight only turns on after this many full rounds are
+// drafted — direct feedback: BEER's replacement-level signal is noisiest in
+// the opening rounds (little separation yet at most positions, see the
+// "when should I use BEER" reasoning in claude.md — consensus/tier is the
+// more trustworthy read early, BEER's edge is real but grows through the
+// middle rounds as scarcity actually develops). Highlighting a "best pick"
+// off a still-noisy number for the first several rounds was actively
+// steering picks the wrong way. Cards still show every position's
+// best-by-value player and its BEER number the whole draft — only the
+// crown/rare treatment is gated, not the underlying data.
+const HIGHLIGHT_AFTER_ROUND = 6;
+
 function renderBest() {
   const rows = buildConsensus(activeSources(sources, soloSource), merges);
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   const { values: beerValues } = buildBeerValues(rows, projMap, takenKeySet());
+  const roundsCompleted = Math.floor(lastSharedPicks.length / LEAGUE_SETTINGS.teams);
+  const highlightsEnabled = roundsCompleted >= HIGHLIGHT_AFTER_ROUND;
+  const myCounts = {};
+  POSITIONS.forEach((pos) => { myCounts[pos] = 0; });
+  lastSharedPicks.forEach((p) => { if (p.byMe && myCounts[p.pos] !== undefined) myCounts[p.pos]++; });
   const best = {};
   POSITIONS.forEach((pos) => {
     const candidates = rows.filter((r) => r.pos === pos && !isGone(r) && beerValues.has(r.key));
     if (candidates.length) {
+      // The card itself still shows the position's TRUE best-by-value
+      // player — need-weighting only affects which position wins the crown
+      // below, not which player represents a position that's already on
+      // the board.
       best[pos] = candidates.reduce((a, b) => (beerValues.get(b.key) > beerValues.get(a.key) ? b : a));
     } else {
       // No projection data for anyone left at this position — fall back to
@@ -232,38 +287,38 @@ function renderBest() {
         .sort((a, b) => (a.consensus ?? Infinity) - (b.consensus ?? Infinity))[0];
     }
   });
-  let objectiveBestPos = null, objectiveBestVal = -Infinity;
-  POSITIONS.forEach((pos) => {
-    const p = best[pos];
-    if (!p) return;
-    const v = beerValues.get(p.key);
-    if (v !== undefined && v > objectiveBestVal) { objectiveBestVal = v; objectiveBestPos = pos; }
-  });
-  // Roll the easter egg only when the objective-best player actually
-  // changes — not on every render — so it stays rare across a whole draft
-  // instead of flickering on and off every poll cycle. ~1-in-12 odds each
-  // time the crown changes hands.
-  const bestKey = objectiveBestPos ? best[objectiveBestPos].key : null;
-  if (bestKey !== lastBestKey) {
-    lastBestKey = bestKey;
-    rareTagActive = bestKey ? Math.random() < 1 / 12 : false;
-    // Fired once, right when it triggers — the animation alone (however
-    // juiced up) could still read as "is something wrong," so a toast
-    // makes it unambiguous this is just a fun rare pull, not a signal.
-    if (rareTagActive) {
-      toast("🍺 Easter egg unlocked — \"Last call\" pull is 1-in-12 odds and means nothing statistically. The BEER math is still stone-cold sober.");
-    }
+  let objectiveBestPos = null, objectiveBestScore = -Infinity;
+  if (highlightsEnabled) {
+    POSITIONS.forEach((pos) => {
+      const p = best[pos];
+      if (!p) return;
+      const v = beerValues.get(p.key);
+      if (v === undefined) return;
+      const score = v * crownNeedMultiplier(pos, myCounts[pos]);
+      if (score > objectiveBestScore) { objectiveBestScore = score; objectiveBestPos = pos; }
+    });
   }
+  const crownedVal = objectiveBestPos ? beerValues.get(best[objectiveBestPos].key) : undefined;
+  // Threshold-based, deterministic — recomputed every render, but only
+  // toasts on the transition into "rare" (not on every poll tick while it
+  // stays true, and not again for the same ongoing activation). Gated by
+  // highlightsEnabled same as the crown itself — no rare toast before
+  // round 6 either, same reasoning.
+  const nowRare = highlightsEnabled && crownedVal !== undefined && crownedVal >= RARE_BEER_VALUE;
+  if (nowRare && !rareAlerted) {
+    toast(`🍺 Rare pour — this pick's BEER value (${crownedVal.toFixed(1)}) cleared the rare threshold. Worth a serious look.`);
+  }
+  rareAlerted = nowRare;
   $("best").innerHTML = POSITIONS.map((pos) => {
     const t = posTint(pos);
     const p = best[pos];
     const val = p ? beerValues.get(p.key) : undefined;
     const isObjectiveBest = pos === objectiveBestPos;
-    const isRare = isObjectiveBest && rareTagActive;
+    const isRare = isObjectiveBest && nowRare;
     return `<div class="quadCell${isObjectiveBest ? " quadCellBest" : ""}${isRare ? " quadCellRare" : ""}" style="background:${t.bg};border-color:${t.bg}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
         <span class="lbl" style="color:${t.fg}">Best ${esc(pos)}</span>
-        ${isObjectiveBest ? `<span class="topPickTag${isRare ? " topPickTagRare" : ""}" title="${isRare ? "Rare pour — you don't see this every draft" : ""}">${isRare ? "🍺 Last call" : "On tap"}</span>` : ""}
+        ${isObjectiveBest ? `<span class="topPickTag${isRare ? " topPickTagRare" : ""}" title="${isRare ? `Crossed the rare BEER threshold (${RARE_BEER_VALUE}+)` : "Weighted for what you already have, not just raw BEER value"}">${isRare ? "🍺 Last call" : "On tap"}</span>` : ""}
       </div>
       <div class="nm2">
         <strong>${p ? esc(p.name) : "—"}</strong>
@@ -391,16 +446,72 @@ function renderSoloBar() {
   $("soloLabel").textContent = `Showing ${s.name} only`;
 }
 
-// opts: { picks:[{pos,byMe}], myRosterId }
-function renderTeamCountsV2(el, { picks = [], myRosterId = null } = {}) {
+// opts: { picks:[{pos,byMe,rosterId,key}], myRosterId, beerValues }
+// Position badges now carry a live league-rank chip (backlog #13) alongside
+// the plain count — "your QBs rank 3rd of 10" — built off buildTeamPositionRanks
+// (shared.js). Looked up by whichever rosterId this team's OWN picks actually
+// carry (via the first byMe pick found), not by matching myRosterId directly
+// against a pick's rosterId key — myRosterId is compared against EITHER
+// roster_id or draft_slot when a pick is first tagged "mine" (poll(), Sleeper
+// populates them differently across real vs. mock drafts), while rosterId
+// itself always prefers roster_id — the two could disagree in an edge case,
+// so this sidesteps that instead of assuming they always match.
+function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = new Map() } = {}) {
   if (myRosterId == null) {
     el.innerHTML = `<span class="teamHint">Set your draft slot # in settings to track your own roster.</span>`;
     return;
   }
   const mine = picks.filter((p) => p.byMe);
+  const myTeamId = mine.find((p) => p.rosterId != null)?.rosterId;
+  const ranks = myTeamId != null ? buildTeamPositionRanks(picks, beerValues) : {};
+  const myRanks = myTeamId != null ? ranks[myTeamId] : null;
   const tones = { QB: "accent", RB: "positive", WR: "info", TE: "warning" };
-  const counts = POSITIONS.map((pos) => badgeHtml(tones[pos], `${pos} ${mine.filter((p) => p.pos === pos).length}`)).join("");
+  const counts = POSITIONS.map((pos) => {
+    const n = mine.filter((p) => p.pos === pos).length;
+    const r = myRanks && myRanks[pos];
+    const tone = tones[pos];
+    // Only shows once this team has actually drafted someone at the
+    // position — a rank of "1st of 10" with zero players would be
+    // meaningless noise (everyone with 0 total ties for 1st), so it falls
+    // back to a plain badge (no rank strip at all) until then.
+    if (!r || n === 0) return badgeHtml(tone, `${pos} ${n}`);
+    const { bg, fg } = rankColor(r.rank, r.of);
+    return `<span class="posRankPill t-${tone}" title="${esc(pos)} ranks ${esc(ordinal(r.rank))} of ${r.of} in the league by BEER value">
+      <span class="prpTop t-${tone}">${esc(pos)} ${n}</span>
+      <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(r.rank).toUpperCase())}</span>
+    </span>`;
+  }).join("");
   el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${badgeHtml("neutral", `Tot ${mine.length}`)}`;
+}
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Continuous green (1st) -> yellow-green -> orange -> red (last) scale for
+// the posRankPill's rank strip — 4 fixed stops, RGB-lerped between whichever
+// two straddle this rank's position in the field, rather than a raw HSL
+// sweep (a straight green->red hue sweep passes through a washed-out,
+// hard-to-read olive/brown around the midpoint; hand-picked stops keep every
+// step visually distinct). `of === 1` (only one team has drafted this
+// position at all) is treated as a flat 1st, not division-by-zero.
+const RANK_COLOR_STOPS = [
+  { bg: [0x35, 0xd0, 0x7f], fg: [0x06, 0x2b, 0x15] },
+  { bg: [0x9a, 0xcd, 0x4c], fg: [0x1d, 0x2b, 0x08] },
+  { bg: [0xf0, 0x80, 0x3d], fg: [0x3a, 0x17, 0x04] },
+  { bg: [0xe2, 0x45, 0x3f], fg: [0x3a, 0x07, 0x05] },
+];
+function rankColor(rank, of) {
+  const t = of > 1 ? Math.min(1, Math.max(0, (rank - 1) / (of - 1))) : 0;
+  const seg = t * (RANK_COLOR_STOPS.length - 1);
+  const i = Math.min(RANK_COLOR_STOPS.length - 2, Math.floor(seg));
+  const localT = seg - i;
+  const lerp = (a, b) => a.map((v, k) => Math.round(v + (b[k] - v) * localT));
+  const toHex = (c) => `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  return {
+    bg: toHex(lerp(RANK_COLOR_STOPS[i].bg, RANK_COLOR_STOPS[i + 1].bg)),
+    fg: toHex(lerp(RANK_COLOR_STOPS[i].fg, RANK_COLOR_STOPS[i + 1].fg)),
+  };
 }
 
 // A persistent, always-visible list of every enabled source — the per-card
@@ -500,23 +611,27 @@ function renderBestPicksV2(el, opts) {
 }
 
 function renderRecommendations() {
-  renderTeamCountsV2($("teamCounts"), { picks: lastSharedPicks, myRosterId });
-  renderSourceListV2($("sourceList"), {
-    sources,
-    soloSource,
-    onSolo: (id) => { soloSource = id; renderAll(); },
-  });
   // Always the FULL blended consensus (every enabled source), never solo-filtered —
   // every source's dot needs to stay visible so you can see what other sources
   // think of the same pick. Position-filtering it here (not inside the widget)
   // means "each source's own #1 pick" naturally becomes "each source's own
   // #1 pick AT THIS POSITION" too.
   const consensusRows = buildConsensus(sources.filter((s) => s.enabled), merges);
+  const takenSet = takenKeySet();
+  // Same values feed both the team-rank chips below and buildBeerValues
+  // callers elsewhere — one computation per render, not per widget.
+  const { values: beerValues } = buildBeerValues(consensusRows, projMap, takenSet);
+  renderTeamCountsV2($("teamCounts"), { picks: lastSharedPicks, myRosterId, beerValues });
+  renderSourceListV2($("sourceList"), {
+    sources,
+    soloSource,
+    onSolo: (id) => { soloSource = id; renderAll(); },
+  });
   const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos, posFilter));
   renderBestPicksV2($("bestPicks"), {
     rows: bestPicksRows,
     sources,
-    takenSet: takenKeySet(),
+    takenSet,
     valueMap: buildValueComparison(adpSources),
     soloSource,
     posFilter,
@@ -687,6 +802,11 @@ async function poll(draftId, { manual = false } = {}) {
       const mine =
         myRosterId !== null &&
         (Number(pk.roster_id) === myRosterId || Number(pk.draft_slot) === myRosterId);
+      // Team identity for grouping picks by roster (buildTeamPositionRanks,
+      // shared.js — backlog #13). roster_id preferred, draft_slot as
+      // fallback, same acceptance as the "mine" check just above.
+      const rosterId = pk.roster_id != null ? Number(pk.roster_id)
+        : (pk.draft_slot != null ? Number(pk.draft_slot) : null);
 
       // Recorded for every pick, matched or not — the manager may carry sources
       // that include players our default rankings don't.
@@ -696,6 +816,7 @@ async function poll(draftId, { manual = false } = {}) {
         pos,
         pickNo: pk.pick_no,
         byMe: mine,
+        rosterId,
       });
 
       const m = matchPick(first, last, pos, matchIndex);

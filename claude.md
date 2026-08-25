@@ -824,37 +824,79 @@ from the build prompt) before shipping.
   card — that's "the objective best pick right now, any position," answered
   by comparing the grid's own four already-chosen players against each other
   rather than needing a second, differently-sorted widget.
-  **Went through two design passes, both logged here on purpose:**
+  **Went through three design passes, all logged here on purpose:**
   1. First version used a lightning-bolt icon on the label — replaced
      (2026-08-25) with a plain "Top pick" pill + solid accent border,
      cleaner and more in line with the design system's restraint; the icon
      read as more decoration than signal.
-  2. Then made a little more fun on direct request (2026-08-25): the flat
-     accent border became a slow (6s), low-contrast animated gradient ring
-     (`.quadCellBest::before`, panel.html — golden/amber tones, a light nod
-     to the BEER name), and the pill's label changed from the generic "Top
+  2. Made a little more fun on direct request (2026-08-25): the flat accent
+     border became a slow (6s) animated gradient ring (golden/amber tones, a
+     light nod to the BEER name), and the pill's label changed from "Top
      pick" to "On tap" — leans into the beer pun without undercutting that
-     BEER is a real statistical methodology, not a gimmick; the fun lives in
-     ONE word choice and a subtle animation, not in cartoonish styling
-     anywhere the actual numbers live. Kept deliberately slow/low-contrast —
-     this sits next to a live draft board someone's actually trying to read,
-     not a spot for anything that competes for attention.
+     BEER is a real statistical methodology, not a gimmick.
+  3. **Walked back to flat/static (2026-08-25, same day) — direct user
+     feedback that the shimmer was pulling their eye back to that spot for
+     the majority of the draft**, the opposite of what a passive status
+     indicator should do. `.quadCellBest` is back to a plain solid accent
+     border with zero animation, and `.topPickTag`'s background is a flat
+     muted tint (`var(--chalk-a12)`), not a moving gradient — no motion
+     anywhere in the everyday "On tap" state now. **The "On tap" wording
+     stayed** (that was liked) — only the motion was the problem, not the
+     pun. The rare "Last call" state (see below) intentionally KEPT its
+     shimmer/glow/pop animation — the reasoning inverted: a passive "this is
+     the current best pick" indicator shouldn't move, but a genuinely rare
+     threshold crossing earning a beat of attention is exactly the point of
+     having a rare state at all. If motion is ever reconsidered for the
+     everyday state again, revisit this note first — it was a direct,
+     specific complaint, not a guess.
   **This was a real design discussion, not an assumption** — see the
   reasoning below.
-- **Easter egg (2026-08-25, rare on purpose)** — every time the objective
-  best pick changes hands (a different position takes the crown — not every
-  ~3s poll render), there's roughly a 1-in-12 chance
-  (`Math.random() < 1/12`, `renderBest()`, panel.js) the pill instead reads
-  "🍺 Last call" with a faster (2.4s), warmer-toned version of the same
-  gradient (`.quadCellRare`/`.topPickTagRare`). The roll only happens on
-  actual change (tracked via `lastBestKey`), specifically so it can't
-  re-trigger every render — the requirement was "doesn't happen too often,"
-  and a draft only sees the crown change a handful of times total, so this
-  realistically shows up 0-2 times in a normal draft. No confetti, no sound,
-  no layout shift — same size pill, same card, just the copy and gradient
-  warmth change for as long as that player holds the top spot. If this ever
-  needs re-tuning (too rare / too common), the odds and the "on change only"
-  gate are both in one place, not scattered.
+- **Highlight only turns on after round 6 (`HIGHLIGHT_AFTER_ROUND`,
+  panel.js, 2026-08-25)** — direct feedback plus a real methodological
+  point: BEER's replacement-level signal is noisiest in the opening rounds
+  (little separation has developed yet at most positions — see "when should
+  I use BEER" reasoning, added to this file below), so highlighting a
+  crowned "best pick" off a still-unsettled number for the first several
+  rounds was actively steering picks toward it before the signal was
+  trustworthy. `roundsCompleted = Math.floor(lastSharedPicks.length /
+  LEAGUE_SETTINGS.teams)` gates BOTH the crown (`quadCellBest`/`topPickTag`)
+  and the rare state — before round 7 starts, no card gets crowned at all,
+  full stop, though every card still shows its own best-by-value player and
+  BEER number the whole draft; only the "which ONE is best" call is gated,
+  not the underlying data. `HIGHLIGHT_AFTER_ROUND = 6` is a judgment call,
+  not derived from anything — a single constant, easy to retune.
+- **When should BEER actually be trusted over consensus rank? (added
+  2026-08-25, as a real answer given to the user, not just code commentary)**
+  BEER only knows one input — projected points — so it can't see things
+  consensus rank encodes (injury risk, situation/opportunity changes, analyst
+  judgment about role uncertainty). It also measures value over REPLACEMENT,
+  not "best player" — a player at a scarce position can out-value a better
+  player at a deep position, which is the entire point of VBD but means BEER
+  and "who's just the best" aren't always the same answer. Recommended usage,
+  matching why the round-6 gate above exists: lean on consensus/tier in the
+  opening rounds where analyst judgment about risk matters most and BEER has
+  the least separation to work with; lean on BEER as a tie-breaker within a
+  tier/position, for cross-position value calls, and for spotting a position
+  about to dry up — the scenarios it's actually built for. If BEER disagrees
+  with consensus by several rounds' worth of rank early in a draft, that's
+  more likely unpriced risk than a hidden gem.
+- **"Last call" rare card — threshold-based, not random (reworked
+  2026-08-25).** Originally a random ~1-in-12 roll on every crown change —
+  **reverted** after direct feedback: a trigger with no actual meaning read
+  as confusing ("is something wrong?") rather than a fun flourish, since
+  there was no way to tell if it meant anything. Replaced with a real,
+  deterministic check: `RARE_BEER_VALUE` (panel.js, currently `150`) is a
+  judgment-call threshold for "this crowned pick's BEER value is unusually
+  large" — crossing it is what triggers the warmer gradient
+  (`.quadCellRare`/`.topPickTagRare`) AND a one-time toast explaining why
+  ("cleared the rare threshold, worth a serious look") rather than a random
+  "you found an easter egg" message. Recomputed every render (deterministic,
+  no need to gate on crown-change like the old random version did), but only
+  toasts on the false→true transition (`rareAlerted` flag) so it doesn't
+  re-fire every ~3s poll tick while the same activation is still ongoing.
+  `RARE_BEER_VALUE` is a rough guess, not derived from real draft data yet —
+  tune it up/down once it's been seen against a live draft; if it never
+  fires, it's too high, if it fires on every pick, too low.
 - **One explanatory tooltip, exactly once, not repeated per surface**
   (2026-08-25) — a small "i" info-dot (`.infoDot`/`.infoPop`, panel.html)
   sits next to a "Best by position · BEER" label above the grid. Hovering
@@ -935,18 +977,78 @@ priorities from scratch. Notable status since it was last summarized here:
   player, not tier boundaries; #16 would still need the windowed/clustering
   tiering approach flagged (not attempted) back in the source-vote-boundary
   revert above.
-- **BEER+-parity gap (new, 2026-08-25)** — plain BEER, as built, is
-  team-agnostic: it never discounts a position's value based on what's
-  already on your roster, and has no risk-adjustment or QB-streaming layer.
-  Both are BEER+-style enhancements, explicitly out of scope for the #8
-  build per its own prompt. If wanted later: roster-need-adjustment could
-  read the existing team-counts widget's data and discount
-  `buildBeerValues()`'s output per position; risk-adjustment/QB-streaming
-  would need real bust-rate or matchup data this project doesn't have yet.
-- **#13 (team grade vs. league-mates)** — user-flagged as high priority, and
-  now the natural next build: VBD (#8) is the value metric it was blocked on
-  picking, and is now built, so #13 is unblocked rather than being a detour
-  from it.
+- **BEER+-parity gap — partially addressed (2026-08-25), narrowly.** Plain
+  BEER's actual VALUE numbers (cards, manager table) are still fully
+  team-agnostic on purpose — that's the pure, inspectable methodology, and
+  it stays untouched. What changed: the BEST grid's crown ("On tap" — which
+  ONE card gets highlighted as the objective best pick) now factors in
+  roster need, because leaving it pure BEER meant the crown landed on RB
+  almost every single render (RB's deep 43-player replacement pool tends to
+  produce bigger raw value gaps than other positions, independent of how
+  many RBs you already have) — direct feedback was that reading "take an RB"
+  over and over nudges bad roster-construction decisions. `TEAM_TARGET_SLOTS`
+  + `crownNeedMultiplier()` (panel.js) discount a position's CROWN-SELECTION
+  score (not its displayed value) by `0.6^(draftedCount - target)` once
+  you're past a rough target depth for that position — a soft discount, not
+  a hard cutoff, so an exceptional value can still win if it's big enough to
+  overcome the discount. See the "BEER / VBD" section above for
+  `TEAM_TARGET_SLOTS`'s exact numbers and reasoning.
+  **Still NOT built, still a real gap**: the actual VALUE column/card
+  numbers everywhere else stay roster-agnostic, and there's still no
+  risk-adjustment or QB-streaming layer. Both are BEER+-style enhancements,
+  explicitly out of scope per the #8 build's own prompt — the crown change
+  above is a narrow, UI-selection-only exception to that, not a reversal of
+  it.
+- **#13 (positional rank vs. league-mates) — BUILT (2026-08-25), the
+  per-position slice of it (not yet the "overall team grade" rollup — see
+  below).** `buildTeamPositionRanks(picks, beerValues)` (shared.js) groups
+  every drafted player by which roster took them, sums each team's BEER
+  value per position, and ranks all 10 teams against each other.
+  **UI (`.posRankPill`, panel.html/panel.js) — fused two-row pill, chosen
+  over three other mocked-up variants (a separate rank circle below the
+  badge, a corner-overlapping notification-style chip, and a thin
+  color-only bar with no number) after the user reviewed all four**: the
+  top row is the exact same position-count badge as before ("QB 1"), the
+  bottom row is a thin strip showing the ordinal rank ("4TH") on a
+  continuous green (1st) → yellow-green → orange → red (last) gradient,
+  computed by `rankColor()` (panel.js, 4 hand-picked RGB stops, lerped
+  between whichever two straddle this rank — a straight HSL hue sweep was
+  avoided because its midpoint washes out into a hard-to-read olive/brown).
+  Only appears once the team has actually drafted someone at that position
+  (a "1st of 10" tie at zero players everywhere would be meaningless noise)
+  — falls back to the plain badge with no rank strip until then.
+  **Deliberately live, not a snapshot at pick time**: every player is valued
+  against the CURRENT replacement level (same `beerValues` map the rest of
+  the board uses), so your rank at a position can shift even with no new
+  picks there — matching the same "live" philosophy as the rest of BEER,
+  and a direct choice over grading each pick at the moment it was made (that
+  would answer a different question — "was that a good pick then" — and
+  was explicitly not what was asked for; log a new backlog item if that's
+  wanted later, don't fold it into this one).
+  **Sum of every drafted player's value at a position (not just the best
+  starter)** was chosen deliberately, same reasoning as the man-games
+  replacement calc itself: rewards depth, doesn't require guessing who's a
+  "starter" at any given moment.
+  **The rank denominator ("of N") counts every team seen anywhere in
+  picks, even ones with zero players at that specific position** — a team
+  with no RBs yet still occupies (and typically holds down) a real rank
+  slot there, rather than being excluded from the count entirely, which
+  would otherwise make "of N" shrink and grow confusingly position to
+  position.
+  **Team identity for grouping uses each pick's OWN `rosterId`** (added to
+  every recorded pick in `poll()`, panel.js — `roster_id` preferred,
+  `draft_slot` as fallback, matching the exact same acceptance the existing
+  "is this pick mine" check already used, since Sleeper populates these
+  differently across real vs. mock drafts) — but "which team is MINE" is
+  resolved by finding the `rosterId` on one of the picks already flagged
+  `byMe`, not by comparing `myRosterId` directly against a `rosterId` key.
+  Those two are usually the same team, but `myRosterId` itself is checked
+  against EITHER `roster_id` OR `draft_slot` when a pick is first tagged
+  "mine," while `rosterId` always prefers `roster_id` — an edge case where
+  they disagree is possible, and this sidesteps it rather than assuming.
+  Not yet built: an "overall team grade" rollup across all four positions
+  into one number/rank — that's a distinct follow-up (see
+  `4thGo-feature-backlog.md` #13), not implied or half-built by this.
 - **Stats/projections board columns (new, 2026-08-23)** — user wants PROJ
   (pts_ppr, all positions) and a position-conditional STAT column (`rec` for
   RB/WR/TE, `rush_yd` for QB) added to the board. Same Sleeper endpoint as

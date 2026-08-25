@@ -142,6 +142,22 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .badge2.t-neutral { background: rgba(255,255,255,.06); color: var(--text-secondary); border-color: var(--border-default); }
 .badge2.t-danger { background: var(--red-a12); color: var(--red-500); border-color: rgba(255,90,90,.28); }
 
+/* Position count + league-rank fused into one pill (backlog #13) — the count
+   half keeps the exact same look as a plain badge2, the rank half is a thin
+   strip underneath colored on a continuous green (1st) -> red (last) scale,
+   computed in JS (rankColor()) since it's a gradient, not a fixed tone. */
+.posRankPill { display: inline-flex; flex-direction: column; border-radius: var(--radius-xs); overflow: hidden; border: 1px solid; }
+.posRankPill.t-accent { border-color: var(--chalk-a24); }
+.posRankPill.t-positive { border-color: rgba(53,208,127,.28); }
+.posRankPill.t-info { border-color: rgba(34,211,238,.28); }
+.posRankPill.t-warning { border-color: rgba(255,138,61,.28); }
+.posRankPill .prpTop { display: flex; align-items: center; justify-content: center; height: 18px; padding: 0 6px; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.posRankPill .prpTop.t-accent { background: var(--chalk-a12); color: var(--chalk-500); }
+.posRankPill .prpTop.t-positive { background: var(--green-a12); color: var(--green-500); }
+.posRankPill .prpTop.t-info { background: var(--cyan-a12); color: var(--cyan-500); }
+.posRankPill .prpTop.t-warning { background: var(--orange-a12); color: var(--orange-500); }
+.posRankPill .prpRank { display: flex; align-items: center; justify-content: center; height: 11px; font-size: 8px; font-weight: 700; letter-spacing: .03em; }
+
 .posBadge2 {
   display: inline-flex; align-items: center; gap: 3px; justify-content: center;
   border-radius: var(--radius-xs); font-family: var(--font-mono); font-weight: 700; letter-spacing: .02em;
@@ -283,42 +299,47 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .quadCell .nm2 strong { font: var(--type-ui); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quadCell .nm2 span { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); flex: none; }
 .quadCell .vbdVal { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); }
-/* "On tap" card — a slow, subtle animated gradient ring (golden/amber tones,
-   a light nod to the BEER name without leaning on it too hard) instead of a
-   flat accent border. Kept slow (6s) and low-contrast on purpose — this
-   should read as a nice touch, not a strobing distraction next to a live
-   draft board someone's actually trying to read. */
-.quadCellBest { border-color: transparent !important; }
+/* "On tap" card — walked back from an animated shimmer ring to a flat,
+   static, low-key treatment (2026-08-25): the shimmer was pulling the eye
+   back to that spot for the majority of the draft, which is the opposite of
+   what a passive status indicator should do. A plain 1px accent border and
+   a flat muted pill read as "this one's a little different" without moving
+   or competing for attention — no animation anywhere in the everyday state.
+   The rare "Last call" state (.quadCellRare below) keeps its flourish on
+   purpose, since that ONE is supposed to catch your eye occasionally. */
+.quadCellBest { border-color: var(--accent) !important; }
 .quadCellBest .vbdVal { color: var(--accent); }
-@keyframes onTapShimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
-.quadCellBest::before {
+.topPickTag {
+  font: var(--type-label); font-size: 8.5px; letter-spacing: var(--tracking-label);
+  text-transform: uppercase; color: var(--accent); background: var(--chalk-a12);
+  border: 1px solid var(--chalk-a24);
+  border-radius: var(--radius-pill); padding: 1.5px 6px; flex: none;
+}
+/* Rare variant — genuinely crossed the RARE_BEER_VALUE threshold (see
+   panel.js's renderBest()), so THIS one is allowed to actually catch the
+   eye, unlike the flat everyday "On tap" state above. A few seconds of glow
+   + a pop on the pill, then it settles into a calmer (but still moving)
+   shimmer ring for as long as the threshold stays crossed — the animation
+   is the whole point here, since a real signal is worth a beat of
+   attention. panel.js also fires a one-time toast when this triggers, so
+   there's no ambiguity about whether it means something (it does). */
+@keyframes rareGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,184,77,0); } 50% { box-shadow: 0 0 16px 3px rgba(255,184,77,.5); } }
+@keyframes rarePop { 0% { transform: scale(0.8); } 55% { transform: scale(1.18); } 100% { transform: scale(1); } }
+@keyframes rareShimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+.quadCellRare { border-color: transparent !important; animation: rareGlow 1.2s ease-in-out 3; }
+.quadCellRare::before {
   content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
-  background: linear-gradient(120deg, var(--accent), #ffb84d, var(--accent), #f5c242);
-  background-size: 300% 300%; animation: onTapShimmer 6s ease infinite;
+  background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d, #ffb84d);
+  background-size: 300% 300%; animation: rareShimmer 2.2s ease infinite;
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor; mask-composite: exclude;
   pointer-events: none;
 }
-.topPickTag {
-  font: var(--type-label); font-size: 8.5px; letter-spacing: var(--tracking-label);
-  text-transform: uppercase; color: var(--on-accent);
-  background: linear-gradient(120deg, var(--accent), #ffb84d, var(--accent));
-  background-size: 300% 300%; animation: onTapShimmer 6s ease infinite;
-  border-radius: var(--radius-pill); padding: 1.5px 6px; flex: none;
+.topPickTagRare {
+  animation: rarePop .45s ease, rareShimmer 2.2s ease infinite;
+  background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d); background-size: 300% 300%;
+  color: var(--on-accent); border-color: transparent;
 }
-/* Rare variant — see panel.js's renderBest() for the (deliberately
-   infrequent) odds this ever shows up. Made deliberately more noticeable
-   than the everyday "On tap" card — a few seconds of glow + a pop on the
-   pill so it actually reads as "something special happened," not just a
-   slightly different color — but it settles down to a calmer shimmer after
-   ~3.6s rather than glowing/bouncing for the player's entire reign at #1.
-   panel.js also fires a one-time toast the moment this triggers, so there's
-   no ambiguity about whether it's a real signal or just the easter egg. */
-@keyframes rareGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,184,77,0); } 50% { box-shadow: 0 0 16px 3px rgba(255,184,77,.5); } }
-@keyframes rarePop { 0% { transform: scale(0.8); } 55% { transform: scale(1.18); } 100% { transform: scale(1); } }
-.quadCellRare { animation: rareGlow 1.2s ease-in-out 3; }
-.quadCellRare::before { animation: onTapShimmer 2.2s ease infinite; background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d, #ffb84d); background-size: 300% 300%; }
-.topPickTagRare { animation: rarePop .45s ease, onTapShimmer 2.2s ease infinite; background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d); background-size: 300% 300%; }
 
 /* filter bar */
 #filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

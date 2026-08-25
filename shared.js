@@ -1315,3 +1315,53 @@ function buildBeerValues(rows, projMap, takenKeySet = new Set()) {
   });
   return { values, replacementByPos };
 }
+
+// Team-level positional value ranking — backlog #13 ("team grade vs.
+// league-mates"), unblocked by BEER being built. Groups every drafted
+// player by which roster took them, sums each team's BEER value at each
+// position, and ranks all teams against each other — "your QBs rank 3rd of
+// 10 in the league" etc. Deliberately LIVE, not a snapshot at pick time:
+// every player's value here comes from the SAME beerValues map the rest of
+// the board uses, evaluated against the CURRENT replacement level, so a
+// team's positional rank can shift even with no new picks at that position
+// — exactly like every other BEER number in this tool (see claude.md for
+// the reasoning behind choosing live over pick-time snapshots).
+//
+// Sum of every drafted player's value at a position (not just the best
+// starter) was a deliberate choice: it rewards bench depth too, and avoids
+// having to guess who's a "starter" at any given moment — same philosophy
+// as the man-games replacement calc itself.
+//
+// `picks` needs a `rosterId` field per pick (roster_id, falling back to
+// draft_slot — same acceptance the existing "is this pick mine" check uses,
+// since Sleeper populates these differently across real vs. mock drafts).
+// Picks with no rosterId, or for a player with no computed BEER value, are
+// skipped rather than guessed at.
+function buildTeamPositionRanks(picks, beerValues) {
+  const byTeamPos = {}; // rosterId -> pos -> summed value
+  picks.forEach((p) => {
+    if (p.rosterId == null) return;
+    const val = beerValues.get(p.key);
+    if (val === undefined) return;
+    byTeamPos[p.rosterId] = byTeamPos[p.rosterId] || {};
+    byTeamPos[p.rosterId][p.pos] = (byTeamPos[p.rosterId][p.pos] || 0) + val;
+  });
+  // "of" (the denominator) is every team seen ANYWHERE in picks, not just
+  // teams with a pick at this specific position — a team with zero RBs so
+  // far should count toward the total and rank last, not be excluded from
+  // the denominator entirely (which would misleadingly shrink "of N" as the
+  // draft goes and make an empty position at a team look like it doesn't
+  // exist yet, rather than like the last-place gap it actually is).
+  const teamIds = Object.keys(byTeamPos).map(Number);
+  const ranks = {}; // rosterId -> pos -> { rank, of, total }
+  POSITIONS.forEach((pos) => {
+    const totals = teamIds
+      .map((id) => ({ id, total: byTeamPos[id][pos] || 0 }))
+      .sort((a, b) => b.total - a.total);
+    totals.forEach((t, i) => {
+      ranks[t.id] = ranks[t.id] || {};
+      ranks[t.id][pos] = { rank: i + 1, of: totals.length, total: t.total };
+    });
+  });
+  return ranks;
+}
