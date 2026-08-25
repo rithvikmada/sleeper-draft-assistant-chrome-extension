@@ -67,6 +67,7 @@ const NAMES = [
   "validateParsedSource", "usableSources", "median", "norm", "playerKey", "esc",
   "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans",
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
+  "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -74,6 +75,7 @@ const {
   validateParsedSource, usableSources, median, norm, playerKey, esc,
   makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans,
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
+  buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -327,6 +329,109 @@ const mk = (id, name, arr) =>
   const orphans = findOrphans([def, fp], {});
   ok(Object.keys(orphans).length === 2, "two real sources with genuinely different rosters produce orphans on both sides");
   eq(findOrphans([def], {}), {}, "a single source has nothing to be an orphan relative to");
+}
+
+// ============================================================
+// buildBeerValues — BEER/VBD (backlog #8). This league's exact settings
+// (10 teams, 1QB/2RB/2WR/1TE/2FLEX) via LEAGUE_SETTINGS drive
+// REPLACEMENT_RANK — checking the derived numbers against hand math catches
+// a silent typo in the man-games formula that unit tests on made-up data
+// wouldn't (see the file header on why this project leans on real math
+// checks, not just synthetic happy-path cases).
+// ============================================================
+
+{
+  eq(LEAGUE_SETTINGS.teams, 10, "league settings: 10 teams");
+  // QB: 1 starter x 10 teams, no flex share = 10 slots x 17 games / 14 avg
+  // games played = ceil(12.14) = 13.
+  eq(REPLACEMENT_RANK.QB, 13, "QB replacement rank matches the hand-worked man-games math");
+  // RB: (2 starters x 10) + round(20 flex x 0.45) = 20+9 = 29 slots x 17 / 11.5
+  // = ceil(42.87) = 43.
+  eq(REPLACEMENT_RANK.RB, 43, "RB replacement rank matches the hand-worked man-games math");
+  // WR: same 29 slots x 17 / 13.5 = ceil(36.5) = 37.
+  eq(REPLACEMENT_RANK.WR, 37, "WR replacement rank matches the hand-worked man-games math");
+  // TE: (1 x 10) + round(20 x 0.10) = 10+2 = 12 slots x 17 / 13.5 = ceil(15.1) = 16.
+  eq(REPLACEMENT_RANK.TE, 16, "TE replacement rank matches the hand-worked man-games math");
+}
+
+{
+  // 50 QBs, descending projection, no one drafted — replacement is the 13th
+  // best (REPLACEMENT_RANK.QB), so QB1's value is points(1) - points(13).
+  const rows = [];
+  const projMap = {};
+  for (let i = 1; i <= 50; i++) {
+    const name = `QB Player ${i}`;
+    const key = playerKey(name, "QB");
+    rows.push({ key, pos: "QB", name });
+    projMap[key] = 400 - i * 5; // strictly descending
+  }
+  const { values } = buildBeerValues(rows, projMap, new Set());
+  const p1 = playerKey("QB Player 1", "QB");
+  const p13 = playerKey("QB Player 13", "QB");
+  eq(values.get(p1), projMap[p1] - projMap[p13], "QB1's value is its own points minus the 13th-best available QB's points");
+  eq(values.get(p13), 0, "the replacement player itself always values at exactly 0");
+
+  // Live recompute: draft off the top 5 QBs. The replacement player is still
+  // "13th best AVAILABLE," which is now the players's original rank 18 (5
+  // taken + 13 deep from there) — replacement level should get worse (lower
+  // points), which means QB1's value should go UP relative to the undrafted
+  // pool, matching "the best available replacement gets worse as players at
+  // that position get drafted" from the build prompt.
+  const takenTop5 = new Set(Array.from({ length: 5 }, (_, i) => playerKey(`QB Player ${i + 1}`, "QB")));
+  const rowsAfter = rows.filter((r) => !takenTop5.has(r.key));
+  const { values: valuesAfter } = buildBeerValues(rowsAfter, projMap, new Set());
+  const p6 = playerKey("QB Player 6", "QB"); // now the best available QB
+  const p18 = playerKey("QB Player 18", "QB"); // now the 13th-best available QB
+  eq(valuesAfter.get(p6), projMap[p6] - projMap[p18], "after 5 QBs are drafted, replacement level is recomputed off the 13th-best AVAILABLE QB");
+  ok(valuesAfter.get(p6) > values.get(playerKey("QB Player 6", "QB")), "the same player's value rises once shallower players ahead of them are drafted off, since replacement level degraded");
+}
+
+{
+  // A player with no projection data shouldn't appear in the value map at
+  // all (not defaulted to 0, which would make them look like exactly
+  // replacement-level rather than "unknown").
+  const rows = [{ key: "x|QB", pos: "QB", name: "No Projection Guy" }];
+  const { values } = buildBeerValues(rows, {}, new Set());
+  eq(values.has("x|QB"), false, "a player missing from the projections map is excluded from values, not defaulted to 0");
+}
+
+// ============================================================
+// buildTeamPositionRanks — backlog #13 (team grade vs. league-mates).
+// ============================================================
+
+{
+  const beerValues = new Map([
+    ["qb-a|QB", 40], ["qb-b|QB", 30], ["qb-c|QB", 10],
+    ["rb-a|RB", 20], ["rb-b|RB", 5],
+  ]);
+  const picks = [
+    { key: "qb-a|QB", pos: "QB", rosterId: 1 }, // team 1: QB total 40
+    { key: "qb-b|QB", pos: "QB", rosterId: 2 }, // team 2: QB total 30
+    { key: "qb-c|QB", pos: "QB", rosterId: 3 }, // team 3: QB total 10
+    { key: "rb-a|RB", pos: "RB", rosterId: 2 }, // team 2: RB total 20
+    { key: "rb-b|RB", pos: "RB", rosterId: 1 }, // team 1: RB total 5
+    { key: "unknown|QB", pos: "QB", rosterId: 4 }, // no BEER value — excluded
+    { key: "no-team|QB", pos: "QB", rosterId: null }, // no rosterId — excluded
+  ];
+  const ranks = buildTeamPositionRanks(picks, beerValues);
+  eq(ranks[1].QB, { rank: 1, of: 3, total: 40 }, "highest QB total in the league ranks 1st");
+  eq(ranks[2].QB, { rank: 2, of: 3, total: 30 }, "middle QB total ranks 2nd");
+  eq(ranks[3].QB, { rank: 3, of: 3, total: 10 }, "lowest QB total ranks 3rd");
+  // "of" reflects every team seen anywhere in picks, not just teams with a
+  // pick at THIS position — a team with zero RBs should count toward the
+  // denominator and rank last, not be excluded from it entirely.
+  eq(ranks[2].RB, { rank: 1, of: 3, total: 20 }, "team 2's RB total (20) beats team 1's (5) for 1st of 3 teams total");
+  eq(ranks[3].RB, { rank: 3, of: 3, total: 0 }, "a team with zero RB picks still counts toward the denominator and ranks last");
+  ok(ranks[4] === undefined, "a pick with no computed BEER value doesn't create a team entry off it alone");
+
+  // Live recompute: if team 3's QB value rises above team 1's and 2's
+  // (replacement level shifted, or a stronger backup got added), the rank
+  // ordering should update with zero changes to picks — same "live, not a
+  // snapshot" requirement as buildBeerValues itself.
+  const beerValuesAfter = new Map(beerValues);
+  beerValuesAfter.set("qb-c|QB", 100);
+  const ranksAfter = buildTeamPositionRanks(picks, beerValuesAfter);
+  eq(ranksAfter[3].QB.rank, 1, "team 3's QB rank improves once its BEER value rises, with no new picks");
 }
 
 // ============================================================

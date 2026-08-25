@@ -81,21 +81,25 @@ thoughts as they come. We'll batch these into actual coding sessions later.
 - **Reminder flag: ask me to actually do this research before we start coding**, since
   it should inform #2, #5, and #6 rather than happen after.
 
-## 8. VORP (Value Over Replacement Player) — deferred, own future pass
-- Explicitly NOT part of the Rankings Manager build (see rankings-manager-prompt.md).
-- Real reason it's deferred: VORP requires actual point PROJECTIONS, not ranks.
-  The current rankings data is ordinal (1st, 2nd, 3rd...) — VORP needs magnitude
-  (how many points better is this player than the next-best replacement), which
-  ranks alone can't provide.
-- To build this properly later, will need: (a) a projections data source (e.g.
-  FantasyPros publishes point projections separately from their ECR rankings —
-  check if that's exportable), (b) a defined "replacement level" calculation
-  using this league's exact settings (10 teams, starters, reasonable bench
-  buffer), (c) probably its own view/tab rather than a bolt-on to existing UI.
-- Connects to backlog #4 (league-specific scoring logic) — TE premium and
-  2-FLEX value adjustments are conceptually the same kind of "true value beyond
-  raw rank" problem VORP solves, so these two items may end up sharing logic
-  when eventually built.
+## 8. VORP / VBD — BUILT 2026-08-25, as plain BEER (man-games baseline)
+- Built in the `feature/beer-vbd` worktree/branch, per `beer-vbd-prompt.md`.
+  See claude.md's "BEER / VBD" section for the full writeup.
+- Data source: Sleeper's own projections endpoint (`pts_ppr`), same one ADP
+  already uses — the earlier "will need a projections data source" blocker
+  from this entry turned out to already exist for free.
+- Replacement level uses this league's actual settings (10 teams,
+  1QB/2RB/2WR/1TE/2FLEX), via a documented man-games/FLEX-share assumption —
+  see claude.md for the exact numbers and reasoning.
+- Live: recomputes off currently-available players as the draft progresses,
+  reusing the existing pick-sync plumbing, no new polling.
+- Surfaces as VBD values on the BEST QB/RB/WR/TE grid (with a highlighted
+  objective-best-pick card) and a new sortable VALUE column in the Rankings
+  Manager table — not a separate view/tab as originally guessed above.
+- **Not built, logged separately**: BEER+'s risk-adjustment/QB-streaming
+  layers, and roster-need-aware value discounting (plain BEER is
+  team-agnostic) — see claude.md's "BEER+-parity gap" backlog entry.
+- Connects to backlog #4 (league-specific scoring logic), which was
+  separately dropped (no consistent industry formula found) — see claude.md.
 
 ## 9. ADP-vs-rank column — ◐ BUILT, but NOT auto-pulled (premise was wrong)
 - Formerly backlog #6 (heat map). Low-cost to add now since we're already
@@ -149,27 +153,38 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   polling when the panel is closed. Deliberately not built now, since the constraint
   was to leave the polling/cache path in `panel.js` untouched.
 
-## 13. Positional + overall team GRADE vs. league-mates — NEW, user flagged as high priority
-- As the draft runs, show how the user's roster stacks up against every other team:
-  a rank per position ("your RBs are 3rd of 10, your WRs are 1st") plus an overall
-  team letter grade. The point is to make in-draft decisions off RELATIVE standing —
-  "I'm 1st at WR five rounds in, so go get running backs" — not off your own roster
-  viewed in isolation.
-- **Feasibility is good and the data is already in hand**: every pick in the
-  `/picks` feed carries `roster_id` and `draft_slot` (`panel.js` already reads both
-  to decide `byMe`), so grouping the existing picks array by roster reconstructs all
-  N teams' rosters with zero new API calls. `lastSharedPicks` is already persisted
-  for both surfaces.
-- Open questions before building:
-  - What metric ranks a position group? Sum vs. average of consensus rank is the
-    cheap version; a replacement-value method is the honest one. This overlaps
-    heavily with #4 (league scoring) and #8 (VORP) — probably shares logic, and a
-    letter grade implies a value scale that ranks alone can't really supply, so
-    read #8's note about ordinal-vs-magnitude before picking an approach.
-  - How to label teams in a mock draft (bots may have no useful display name —
-    verify what Sleeper actually returns; "Team {slot}" is the safe fallback).
-  - Where it lives: N teams wide doesn't fit the side panel. Likely a new "League"
-    view in the Rankings Manager tab, or its own pop-out window.
+## 13. Positional rank vs. league-mates — per-position slice BUILT 2026-08-25
+- Original ask: a rank per position ("your RBs are 3rd of 10, your WRs are 1st")
+  plus an overall team letter grade, so in-draft decisions can be made off
+  RELATIVE standing, not your own roster viewed in isolation.
+- **Per-position rank is built.** `buildTeamPositionRanks()` (shared.js) groups
+  the existing `lastSharedPicks` array by `rosterId` (added to each pick in
+  panel.js's `poll()`), sums each team's BEER value per position, and ranks
+  every team. Surfaces as a live chip in the board window's "My team" widget —
+  no new API calls, no new view/window needed (the "where it lives" open
+  question below resolved to "right where the existing team-counts widget
+  already is," not a separate League view). See claude.md's #13 write-up for
+  the full reasoning, including why it's LIVE (graded against current
+  replacement level, not frozen at pick time) and how the rank denominator
+  handles a team with zero players at a position.
+- **What actually resolved the old open questions**: the metric question
+  (sum vs. average vs. replacement-value) is answered by BEER itself now
+  that #8 is built — sum of BEER value per position, same reasoning as the
+  man-games calc. The "where it lives" question resolved to the existing
+  board-window widget, no new UI surface needed.
+- **Not yet built — a genuinely separate follow-up now, not implied by the
+  above**: an OVERALL team grade/letter that rolls all four positions into
+  one number or rank, the way the original ask described. Per-position rank
+  answers "how do my RBs compare," not "how does my WHOLE team compare" —
+  that needs a decision on how to weight positions against each other (equal
+  weight? weighted by roster slots, e.g. 2 RB slots vs 1 QB slot?) before
+  it's a single honest number, which per-position rank alone doesn't need to
+  answer. Pick this up as its own scoped task, don't assume it's a trivial
+  extension of what's built.
+- Team display names in a mock draft (bots may have no useful name) —
+  still unaddressed, since the rank chip only ever needed to show YOUR OWN
+  rank number, not label every other team by name. Would matter if a future
+  "league standings" view ever lists all 10 teams by name.
 
 ## 14. Manual refresh button may not be earning its place — NEW
 - User's observation from a live draft: it appears to do nothing useful.

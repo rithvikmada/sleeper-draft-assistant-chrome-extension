@@ -54,6 +54,7 @@ const K_ADP     = "adpData";        // array of ADP source objects (see makeAdpS
 const K_ROSTER  = "myRosterId";     // which draft slot / roster id is the user's
 const K_FLAGS   = "playerFlags";    // playerKey -> "favorite" | "avoid", set in the manager, shown everywhere
 const K_MERGES  = "playerMerges";   // { variantKey: canonicalKey, ... } — unmatched player reconciliation
+const K_PROJ    = "beerProjections"; // { year, fetchedAt, map: { playerKey: ptsPpr } } — see BEER/VBD section below
 const K_STATS   = "playerStats";    // { updatedAt, year, players: { playerKey: { stats:[{label,value,display,pct,full}] } } }
                                      // — position-specific role/volume stat pairs, fetched from Sleeper's public
                                      // stats+projections endpoints (see fetchSleeperStats in rankings-manager.js)
@@ -1736,4 +1737,199 @@ function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {})
     }
   });
   return matches;
+}
+
+// ---------- BEER / VBD (backlog #8) ----------
+// Value-Based Drafting, BEER (man-games) baseline. See claude.md for the full
+// writeup, including why BEER (not VOLS/BEER+) is the target and what's
+// deliberately out of scope (risk-adjustment, QB streaming, roster-need
+// discounting). Plain summary: value = a player's projected PPR points minus
+// the projected points of the "replacement-level" player at their position —
+// the player you could still get for free at that spot. That subtraction is
+// what makes values comparable ACROSS positions (raw point totals aren't:
+// a QB's raw total dwarfs a TE's and says nothing about relative value).
+
+// This league's actual shape (10 teams, full PPR, 1QB/2RB/2WR/1TE/2FLEX, no
+// K/D — see claude.md). Reused nowhere else in the codebase yet; this is the
+// first place league shape needed a real representation instead of being
+// implicit in hardcoded numbers.
+const LEAGUE_SETTINGS = {
+  teams: 10,
+  starters: { QB: 1, RB: 2, WR: 2, TE: 1 },
+  flexSlots: 2, // FLEX-eligible: RB/WR/TE
+};
+
+// No authoritative real-world number exists for how FLEX starts actually
+// split across RB/WR/TE. Documented assumption, not derived: full PPR
+// flattens RB/WR value enough that flex usage skews roughly even between
+// them; TE sees much less flex usage in practice since a flex-worthy TE
+// is almost always started outright at the TE slot instead. Revisit if
+// replacement ranks below look off against real draft behavior.
+const FLEX_SHARE = { RB: 0.45, WR: 0.45, TE: 0.10 };
+
+const SEASON_GAMES = 17;
+
+// The "man-games" piece of BEER: converts "how many starter-slots does the
+// league need" into "how many players deep do you actually need to draft to
+// cover a full season," by dividing total starter man-games needed by the
+// average games a rostered player around that depth actually plays. Starters
+// alone undercount replacement depth — byes, injuries, and in-season bench
+// churn pull more than just the nominal starter count into starting lineups
+// over a season. Single blended constant per position (not split into a
+// separate starter-tier/replacement-tier number) — simple and defensible,
+// not exotic, per the reasoning logged when this was built. QBs miss the
+// fewest games (least contact, backups rarely needed); RBs miss the most
+// (workload + committee/injury risk); WR/TE land in between. Revisit these
+// against real injury-rate data if replacement ranks ever look badly off.
+const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5 };
+
+// REPLACEMENT_RANK[pos] = how many players deep (by projected points) you
+// have to go at that position before you hit "replacement level" for this
+// league's exact shape. Computed once from league math above — this number
+// itself is static, but WHICH player sits at that depth is not (see
+// buildBeerValues below, which recomputes live off the current draft state).
+function computeReplacementRanks() {
+  const flexSlotsTotal = LEAGUE_SETTINGS.flexSlots * LEAGUE_SETTINGS.teams;
+  const ranks = {};
+  POSITIONS.forEach((pos) => {
+    const base = (LEAGUE_SETTINGS.starters[pos] || 0) * LEAGUE_SETTINGS.teams;
+    const flexShare = Math.round(flexSlotsTotal * (FLEX_SHARE[pos] || 0));
+    const starterSlots = base + flexShare;
+    ranks[pos] = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / AVG_GAMES_PLAYED[pos]));
+  });
+  return ranks;
+}
+const REPLACEMENT_RANK = computeReplacementRanks();
+
+// Sleeper's projections endpoint — same domain, same no-auth public endpoint
+// fetchSleeperAdp() already calls in rankings-manager.js for adp_ppr, just
+// reading pts_ppr off the same response shape instead. No new host
+// permission, no new import mechanism — this was a deliberate choice (see
+// claude.md) to keep ADP and projections on one consistent philosophy rather
+// than inventing a CSV path for one and a live fetch for the other.
+async function fetchSleeperProjections() {
+  const year = new Date().getFullYear();
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const raw = Array.isArray(data) ? data : [];
+  const players = raw
+    .filter((p) => p.stats && isFinite(p.stats.pts_ppr) && p.player && POSITIONS.includes(p.player.position))
+    .map((p) => ({
+      key: playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position),
+      pts: Number(p.stats.pts_ppr),
+    }));
+  if (!players.length) {
+    throw new Error(raw.length
+      ? `Sleeper returned ${raw.length} players but none carried a usable pts_ppr projection — their API may have changed`
+      : `No projections for the ${year} season yet`);
+  }
+  return players;
+}
+
+async function loadProjections() {
+  const store = await chrome.storage.local.get(K_PROJ);
+  return (store[K_PROJ] && store[K_PROJ].map) || {};
+}
+
+async function saveProjections(map) {
+  await chrome.storage.local.set({ [K_PROJ]: { year: new Date().getFullYear(), fetchedAt: Date.now(), map } });
+}
+
+// Silent background refresh, same pattern as the ADP/stat auto-fetches —
+// logs and gives up quietly on failure rather than surfacing a toast on
+// every board-window open.
+async function autoRefreshProjections() {
+  try {
+    const players = await fetchSleeperProjections();
+    const map = {};
+    players.forEach((p) => { map[p.key] = p.pts; });
+    await saveProjections(map);
+    return map;
+  } catch (err) {
+    console.warn("[4th&Go] BEER projections auto-fetch failed:", err.message);
+    return null;
+  }
+}
+
+// The live part of BEER: replacement level for a position is the projection
+// of the Nth-best player who is STILL AVAILABLE there (N = REPLACEMENT_RANK,
+// fixed by league shape). As players at a position get drafted off the top,
+// the player occupying that Nth-deepest available slot gets worse — so
+// replacement level, and therefore every remaining player's value at that
+// position, degrades in real time as the draft progresses. No separate
+// polling needed: this just reads whatever draft state (taken/manualTaken)
+// the existing pick-sync plumbing already has, recomputed on every render.
+function buildBeerValues(rows, projMap, takenKeySet = new Set()) {
+  const byPos = {};
+  rows.forEach((r) => {
+    const pts = projMap[r.key];
+    if (pts === undefined) return;
+    (byPos[r.pos] = byPos[r.pos] || []).push({ key: r.key, pts, taken: takenKeySet.has(r.key) });
+  });
+  const replacementByPos = {};
+  Object.keys(byPos).forEach((pos) => {
+    const available = byPos[pos].filter((p) => !p.taken).sort((a, b) => b.pts - a.pts);
+    const n = REPLACEMENT_RANK[pos] || available.length;
+    const idx = Math.min(n - 1, available.length - 1);
+    replacementByPos[pos] = idx >= 0 ? available[idx].pts : 0;
+  });
+  const values = new Map();
+  Object.keys(byPos).forEach((pos) => {
+    byPos[pos].forEach((p) => {
+      values.set(p.key, p.pts - replacementByPos[pos]);
+    });
+  });
+  return { values, replacementByPos };
+}
+
+// Team-level positional value ranking — backlog #13 ("team grade vs.
+// league-mates"), unblocked by BEER being built. Groups every drafted
+// player by which roster took them, sums each team's BEER value at each
+// position, and ranks all teams against each other — "your QBs rank 3rd of
+// 10 in the league" etc. Deliberately LIVE, not a snapshot at pick time:
+// every player's value here comes from the SAME beerValues map the rest of
+// the board uses, evaluated against the CURRENT replacement level, so a
+// team's positional rank can shift even with no new picks at that position
+// — exactly like every other BEER number in this tool (see claude.md for
+// the reasoning behind choosing live over pick-time snapshots).
+//
+// Sum of every drafted player's value at a position (not just the best
+// starter) was a deliberate choice: it rewards bench depth too, and avoids
+// having to guess who's a "starter" at any given moment — same philosophy
+// as the man-games replacement calc itself.
+//
+// `picks` needs a `rosterId` field per pick (roster_id, falling back to
+// draft_slot — same acceptance the existing "is this pick mine" check uses,
+// since Sleeper populates these differently across real vs. mock drafts).
+// Picks with no rosterId, or for a player with no computed BEER value, are
+// skipped rather than guessed at.
+function buildTeamPositionRanks(picks, beerValues) {
+  const byTeamPos = {}; // rosterId -> pos -> summed value
+  picks.forEach((p) => {
+    if (p.rosterId == null) return;
+    const val = beerValues.get(p.key);
+    if (val === undefined) return;
+    byTeamPos[p.rosterId] = byTeamPos[p.rosterId] || {};
+    byTeamPos[p.rosterId][p.pos] = (byTeamPos[p.rosterId][p.pos] || 0) + val;
+  });
+  // "of" (the denominator) is every team seen ANYWHERE in picks, not just
+  // teams with a pick at this specific position — a team with zero RBs so
+  // far should count toward the total and rank last, not be excluded from
+  // the denominator entirely (which would misleadingly shrink "of N" as the
+  // draft goes and make an empty position at a team look like it doesn't
+  // exist yet, rather than like the last-place gap it actually is).
+  const teamIds = Object.keys(byTeamPos).map(Number);
+  const ranks = {}; // rosterId -> pos -> { rank, of, total }
+  POSITIONS.forEach((pos) => {
+    const totals = teamIds
+      .map((id) => ({ id, total: byTeamPos[id][pos] || 0 }))
+      .sort((a, b) => b.total - a.total);
+    totals.forEach((t, i) => {
+      ranks[t.id] = ranks[t.id] || {};
+      ranks[t.id][pos] = { rank: i + 1, of: totals.length, total: t.total };
+    });
+  });
+  return ranks;
 }
