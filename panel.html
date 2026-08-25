@@ -365,38 +365,44 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .bestActionBtn[data-action="draft"]:hover { background: var(--green-a12); color: var(--green-500); }
 .bestActions { display: flex; align-items: center; gap: 2px; }
 
-.teamCountsRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 #teamCounts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .teamHint { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 
-/* Team/Roster dropdown — same floating-popover mechanics as .queuePopover
-   (see openRosterPopover in panel.js: fixed position, flip-above-below,
-   clamped to viewport, closes on outside click) but read-only: no drag
-   reordering, no draft/queue actions on any row. One continuous list of
-   every rostered player in lineup-slot order (QB, RB, RB, WR, WR, TE,
-   FLEX, FLEX, then bench) with still-open slots rendered inline, dashed —
-   not a separate "unfilled" group — plus a live per-position rank strip
-   (reusing the exact same buildTeamPositionRanks/rankColor() the
-   teamCounts pills already use) up top. */
-.rosterPopover { position: fixed; z-index: 60; width: 340px; max-height: 460px; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); }
-.rosterPopover[hidden] { display: none; }
-.rosterHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px 10px; border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0; background: var(--surface-raised); z-index: 1; }
-.rosterHead .title { font: var(--type-heading); font-size: 13.5px; color: var(--text-primary); }
-.rosterHead .sub { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
-.rosterSummary { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); }
+/* "Your turn" / "Your turn in N picks" — moved here (2026-08-25, was in the
+   header's statusRow) to sit right above the row of action buttons
+   (Stats/Roster/Queue) you're about to use, instead of up in the status
+   line where it's easy to glance past mid-scroll. */
+#turnBadgeRow { display: flex; }
+
+/* Team/Roster dropdown — deliberately reuses .queuePopover as its base
+   (same floating-panel mechanics: fixed position, flip-above-below,
+   clamped to viewport, closes on outside click — see openRosterPopover in
+   panel.js) so the two dropdowns read as one family, not two separately
+   built things bolted together. .rosterPopover only adds what's actually
+   different: read-only rows (no drag/draft/remove actions), a summary
+   strip up top, and a grid layout per row instead of a flat flex row. One
+   continuous list of every rostered player in lineup-slot order (QB, RB,
+   RB, WR, WR, TE, FLEX, FLEX, then bench) — still-open slots render
+   inline, dashed, not in a separate "unfilled" group. */
+.rosterPopover { max-height: 460px; }
+.rosterSummary { display: flex; gap: 4px; padding: 2px 2px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-subtle); }
 .rosterSummary .sItem { flex: 1; text-align: center; }
-.rosterSummary .sItem .sPos { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
-.rosterList { display: flex; flex-direction: column; padding: 4px 6px 8px; }
-.rosterRow { display: grid; grid-template-columns: 34px 34px 1fr auto; align-items: center; gap: 9px; padding: 6px 8px; border-radius: var(--radius-sm); }
+.rosterSummary .sItem .sPos { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; margin-bottom: 3px; }
+/* Deliberately small (see claude.md polish notes) — this reads as a glance-
+   aid strip, not a second set of headline numbers competing with the
+   board's own tier/rank text. */
+.rosterRankTag { display: inline-block; font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: .02em; padding: 1px 5px; border-radius: 4px; line-height: 1.4; }
+.rosterList { display: flex; flex-direction: column; gap: 2px; }
+.rosterRow { display: grid; grid-template-columns: 34px 32px 1fr auto; align-items: center; gap: 9px; height: 40px; padding: 0 6px; border-radius: var(--radius-sm); transition: background-color var(--dur-fast) var(--ease-out); }
 .rosterRow:hover { background: var(--surface-row-hover); }
 .rosterRow.empty { opacity: .45; }
-.rosterAvatar { width: 32px; height: 32px; border-radius: 50%; flex: none; position: relative; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 11px; color: var(--text-primary); background: var(--surface-sunken); border: 2px solid var(--ink-500); }
+.rosterAvatar { width: 30px; height: 30px; border-radius: 50%; flex: none; position: relative; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 10.5px; color: var(--text-primary); background: var(--surface-sunken); background-size: cover; background-position: center top; border: 2px solid var(--ink-500); }
 .rosterAvatar.dashed { border-style: dashed; background: transparent; color: var(--text-disabled); }
-.rosterTeamBadge { position: absolute; right: -3px; bottom: -3px; min-width: 15px; height: 15px; padding: 0 2px; border-radius: 999px; background: var(--ink-700); border: 1.5px solid var(--surface-raised); font-family: var(--font-mono); font-size: 6px; font-weight: 800; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; }
+.rosterTeamBadge { position: absolute; right: -3px; bottom: -3px; width: 15px; height: 15px; border-radius: 999px; background: var(--ink-700) center/cover no-repeat; border: 1.5px solid var(--surface-raised); font-family: var(--font-mono); font-size: 6px; font-weight: 800; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .rosterName { font: var(--type-ui); font-size: 13px; color: var(--text-primary); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rosterMeta { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 .rosterPick { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--text-primary); text-align: right; white-space: nowrap; }
-.rosterPick .rd { display: block; font-size: 8px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 1px; }
+.rosterPick .rd { display: block; font-size: 9px; font-weight: 600; color: var(--text-muted); letter-spacing: .01em; margin-top: 1px; }
 .rosterPick.dim { color: var(--text-disabled); font-weight: 500; }
 .rosterEmptyMsg { padding: 18px 14px; font: var(--type-body); font-size: 13px; color: var(--text-muted); text-align: center; }
 #sourceList { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
@@ -722,7 +728,6 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div class="statusRow">
       <span id="statusDot" class="statusDot"></span>
       <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
-      <span id="draftTurnBadge" class="turnBadge" style="display:none"></span>
     </div>
 
     <div id="settingsPanel" class="collapsed">
@@ -785,11 +790,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     </div>
     <div id="statusPanel"></div>
 
-    <div class="teamCountsRow">
-      <div id="teamCounts"></div>
-      <button class="chip" id="rosterBtn" data-tip="View your full roster, in lineup-slot order">Roster ▾</button>
-    </div>
-    <div id="rosterPopover" class="rosterPopover" hidden></div>
+    <div id="teamCounts"></div>
+    <div id="rosterPopover" class="queuePopover rosterPopover" hidden></div>
     <div id="sourceList"></div>
     <div id="bestPicks"></div>
     <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="btn outline">Show all</button></div>
@@ -803,6 +805,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </span>
     </div>
     <div id="best"></div>
+    <div id="turnBadgeRow"><span id="draftTurnBadge" class="turnBadge" style="display:none"></span></div>
     <div id="filters">
       <div class="segmented" id="posSeg">
         <button class="pf seg active" data-pos="ALL">All</button>
@@ -815,6 +818,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       <button class="chip" id="takenToggle" data-tip="Also show drafted players, crossed out, at the current position filter">Show taken</button>
       <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>
       <button class="chip" id="statPickerBtn" data-tip="Choose which stat columns show for each position">Stats ▾</button>
+      <button class="chip" id="rosterBtn" data-tip="View your full roster, in lineup-slot order">Roster ▾</button>
       <!-- EXPERIMENTAL (queue/draft-write branch) — see renderSleeperQueueBtn/
            openSleeperQueuePopover in panel.js. Hidden entirely unless Draft
            actions is on, same "zero footprint when off" rule as everything

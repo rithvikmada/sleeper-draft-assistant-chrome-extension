@@ -829,7 +829,7 @@ function formatDraftPick(pickNo) {
   const teams = LEAGUE_SETTINGS.teams;
   const round = Math.floor((pickNo - 1) / teams) + 1;
   const inRound = ((pickNo - 1) % teams) + 1;
-  return { round, inRound, label: `${round}.${String(inRound).padStart(2, "0")}`, sub: `R${round} P${String(inRound).padStart(2, "0")}` };
+  return { label: `${round}.${String(inRound).padStart(2, "0")}` };
 }
 
 function initials(name) {
@@ -853,15 +853,16 @@ function renderRosterPopover() {
     panel.innerHTML = `<div class="rosterEmptyMsg">Set your draft slot # in settings to track your own roster.</div>`;
     return;
   }
-  const allRows = buildConsensus(activeSources(sources, soloSource), merges);
-  const byKey = new Map(allRows.map((r) => [r.key, r]));
+  // Full enabled-source blend — same rows Best Picks' own posRanks tags
+  // (computePosRanks, "RB6"/"WR12") are built from, so a player's position
+  // rank reads identically here and there. Deliberately NOT solo-filtered,
+  // matching renderRecommendations' own reasoning for the same call.
+  const blendRows = buildConsensus(sources.filter((s) => s.enabled), merges);
+  const byKey = new Map(blendRows.map((r) => [r.key, r]));
+  const posRanks = computePosRanks(blendRows);
   const mine = lastSharedPicks.filter((p) => p.byMe);
   const myTeamId = mine.find((p) => p.rosterId != null)?.rosterId;
-  const { values: beerValues } = buildBeerValues(
-    buildConsensus(sources.filter((s) => s.enabled), merges),
-    projMap,
-    takenKeySet()
-  );
+  const { values: beerValues } = buildBeerValues(blendRows, projMap, takenKeySet());
   const ranks = myTeamId != null ? buildTeamPositionRanks(lastSharedPicks, beerValues) : {};
   const myRanks = myTeamId != null ? ranks[myTeamId] : null;
 
@@ -870,8 +871,8 @@ function renderRosterPopover() {
     const r = myRanks && myRanks[pos];
     const n = mine.filter((p) => p.pos === pos).length;
     const rankHtml = r && n > 0
-      ? (() => { const { bg, fg } = rankColor(r.rank, r.of); return `<span class="prpRank" style="background:${bg};color:${fg};border-radius:4px;padding:2px 6px;display:inline-block">${esc(ordinal(r.rank).toUpperCase())}</span>`; })()
-      : `<span class="prpRank" style="color:var(--text-disabled)">—</span>`;
+      ? (() => { const { bg, fg } = rankColor(r.rank, r.of); return `<span class="rosterRankTag" style="background:${bg};color:${fg}">${esc(ordinal(r.rank).toUpperCase())}</span>`; })()
+      : `<span class="rosterRankTag" style="color:var(--text-disabled)">—</span>`;
     return `<div class="sItem"><div class="sPos" style="color:${t.fg}">${esc(pos)}</div>${rankHtml}</div>`;
   }).join("");
 
@@ -891,16 +892,40 @@ function renderRosterPopover() {
     const t = posTint(pick.pos);
     const dp = formatDraftPick(pick.pickNo);
     const dim = slotLabel === "BN" ? " dim" : "";
+    // Headshot: Sleeper's own numeric player_id (sleeperIds, loaded from
+    // K_SLEEPER_IDS — already fetched for the queue/draft-write feature off
+    // the projections endpoint, no new fetch/permission needed here) against
+    // Sleeper's public thumb CDN. Team logo: same CDN, keyed off the
+    // consensus row's team abbreviation, lowercased (confirmed against a
+    // real response — Sleeper's logo files use lowercase 3-letter codes).
+    // Both are plain <img>-equivalent background-images loaded from a
+    // browser-level <div>, which MV3's default CSP doesn't restrict (that
+    // only gates script-src/object-src) — no manifest.json change needed.
+    // Falls back to initials / a plain team-text badge when either is
+    // missing (unmatched player, or no team on file — e.g. a free agent).
+    const sleeperId = sleeperIds[pick.key];
+    const avatarStyle = sleeperId
+      ? `border-color:${t.fg};background-image:url('https://sleepercdn.com/content/nfl/players/thumb/${sleeperId}.jpg')`
+      : `border-color:${t.fg}`;
+    const avatarInner = sleeperId ? "" : esc(initials(pick.name));
+    const teamBadge = team
+      ? `<span class="rosterTeamBadge" style="background-image:url('https://sleepercdn.com/images/team_logos/nfl/${team.toLowerCase()}.png')">${sleeperId ? "" : esc(team)}</span>`
+      : "";
+    // Position-rank tag ("WR 49") in place of a round/pick explainer — this
+    // is what actually answers "did I get my RB2 and RB5, or my WR10 and
+    // WR15", which the pick number alone can't.
+    const pr = posRanks.get(pick.key);
+    const prHtml = pr != null ? `<span class="rd">${esc(pick.pos)} ${pr}</span>` : "";
     return `<div class="rosterRow">
       ${slotChipHtml(slotLabel)}
-      <span class="rosterAvatar" style="border-color:${t.fg}">${esc(initials(pick.name))}${team ? `<span class="rosterTeamBadge">${esc(team)}</span>` : ""}</span>
+      <span class="rosterAvatar" style="${avatarStyle}">${avatarInner}${teamBadge}</span>
       <div><div class="rosterName">${esc(pick.name)}</div><div class="rosterMeta">${esc(pick.pos)}${team ? " · " + esc(team) : ""}</div></div>
-      <div class="rosterPick${dim}">${dp ? `${dp.label}<span class="rd">${dp.sub}</span>` : "—"}</div>
+      <div class="rosterPick${dim}">${dp ? `${dp.label}${prHtml}` : "—"}</div>
     </div>`;
   }).join("");
 
   panel.innerHTML = `
-    <div class="rosterHead"><span class="title">My Roster</span><span class="sub">slot ${esc(myRosterId)}</span></div>
+    <div class="queueHeader">My roster (${mine.length}) · slot ${esc(myRosterId)}</div>
     <div class="rosterSummary">${summaryHtml}</div>
     <div class="rosterList">${rowsHtml}</div>`;
 }
