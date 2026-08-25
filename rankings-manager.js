@@ -85,6 +85,7 @@ function renderSourceBar() {
     adpChips +
     `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ FETCH SLEEPER ADP</button>` +
     `<button class="alt" id="fetchProjectionsBtn" title="Auto-fetch season point projections from the same Sleeper API, used to compute the BEER column">⟳ FETCH PROJECTIONS</button>` +
+    `<button class="alt" id="fetchStatsBtn" title="Auto-fetch the board's stat columns (projected volume + prior-season target share/air yards/red-zone targets) from Sleeper's public API — same domain, no login">⟳ FETCH STATS</button>` +
     `<button class="alt" id="addAdpBtn">+ ADD ADP SOURCE</button>` +
     `<button class="alt" id="addSrcBtn">+ ADD SOURCE</button>` +
     (soloSource ? `<button class="alt" id="showAllBtn">↺ SHOW ALL SOURCES</button>` : "");
@@ -157,6 +158,7 @@ function renderSourceBar() {
   $("addAdpBtn").addEventListener("click", () => openModal(true));
   $("fetchSleeperAdpBtn").addEventListener("click", fetchSleeperAdp);
   $("fetchProjectionsBtn").addEventListener("click", fetchProjections);
+  $("fetchStatsBtn").addEventListener("click", fetchSleeperStats);
   if ($("showAllBtn")) $("showAllBtn").addEventListener("click", () => { soloSource = null; renderAll(); });
 }
 
@@ -170,36 +172,15 @@ function renderSourceBar() {
 // so no permission change was needed. Verified 2026-08-23 against real
 // current-season data (last_modified within the last day, top ADP order
 // matching FantasyPros/FFC's own consensus).
-const MIN_PLAUSIBLE_ADP_PLAYERS = 100; // below this, the response is partial/degraded, not a real ADP set
+// The actual fetch+parse now lives in shared.js's fetchSleeperAdpPlayers()
+// (also used by the board window's silent auto-refresh on load) — this is
+// just the button's disabled/text-swap + toast wrapper around it.
 async function fetchSleeperAdp() {
   const btn = $("fetchSleeperAdpBtn");
   btn.disabled = true;
   btn.textContent = "⟳ FETCHING…";
   try {
-    const year = new Date().getFullYear();
-    const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const raw = Array.isArray(data) ? data : [];
-    const players = raw
-      .filter((p) => p.stats && isFinite(p.stats.adp_ppr) && p.player && POSITIONS.includes(p.player.position))
-      .map((p) => ({
-        name: `${p.player.first_name} ${p.player.last_name}`,
-        pos: p.player.position,
-        rank: Number(p.stats.adp_ppr), // coerced at the boundary — see median() in shared.js
-      }));
-    // Two very different failures used to share one message. If Sleeper ever
-    // renames adp_ppr, every player fails the shape guard and the old code
-    // reported "No ADP data for 2026 season yet" — which in August is an
-    // entirely believable thing to read, so you'd shrug and move on instead of
-    // noticing their API changed. Tell them apart by whether the response had
-    // players in it at all.
-    if (!players.length) {
-      throw new Error(raw.length
-        ? `Sleeper returned ${raw.length} players but none carried a usable adp_ppr value — their API may have changed`
-        : `No ADP data for the ${year} season yet`);
-    }
+    const players = await fetchSleeperAdpPlayers();
     await upsertAdpSource("adp_sleeper_live", "Sleeper Live ADP", "#5FA8E8", players);
     renderAll();
     // A real ADP set from this endpoint is several hundred players. A handful
@@ -240,6 +221,32 @@ async function fetchProjections() {
   } finally {
     btn.disabled = false;
     btn.textContent = "⟳ FETCH PROJECTIONS";
+  }
+}
+
+// Auto-fetches the 3 board-facing stats per position (see the comment above
+// loadPlayerStats in shared.js for which stat maps to which position and
+// why). The actual fetch+parse now lives in shared.js's
+// fetchSleeperStatsPlayers() (also used by the board window's silent
+// auto-refresh on load) — this is just the button's UI wrapper.
+async function fetchSleeperStats() {
+  const btn = $("fetchStatsBtn");
+  btn.disabled = true;
+  btn.textContent = "⟳ FETCHING…";
+  try {
+    const { year, players, playerCount } = await fetchSleeperStatsPlayers();
+    await saveStatsToStorage(year, players);
+    renderAll();
+    if (playerCount < MIN_PLAUSIBLE_STATS_PLAYERS) {
+      toast(`Stats fetched, but only ${playerCount} players came back — that's far fewer than expected. Check the board before trusting it.`, true);
+    } else {
+      toast(`Stats fetched — ${playerCount} players (${year} projected volume + ${year - 1} usage)`);
+    }
+  } catch (err) {
+    toast(`Sleeper stats fetch failed: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⟳ FETCH STATS";
   }
 }
 
@@ -975,4 +982,8 @@ async function ensureBuiltinSources() {
   autoRefreshProjections().then((map) => {
     if (map) { projMap = map; renderAll(); }
   });
+  // Same silent auto-refresh as the board window's init (shared.js) — covers
+  // the case where the Manager tab is opened on its own, not just via the
+  // board's "Manager" button.
+  autoRefreshAdpAndStats();
 })();

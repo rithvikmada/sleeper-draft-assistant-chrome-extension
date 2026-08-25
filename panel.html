@@ -77,9 +77,20 @@
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+/* html/body used to just grow with content and rely on the whole page
+   scrolling — on a short window (the popup can be resized arbitrarily
+   small), that meant scrolling past the sync box + Best Picks cards +
+   filters every time just to reach the board, and on a genuinely short
+   window some players could end up effectively unreachable ("can't scroll
+   all the way down"). Making body a fixed-viewport flex column with #board
+   as the one scrolling region (below) pins the header in place and
+   guarantees the board's own scrollbar always covers every row, no matter
+   how short the window gets. */
+html, body { height: 100%; }
 body {
   margin: 0; background: var(--surface-app); color: var(--text-primary);
   font: var(--type-body); -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column; overflow: hidden;
 }
 [data-numeric], .numeric { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -204,7 +215,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .chip.active { border-color: var(--chalk-a24); background: var(--chalk-a12); color: var(--accent); }
 
 /* ---------- layout shell ---------- */
-#header { position: sticky; top: 0; z-index: 20; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+#header { flex: none; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
 .headTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .brandRow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .brand2 { font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: -0.02em; color: var(--text-primary); flex: none; }
@@ -232,6 +243,46 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #lastSync, #cacheCountdown { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); }
 #cacheCountdown.fresh { color: var(--green-500); }
 #refreshBtn.spin { opacity: .55; }
+
+/* EXPERIMENTAL (queue/draft-write branch) — the Sleeper queue popover:
+   opened from the "Queue ▾" chip in #filters (option B of a few layouts
+   mocked up and picked directly), reorderable via native HTML5 drag-and-drop,
+   removable and draftable per-row. Sized larger than a typical small popover
+   (340px, 40px rows, 13px text) specifically so it's comfortable to edit
+   on the fly mid-draft, not just glance at. See openSleeperQueuePopover /
+   renderSleeperQueuePopover in panel.js. */
+.queuePopover { position: fixed; z-index: 60; width: 340px; max-height: 420px; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 10px 12px; }
+.queuePopover[hidden] { display: none; }
+.queueHeader { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.queueEmpty { font: var(--type-body); font-size: 13px; color: var(--text-muted); }
+.queueList { display: flex; flex-direction: column; gap: 3px; }
+.queueRow { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 6px; border-radius: var(--radius-sm); cursor: grab; transition: background-color var(--dur-fast) var(--ease-out); }
+.queueRow:hover { background: var(--surface-row-hover); }
+.queueRow.dragging { opacity: .4; }
+.queueRow.dragOver { box-shadow: inset 0 2px 0 var(--accent); }
+.queueDrag { color: var(--text-disabled); font-size: 14px; flex: none; user-select: none; }
+/* One-step move buttons — a faster, more precise alternative to drag for
+   nudging a player a spot or two (see moveSleeperQueueItem in panel.js).
+   Stacked tight (no gap) so the pair reads as one up/down control. */
+.queueMoveBtns { display: flex; flex-direction: column; flex: none; }
+.queueMoveBtn { width: 16px; height: 14px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 3px; }
+.queueMoveBtn:hover:not(:disabled) { background: var(--chalk-a12); color: var(--accent); }
+.queueMoveBtn:disabled { opacity: .3; cursor: default; }
+.queueNum { width: 18px; text-align: right; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; flex: none; }
+.queueName { flex: 1; min-width: 0; font: var(--type-ui); font-size: 14px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queueDraftBtn, .queueRemoveBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.queueDraftBtn:hover { background: var(--chalk-a12); color: var(--accent); }
+.queueRemoveBtn:hover { background: var(--red-a12); color: var(--red-500); }
+
+/* EXPERIMENTAL — matching mini queue/draft buttons on the Best Available
+   cards (#best quad grid + #bestPicks top-3), same icons/behavior as the
+   board row and queue popover versions. Deliberately smaller than the
+   popover's own buttons (18px, not 22px) since these share tight card
+   headers with other content. */
+.bestActionBtn { width: 18px; height: 18px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.bestActionBtn:hover { background: var(--chalk-a12); color: var(--accent); }
+.bestActionBtn.on { color: var(--accent); }
+.bestActions { display: flex; align-items: center; gap: 2px; }
 
 #teamCounts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .teamHint { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
@@ -347,14 +398,26 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #playerSearchWrap input { width: 100%; }
 
 /* column header + rows */
-#colHead { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+#colHead { flex: none; display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 #colHead .c-flag { width: 16px; flex: none; }
 #colHead .c-rank { width: 38px; text-align: right; flex: none; }
 #colHead .c-name { flex: 1; }
+#colHead .c-stat { flex: none; position: relative; height: 100%; } /* width set inline by panel.js — varies with the stat picker's selection */
+#colHead .statHeadGroup { position: absolute; top: 0; left: 0; width: 134px; height: 100%; display: flex; align-items: center; padding: 0 4px; transition: transform var(--dur-base) var(--ease-out); }
+#colHead .statHeadGroup[data-pos]:not([data-pos="BASIC"]) { border-left: 1px solid var(--border-subtle); }
+#colHead .statHeadCol { width: 42px; flex: none; text-align: center; cursor: default; }
 #colHead .c-val { width: 90px; flex: none; }
 #colHead .c-pos { width: 52px; flex: none; text-align: right; }
 
-#board { padding: 0 0 24px; }
+/* overflow-x stays hidden (not auto) deliberately — #colHead lives in a
+   separate flex sibling, not inside this scroll container, so an
+   independent horizontal scrollbar here would desync the column labels
+   from the row values the moment someone scrolled sideways (the exact
+   header/row misalignment class of bug this project has hit before — see
+   "Design & alignment lessons"). If horizontal scrolling is ever needed for
+   a very narrow window, header and board need to scroll together as one
+   unit, not as two independently-scrolling siblings. */
+#board { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 24px; }
 .tierDiv { display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: rgba(255,255,255,.022); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 .tierDiv .num { color: var(--accent); }
 .tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
@@ -364,6 +427,13 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .row2.gone { opacity: .42; }
 .row2.mine { background: var(--chalk-a12); box-shadow: inset 2px 0 0 var(--accent); }
 .rowFlagBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; }
+/* EXPERIMENTAL (queue/draft-write branch) — same 16x16 icon-button shape as
+   .rowFlagBtn, plus a hover tint and an "on" state for the queue toggle. The
+   spacer variant keeps row height/alignment identical for rows that don't
+   have a matched Sleeper player_id (see sleeperBtns in panel.js). */
+.rowQueueBtn, .rowDraftBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; border-radius: 4px; transition: background-color var(--dur-fast) var(--ease-out); }
+.rowQueueBtn:hover, .rowDraftBtn:hover { background: var(--chalk-a12); }
+.rowFlagSpacer { width: 22px; height: 22px; flex: none; }
 .rk2 { width: 38px; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); flex: none; }
 .nmCell2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
 .nmLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -375,6 +445,77 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .valCell2 { width: 90px; flex: none; display: flex; align-items: center; gap: 8px; }
 .posCell2 { width: 52px; flex: none; display: flex; justify-content: flex-end; }
 
+/* Stat block (backlog: "stats/projections board columns") — a pinned BASIC
+   group (experience + projected points, always relevant regardless of
+   position) plus all 4 positions' stat groups are always present, not just
+   the current row's own position, so the label can live in the column
+   header (colored per-position) instead of repeating on every row. A row
+   only has real values under BASIC and its OWN position's group; the other
+   3 position groups show empty placeholders.
+   Each group is a fixed-width absolutely-positioned element (DOM order
+   never changes — see STAT_GROUP_SEQUENCE in shared.js) whose visual slot
+   comes from an inline translateX transform. Selecting a player
+   (panel.js's board click handler) re-slots BASIC/QB/RB/WR/TE by updating
+   just that transform on the existing elements via applyStatGroupOrder —
+   not a full re-render — so the CSS transition below actually animates a
+   slide instead of an instant jump. Faint dividers separate each group,
+   plus one bracketing the whole block from the surrounding name/value
+   columns. See renderStatGroups/renderStatHeaderGroups in shared.js and
+   fetchSleeperStatsPlayers for which stat maps to which position and why. */
+.statBlock { flex: none; position: relative; height: 100%; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); } /* width set inline by panel.js — varies with the stat picker's selection */
+.statGroup { position: absolute; top: 0; left: 0; width: 134px; height: 100%; display: flex; align-items: center; padding: 0 4px; transition: transform var(--dur-base) var(--ease-out); }
+.statGroup[data-pos]:not([data-pos="BASIC"]) { border-left: 1px solid var(--border-subtle); }
+.statCol { width: 42px; flex: none; text-align: center; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
+.statCol.empty { color: var(--text-disabled); font-weight: 400; }
+
+/* Row selection (backlog: stat-block reorder) — clicking a row keeps the
+   same lighter background .row2:hover already gives it, so it stays
+   visibly "on" after the mouse leaves. Cleared only by clicking that same
+   row again or the player getting drafted (see the auto-clear check at the
+   top of renderBoard, panel.js) — not by ordinary mouseout. */
+.row2.selected { background: var(--surface-row-hover); }
+
+/* Generalized custom tooltip — originally just for the stat column headers,
+   now the replacement for every title="" in this app (see showTip/hideTip
+   and the document-level data-tip listener in panel.js). Deliberately not
+   the native title="" tooltip: that's OS-rendered, has a built-in hover
+   delay, and can't be styled to match the board's design system. Wraps with
+   a max-width now (used to be nowrap) since some migrated tooltips (the
+   Sleeper token field's description, the write-toggle's) are full sentences,
+   not short labels like the stat headers this was built for. */
+.statTooltip { position: fixed; z-index: 60; max-width: 260px; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-primary); font: var(--type-ui); font-size: 11px; line-height: 1.4; padding: 5px 9px; border-radius: var(--radius-sm); box-shadow: var(--shadow-menu); pointer-events: none; }
+
+/* EXPERIMENTAL (queue/draft-write branch) — small "i" button next to the
+   Sleeper token field, opening a short click-to-show instructions popover.
+   Click-to-open (not hover, unlike .statTooltip above) since the content is
+   a short numbered list someone needs a moment to actually read, not a
+   glance-and-gone label. */
+.infoBtn { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); font: 600 9px/1 var(--font-body); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; margin-left: 4px; transition: var(--transition-control); }
+.infoBtn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.infoPopover { position: fixed; z-index: 60; width: 260px; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-secondary); font: var(--type-body); font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
+.infoPopover b { color: var(--text-primary); }
+.infoPopover ol { margin: 4px 0 0; padding-left: 16px; }
+.infoPopover li { margin-bottom: 2px; }
+
+/* EXPERIMENTAL — the test-connection button's result text (see
+   testSleeperConnection in panel.js). Color/text swap in place, no layout
+   shift between states. */
+.testStatus { font: var(--type-ui); font-size: var(--text-xs); color: var(--text-muted); }
+.testStatus.ok { color: var(--green-500); }
+.testStatus.err { color: var(--red-500); }
+
+/* EXPERIMENTAL (queue/draft-write branch) — themed replacement for
+   window.confirm() on the "draft this player now" action, specifically so
+   it can carry a "don't show this again" checkbox (a native confirm() has
+   no way to do that). See confirmDraftOnSleeper in panel.js. */
+.modalOverlay { position: fixed; inset: 0; z-index: 70; background: var(--surface-scrim); display: flex; align-items: center; justify-content: center; }
+.modalOverlay[hidden] { display: none; }
+.modalBox { width: 300px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 16px; }
+.modalTitle { font: var(--type-heading); color: var(--text-primary); margin-bottom: 6px; }
+.modalBody { font: var(--type-body); color: var(--text-secondary); margin-bottom: 12px; }
+.modalCheckbox { display: flex; align-items: center; gap: 7px; font: var(--type-ui); font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: 14px; cursor: pointer; }
+.modalActions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* flag menu (favorite / avoid) */
 .flagMenu { position: fixed; z-index: 50; min-width: 150px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 4px; display: flex; flex-direction: column; }
 .flagMenu button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: var(--radius-sm); font: var(--type-ui); font-size: var(--text-sm); cursor: pointer; width: 100%; color: var(--text-primary); }
@@ -383,6 +524,27 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .flagMenu .fm-avoid.fm-current { color: var(--red-500); font-weight: 700; }
 .flagMenu .fm-clear { color: var(--text-disabled); border-top: 1px solid var(--border-subtle); margin-top: 2px; padding-top: 8px; border-radius: 0; }
 .flagMenu .fm-clear:disabled { cursor: not-allowed; }
+
+/* Stat picker (backlog: "filter and choose stats for each position") — a
+   themed dropdown, same floating-menu pattern as .flagMenu above, listing
+   every STAT_OPTION_DEFS entry per position as a checkbox so any number
+   (0+) can be shown at once, not just the fixed 3 the board used to cap
+   at. See openStatPicker/toggleStatPref in panel.js. */
+/* Compact 4-across layout — one narrow column per position, checkbox +
+   short label only (the long description moved to a native title=""
+   tooltip instead of its own visible line — see renderStatPickerPanel in
+   panel.js). Previously one description-per-row made this list tall enough
+   to need real scrolling for a 24-option picker; this fits QB/RB/WR/TE
+   side by side in the same ~6-row height as a single position used to
+   take, no horizontal scrollbar (fixed grid, not overflow-x). */
+.statPickerPanel { position: fixed; z-index: 50; width: 360px; max-height: 70vh; overflow-y: auto; overflow-x: hidden; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 8px; }
+.statPickerPanel[hidden] { display: none; } /* author display:grid above otherwise beats the UA [hidden]{display:none} rule */
+.statPickerGroup { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.statPickerGroup .spgTitle { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; padding: 2px 2px 4px; }
+.statPickerOpt { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 2px; border-radius: var(--radius-sm); cursor: pointer; font: var(--type-ui); font-size: var(--text-xs); color: var(--text-primary); }
+.statPickerOpt:hover { background: var(--surface-row-hover); }
+.statPickerOpt input { margin: 0; flex: none; }
+.statPickerOpt .spoLabel { font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 #toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%) translateY(120%);
@@ -404,8 +566,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </div>
       <div class="headRight">
         <span id="pickCounter"></span>
-        <button id="openManager" class="btn outline" title="Open the Rankings Manager">Manager</button>
-        <button id="settingsBtn" class="iconBtn2" title="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
+        <button id="openManager" class="btn outline" data-tip="Open the Rankings Manager">Manager</button>
+        <button id="settingsBtn" class="iconBtn2" data-tip="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
       </div>
     </div>
     <div class="statusRow">
@@ -421,10 +583,46 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
         </div>
         <div class="field">
           <span class="fieldLabel">Your slot</span>
-          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" title="Your draft slot / roster number" /></div>
+          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" data-tip="Your draft slot / roster number" /></div>
         </div>
         <button id="connectBtn" class="btn primary">Sync</button>
         <button id="stopBtn" class="btn danger" style="display:none">Stop</button>
+        <!-- EXPERIMENTAL (queue/draft-write branch). Off by default — the
+             board's normal experience (rows, flag button, everything else)
+             renders identically whether this is on or off; the toggle below
+             is the ONLY thing that changes it. Persisted (K_SLEEPER_WRITE_ENABLED
+             in panel.js), unlike the token itself below, which is
+             session-memory only: never written to chrome.storage, cleared
+             when this window closes. The token field only appears once this
+             is on — everything the feature adds is gated on BOTH being true
+             (see sleeperWriteReady() in panel.js), not just this toggle. -->
+        <div class="field">
+          <span class="fieldLabel">Draft actions</span>
+          <button id="sleeperWriteToggle" class="chip" data-tip="Turn on queue/draft buttons on the board (experimental — see the info icon once enabled for how it works)">Off</button>
+        </div>
+        <div class="field" id="sleeperTokenField" style="display:none">
+          <span class="fieldLabel">Sleeper token <button type="button" id="sleeperTokenInfo" class="infoBtn" aria-label="How to get your Sleeper token">i</button></span>
+          <div class="input2"><input id="sleeperToken" type="password" placeholder="paste for this session" data-tip="From a captured Sleeper request's Authorization header. Kept in memory only — never saved, cleared when this window closes." /></div>
+        </div>
+        <!-- EXPERIMENTAL — an extra safeguard on top of the confirm modal,
+             not a replacement for it (see K_SLEEPER_DBLCLICK_DRAFT in
+             panel.js). Defaults on. Only shown once Draft actions is on —
+             it's meaningless otherwise. -->
+        <div class="field" id="sleeperDblClickField" style="display:none">
+          <span class="fieldLabel">Double-click to draft</span>
+          <button id="sleeperDblClickToggle" class="chip active" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too).">On</button>
+        </div>
+        <!-- EXPERIMENTAL — lets someone confirm their tab/token setup works
+             BEFORE a draft starts, when there's nothing safe to test a real
+             queue/draft action against yet. See testSleeperConnection in
+             panel.js — a read-only query, no side effects on Sleeper. -->
+        <div class="field" id="sleeperTestField" style="display:none">
+          <span class="fieldLabel">&nbsp;</span>
+          <div style="display:flex;align-items:center;gap:8px;height:32px">
+            <button id="sleeperTestBtn" class="btn secondary" data-tip="Runs a real, harmless check against Sleeper — confirms the tab and token both actually work">Test</button>
+            <span id="sleeperTestStatus" class="testStatus"></span>
+          </div>
+        </div>
       </div>
       <div id="refreshRow" style="display:none">
         <button id="refreshBtn" class="btn secondary">Refresh now</button>
@@ -450,25 +648,47 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div id="filters">
       <div class="segmented" id="posSeg">
         <button class="pf seg active" data-pos="ALL">All</button>
-        <button class="pf seg" data-pos="RB/WR" title="RB and WR only — no QB, no TE">RB/WR</button>
+        <button class="pf seg" data-pos="RB/WR" data-tip="RB and WR only — no QB, no TE">RB/WR</button>
         <button class="pf seg" data-pos="QB">QB</button>
         <button class="pf seg" data-pos="RB">RB</button>
         <button class="pf seg" data-pos="WR">WR</button>
         <button class="pf seg" data-pos="TE">TE</button>
       </div>
-      <button class="chip" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">Show taken</button>
+      <button class="chip" id="takenToggle" data-tip="Also show drafted players, crossed out, at the current position filter">Show taken</button>
       <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>
+      <button class="chip" id="statPickerBtn" data-tip="Choose which stat columns show for each position">Stats ▾</button>
+      <!-- EXPERIMENTAL (queue/draft-write branch) — see renderSleeperQueueBtn/
+           openSleeperQueuePopover in panel.js. Hidden entirely unless Draft
+           actions is on, same "zero footprint when off" rule as everything
+           else this feature adds. -->
+      <button class="chip" id="sleeperQueueBtn" style="display:none" data-tip="View and edit your Sleeper draft queue">Queue ▾</button>
     </div>
   </div>
+  <div id="statPickerPanel" class="statPickerPanel" hidden></div>
+  <div id="sleeperQueuePopover" class="queuePopover" hidden></div>
   <div id="colHead">
     <span class="c-flag"></span>
     <span class="c-rank">Rank</span>
     <span class="c-name">Player</span>
+    <span class="c-stat" id="statHead"><!-- filled by renderStatHeaderGroups() in panel.js, on every renderBoard() --></span>
     <span class="c-val">ADP Value</span>
     <span class="c-pos">Pos</span>
   </div>
   <div id="board"></div>
   <div id="toast"></div>
+  <!-- EXPERIMENTAL (queue/draft-write branch) — see confirmDraftOnSleeper in
+       panel.js. -->
+  <div id="draftConfirmModal" class="modalOverlay" hidden>
+    <div class="modalBox">
+      <div class="modalTitle">Draft on Sleeper?</div>
+      <div class="modalBody" id="draftConfirmBody"></div>
+      <label class="modalCheckbox"><input type="checkbox" id="draftConfirmSkip" /> Don't show this again</label>
+      <div class="modalActions">
+        <button id="draftConfirmCancel" class="btn secondary">Cancel</button>
+        <button id="draftConfirmOk" class="btn primary">Draft</button>
+      </div>
+    </div>
+  </div>
   <script src="rankings.js"></script>
   <script src="shared.js"></script>
   <script src="panel.js"></script>
