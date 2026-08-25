@@ -610,7 +610,7 @@ function renderBoard() {
              <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 16 })}</button>`
           : `<span class="rowFlagSpacer"></span><span class="rowFlagSpacer"></span>`;
       }
-      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" data-pos="${esc(r.pos)}" data-tip="Double-click to cross off / undo">
+      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" data-pos="${esc(r.pos)}" data-tier-group="${esc(t)}" data-tip="Double-click to cross off / undo">
         <button class="rowFlagBtn" data-key="${esc(r.key)}" aria-label="Flag player">${ico(flagIcon, { size: 13, color: flagColor })}</button>
         ${sleeperBtns}
         <span class="rk2">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
@@ -627,7 +627,7 @@ function renderBoard() {
         <span class="posCell2">${posBadgeHtml(r.pos, posRanks.get(r.key) ?? null, "sm")}</span>
       </div>`;
     }).join("");
-    return `<div class="tierDiv"><span class="num">Tier ${esc(t)}</span><span class="line"></span><span>${groups[t].length}</span></div>${rows}`;
+    return `<div class="tierDiv" data-tier="${esc(t)}"><span class="toggle">${ico("chevron-down", { size: 14 })}</span><span class="num">Tier ${esc(t)}</span><span class="line"></span><span>${groups[t].length}</span></div>${rows}`;
   }).join("");
 }
 
@@ -2121,3 +2121,80 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   // user goes looking.
   autoRefreshAdpAndStats();
 })();
+
+// ---------- feature 2: keyboard shortcuts (cmd+k, /, ?) ----------
+document.addEventListener("keydown", (e) => {
+  if (e.target === $("playerSearch")) return; // don't trigger shortcuts while typing in search
+  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+    e.preventDefault();
+    $("playerSearch").focus();
+  } else if (e.key === "/" && !(e.target.tagName === "INPUT")) {
+    e.preventDefault();
+    $("playerSearch").focus();
+  } else if (e.key === "?") {
+    e.preventDefault();
+    const modal = $("shortcutsModal");
+    modal.classList.toggle("open");
+  }
+});
+$("shortcutsModal").addEventListener("click", (e) => {
+  if (e.target === $("shortcutsModal")) $("shortcutsModal").classList.remove("open");
+});
+
+// ---------- feature 3: tier collapse toggle ----------
+let collapsedTiers = new Set();
+document.addEventListener("click", (e) => {
+  const tierDiv = e.target.closest(".tierDiv");
+  if (tierDiv) {
+    e.preventDefault();
+    const tierNum = tierDiv.textContent.match(/Tier (\d+|\\?)/)?.[1];
+    if (tierNum) {
+      tierDiv.classList.toggle("collapsed");
+      if (tierDiv.classList.contains("collapsed")) {
+        collapsedTiers.add(tierNum);
+      } else {
+        collapsedTiers.delete(tierNum);
+      }
+      // toggle visibility of rows in this tier
+      const allRows = Array.from(document.querySelectorAll(".row2[data-tier-group]"));
+      allRows.forEach(row => {
+        if (row.dataset.tierGroup === tierNum) {
+          row.style.display = tierDiv.classList.contains("collapsed") ? "none" : "";
+        }
+      });
+    }
+  }
+});
+
+// ---------- feature 4: draft turn indicator ----------
+function renderDraftTurnIndicator() {
+  if (!currentDraftId || !myRosterId) {
+    $("draftTurnIndicator").innerHTML = "";
+    return;
+  }
+  const picks = lastSharedPicks || [];
+  const roundNum = Math.floor(picks.length / LEAGUE_SETTINGS.teams) + 1;
+  const picksThisRound = picks.length % LEAGUE_SETTINGS.teams;
+  const mySlot = Number(myRosterId);
+  const isMyTurnNext = picksThisRound === mySlot - 1;
+  const picksUntilMine = isMyTurnNext ? 0 : (mySlot - picksThisRound - 1 + LEAGUE_SETTINGS.teams) % LEAGUE_SETTINGS.teams;
+  const timePerPick = 90; // rough estimate in seconds
+  const secsUntilMine = picksUntilMine * timePerPick;
+  const minsUntilMine = Math.ceil(secsUntilMine / 60);
+  
+  const text = isMyTurnNext 
+    ? `Your pick next (Round ${roundNum})`
+    : picksUntilMine === 0
+    ? `Your turn! (Round ${roundNum})`
+    : `Your turn in ${picksUntilMine} pick${picksUntilMine === 1 ? "" : "s"} (~${minsUntilMine}m)`;
+  
+  $("draftTurnIndicator").innerHTML = `<div style="font:var(--type-ui);font-size:var(--text-xs);color:var(--text-secondary);padding:0 14px;display:flex;align-items:center;height:24px;border-top:1px solid var(--border-subtle)">${esc(text)}</div>`;
+}
+
+// update on every render
+const origRenderBoard = renderBoard;
+window.renderBoard = function() {
+  const result = origRenderBoard.apply(this, arguments);
+  renderDraftTurnIndicator();
+  return result;
+};

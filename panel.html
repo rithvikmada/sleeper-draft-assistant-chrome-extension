@@ -486,9 +486,23 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    a very narrow window, header and board need to scroll together as one
    unit, not as two independently-scrolling siblings. */
 #board { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 24px; }
-.tierDiv { display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: rgba(255,255,255,.022); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+.tierDiv { display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: rgba(255,255,255,.022); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); user-select: none; }
+.tierDiv:hover { background: rgba(255,255,255,.032); }
+.tierDiv .toggle { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; flex: none; transition: transform var(--dur-fast) var(--ease-out); color: var(--text-muted); }
+.tierDiv.collapsed .toggle { transform: rotate(-90deg); }
 .tierDiv .num { color: var(--accent); }
 .tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
+.tierDiv.collapsed ~ .row2[data-tier-group] { display: none; }
+
+/* shortcuts modal */
+#shortcutsModal { position: fixed; inset: 0; z-index: 70; background: var(--surface-scrim); display: none; align-items: center; justify-content: center; }
+#shortcutsModal.open { display: flex; }
+#shortcutsModal .box { background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 20px; max-width: 400px; }
+#shortcutsModal h2 { font: var(--type-heading); color: var(--text-primary); margin: 0 0 12px; }
+#shortcutsModal .shortcuts { display: flex; flex-direction: column; gap: 8px; }
+#shortcutsModal .shortcut { display: flex; align-items: center; gap: 12px; font: var(--type-body); font-size: var(--text-sm); color: var(--text-secondary); }
+#shortcutsModal .shortcut .key { background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-xs); padding: 2px 6px; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); flex: none; min-width: 40px; text-align: center; }
+#shortcutsModal .shortcut .desc { flex: 1; }
 
 /* Left position-color bar (2026-08-25) — brought back from an early version
    of this project. Dots/squares next to the position tag on the right were
@@ -715,6 +729,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </div>
     </div>
     <div id="statusPanel"></div>
+    <div id="draftTurnIndicator"></div>
 
     <div id="teamCounts"></div>
     <div id="sourceList"></div>
@@ -771,6 +786,19 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       <div class="modalActions">
         <button id="draftConfirmCancel" class="btn secondary">Cancel</button>
         <button id="draftConfirmOk" class="btn primary">Draft</button>
+      </div>
+    </div>
+  </div>
+  <div id="shortcutsModal">
+    <div class="box">
+      <h2>Keyboard shortcuts</h2>
+      <div class="shortcuts">
+        <div class="shortcut"><span class="key">Cmd/Ctrl+K</span><span class="desc">Focus search</span></div>
+        <div class="shortcut"><span class="key">/</span><span class="desc">Focus search</span></div>
+        <div class="shortcut"><span class="key">?</span><span class="desc">Show this help</span></div>
+        <div class="shortcut"><span class="key">Double-click</span><span class="desc">Cross off player</span></div>
+        <div class="shortcut"><span class="key">Right-click</span><span class="desc">Favorite / avoid player</span></div>
+        <div class="shortcut"><span class="key">Click tier</span><span class="desc">Collapse tier</span></div>
       </div>
     </div>
   </div>
