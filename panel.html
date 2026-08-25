@@ -476,6 +476,11 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #colHead .statHeadCol { width: 42px; flex: none; text-align: center; cursor: default; }
 #colHead .c-val { width: 90px; flex: none; }
 #colHead .c-pos { width: 52px; flex: none; text-align: right; }
+#colHead .sortCol { cursor: pointer; display: inline-flex; align-items: center; gap: 3px; transition: color var(--dur-fast) var(--ease-out); user-select: none; }
+#colHead .c-pos.sortCol { justify-content: flex-end; }
+#colHead .sortCol:hover { color: var(--text-secondary); }
+#colHead .sortCol.active { color: var(--accent); }
+#colHead .sortArrow { display: inline-block; width: 8px; text-align: center; font-family: var(--font-mono); font-size: 9px; }
 
 /* overflow-x stays hidden (not auto) deliberately — #colHead lives in a
    separate flex sibling, not inside this scroll container, so an
@@ -768,11 +773,11 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
   <div id="sleeperQueuePopover" class="queuePopover" hidden></div>
   <div id="colHead">
     <span class="c-flag"></span>
-    <span class="c-rank">Rank</span>
+    <span class="c-rank sortCol" data-sort="rank" data-tip="Sort by rank">Rank<span class="sortArrow"></span></span>
     <span class="c-name">Player</span>
     <span class="c-stat" id="statHead"><!-- filled by renderStatHeaderGroups() in panel.js, on every renderBoard() --></span>
-    <span class="c-val">ADP Value</span>
-    <span class="c-pos">Pos</span>
+    <span class="c-val sortCol" data-sort="value" data-tip="Sort by ADP value">ADP Value<span class="sortArrow"></span></span>
+    <span class="c-pos sortCol" data-sort="pos" data-tip="Sort by position">Pos<span class="sortArrow"></span></span>
   </div>
   <div id="board"></div>
   <div id="toast"></div>

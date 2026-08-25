@@ -154,6 +154,13 @@ let myRosterId = null; // user-entered draft slot / roster id — drives the "mi
 const echo = makeEchoGuard(); // per-key, so writing flags can't also swallow a live pick update
 let pollTimer = null;
 let posFilter = "ALL";
+// Column sorting (feature 6) — clicking Rank/ADP Value/Pos in #colHead
+// overrides the default tier+rank grouping with a flat list sorted by that
+// column. null means "back to the normal tiered board". sortDir: 1 = asc,
+// -1 = desc. A missing value for the active column always sorts last
+// regardless of direction (Infinity/-Infinity swap based on column).
+let sortColumn = null; // "rank" | "value" | "pos" | null
+let sortDir = 1;
 // POS_FILTER_GROUPS / filterMatchesPos now live in shared.js, shared with rankings-manager.js.
 let lastPickCount = 0;
 let unmatched = [];
@@ -532,6 +539,11 @@ function renderBoard() {
   const statBlockWidth = statGroupLayout(groupOrder, visibleStats).totalWidth;
   $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats);
   $("statHead").style.width = `${statBlockWidth}px`;
+  document.querySelectorAll("#colHead .sortCol").forEach((el) => {
+    const active = el.dataset.sort === sortColumn;
+    el.classList.toggle("active", active);
+    el.querySelector(".sortArrow").textContent = active ? (sortDir === 1 ? "▲" : "▼") : "";
+  });
   const allRows = buildConsensus(activeSources(sources, soloSource), merges);
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   const list = applyFilters(allRows, { posFilter, showTaken, playerSearch, isGone });
@@ -570,8 +582,7 @@ function renderBoard() {
     return;
   }
 
-  $("board").innerHTML = orderedTiers.map((t) => {
-    const rows = groups[t].map((r) => {
+  const renderRow = (r, t) => {
       const gone = isGone(r);
       const mine = taken[r.key] && taken[r.key].byMe;
       const flag = flags[r.key];
@@ -626,7 +637,35 @@ function renderBoard() {
         <span class="valCell2">${valueCell}</span>
         <span class="posCell2">${posBadgeHtml(r.pos, posRanks.get(r.key) ?? null, "sm")}</span>
       </div>`;
-    }).join("");
+  };
+
+  // A column sort overrides the tier grouping entirely — one flat list, no
+  // tier dividers (there's nothing coherent to divide by once the order
+  // isn't rank-based). Missing values always sort last, independent of
+  // ascending/descending, so an unranked/no-value player is never displayed
+  // as if it "won" a descending sort.
+  if (sortColumn) {
+    const sortVal = (r) => {
+      if (sortColumn === "rank") return r.consensus ?? null;
+      if (sortColumn === "value") return valueMap.get(r.key)?.delta ?? null;
+      if (sortColumn === "pos") return r.pos || null;
+      return null;
+    };
+    const sorted = [...list].sort((a, b) => {
+      const av = sortVal(a), bv = sortVal(b);
+      if (av == null && bv == null) return (a.consensus ?? Infinity) - (b.consensus ?? Infinity);
+      if (av == null) return 1;  // missing values always sort last, either direction
+      if (bv == null) return -1;
+      if (av < bv) return -sortDir;
+      if (av > bv) return sortDir;
+      return (a.consensus ?? Infinity) - (b.consensus ?? Infinity); // stable tiebreak
+    });
+    $("board").innerHTML = sorted.map((r) => renderRow(r, r.tier || "?")).join("");
+    return;
+  }
+
+  $("board").innerHTML = orderedTiers.map((t) => {
+    const rows = groups[t].map((r) => renderRow(r, t)).join("");
     return `<div class="tierDiv" data-tier="${esc(t)}"><span class="toggle">${ico("chevron-down", { size: 14 })}</span><span class="num">Tier ${esc(t)}</span><span class="line"></span><span>${groups[t].length}</span></div>${rows}`;
   }).join("");
 }
@@ -1985,6 +2024,26 @@ $("takenToggle").addEventListener("click", () => {
 $("playerSearch").addEventListener("input", () => {
   playerSearch = $("playerSearch").value.trim();
   renderBoard();
+});
+
+// Column sorting (feature 6) — click Rank/ADP Value/Pos to sort the board
+// by that column instead of tier+rank. Click the SAME column again to flip
+// direction; a third click (past desc) returns to the default tiered view,
+// same cycle pattern as most spreadsheet UIs.
+document.querySelectorAll("#colHead .sortCol").forEach((el) => {
+  el.addEventListener("click", () => {
+    const col = el.dataset.sort;
+    if (sortColumn !== col) {
+      sortColumn = col;
+      sortDir = 1;
+    } else if (sortDir === 1) {
+      sortDir = -1;
+    } else {
+      sortColumn = null;
+      sortDir = 1;
+    }
+    renderBoard();
+  });
 });
 
 // ---------- EXPERIMENTAL: Sleeper draft-actions on/off toggle ----------
