@@ -739,6 +739,175 @@ batches, each its own commit, pausing for confirmation between batches — see
   `builtin` → `undeletable` rename) is smaller than originally scoped, since
   batch 4 already moved `usableSources`/`makeEchoGuard` into `shared.js`.
 
+## BEER / VBD (backlog #8, built 2026-08-25)
+Built in its own worktree/branch (`feature/beer-vbd`, branched from an
+up-to-date `main` that already had the audit fixes and visual redesign
+merged in), per `beer-vbd-prompt.md`. Value-Based Drafting using the BEER
+(man-games) baseline specifically — **not VOLS, not BEER+**. BEER+'s
+risk-adjustment and QB-streaming layers, and roster-need-aware value
+discounting, were explicitly kept out of this pass — see the backlog gap
+logged below.
+
+**What it is, in one line**: `value = a player's projected PPR points −
+replacement-level points at their position`. Subtracting replacement level
+per position is what makes the number comparable ACROSS positions — raw
+projected points aren't (a QB's raw total dwarfs a TE's and says nothing
+about relative value).
+
+**Data source — reuses the existing Sleeper projections endpoint, not a new
+CSV import.** `fetchSleeperProjections()` (`shared.js`) hits the exact same
+`api.sleeper.app/projections/nfl/{year}` endpoint `fetchSleeperAdp()` already
+calls for Sleeper Live ADP, just reading `pts_ppr` instead of `adp_ppr` off
+the same response. No new host permission, no new import mechanism — this
+was a deliberate philosophy match with ADP's precedent (see the ADP section
+above: same domain, no auth, already investigated as low-risk), not a CSV
+path built separately. `loadProjections()`/`saveProjections()` store the
+result under `K_PROJ` (`beerProjections` in `chrome.storage.local`), and
+`autoRefreshProjections()` runs silently on every board-window and
+Rankings-Manager-tab open (logs-only on failure), same pattern as
+`fetchSleeperAdp`'s manual button being a thin wrapper — `⟳ FETCH
+PROJECTIONS` in the Rankings Manager calls the identical pure fetch
+function, so manual and automatic paths can't drift apart.
+
+**Replacement level — the man-games calculation, and the exact assumption
+made (revisit if it looks off in practice, don't reverse-engineer it from
+code later):** `computeReplacementRanks()` in `shared.js` derives
+`REPLACEMENT_RANK[pos]` (how many players deep, by projection, before you
+hit replacement level) from this league's real settings
+(`LEAGUE_SETTINGS` — 10 teams, 1QB/2RB/2WR/1TE/2FLEX):
+1. Starter slots per position = `starters[pos] × teams`, plus a share of the
+   20 total FLEX slots. **FLEX_SHARE is a documented simplifying assumption,
+   not derived from data**: RB 45% / WR 45% / TE 10% — full PPR flattens
+   RB/WR value enough that flex usage skews roughly even between them, TE
+   sees much less flex usage since a flex-worthy TE is almost always started
+   outright at the TE slot instead. No authoritative real-world split exists;
+   this was picked as reasonable and defensible, not exotic, per the build
+   prompt's own instruction.
+2. Man-games: `REPLACEMENT_RANK[pos] = ceil(starterSlots × 17 games /
+   AVG_GAMES_PLAYED[pos])`. `AVG_GAMES_PLAYED` is one blended constant per
+   position (QB 14, RB 11.5, WR 13.5, TE 13.5) — QBs miss the fewest games
+   (least contact, backups rarely needed mid-season), RBs miss the most
+   (workload + committee/injury risk), WR/TE in between. This is what
+   converts "how many starters does the league need" into "how many players
+   deep you actually have to draft to cover a full season" — starters alone
+   undercount replacement depth since byes/injuries/in-season churn pull
+   bench players into starting lineups.
+   Resulting depths for this league's exact settings (locked in as a
+   regression check in `test.js`): **QB13, RB43, WR37, TE16.**
+
+**Live recompute — no new polling mechanism, reuses the existing pick-sync
+plumbing exactly as the build prompt required.** `REPLACEMENT_RANK[pos]`
+itself is a static depth (a function of league shape, which doesn't change
+mid-draft) — what's live is WHICH player sits at that depth.
+`buildBeerValues(rows, projMap, takenKeySet)` (`shared.js`) sorts each
+position's still-AVAILABLE players by projection, takes the
+`REPLACEMENT_RANK[pos]`-th one's points as replacement level, and computes
+every player's value against that. As players at a position get drafted off
+the top, the player occupying that Nth-deepest available slot gets worse,
+degrading replacement level (and therefore raising the value of everyone
+still available there) in real time. This is called fresh inside `renderBest()`
+(panel.js) and `renderTable()` (rankings-manager.js) on every render — both
+already re-render on every poll cycle and on every `K_DRAFT` storage change,
+so BEER values update on the same cadence live picks do, with zero new
+timers. Verified with a Node simulation in `test.js` (drafting the top 5 QBs
+off a synthetic 50-QB pool measurably raises QB6's value, matching "the best
+available replacement gets worse as players at that position get drafted"
+from the build prompt) before shipping.
+
+**Where it surfaces in the UI:**
+- **BEST QB/RB/WR/TE grid (`renderBest()`, panel.js)** — each of the four
+  cards now shows that position's highest-value available player (not
+  highest consensus rank — a deliberate decision, see below), with the value
+  number (`BEER +N.N`) on the card. Whichever ONE of the four cards has the
+  single highest value across all four gets an "On tap" pill (a light beer
+  pun — deliberate, see below) plus a matching gradient ring around the
+  card — that's "the objective best pick right now, any position," answered
+  by comparing the grid's own four already-chosen players against each other
+  rather than needing a second, differently-sorted widget.
+  **Went through two design passes, both logged here on purpose:**
+  1. First version used a lightning-bolt icon on the label — replaced
+     (2026-08-25) with a plain "Top pick" pill + solid accent border,
+     cleaner and more in line with the design system's restraint; the icon
+     read as more decoration than signal.
+  2. Then made a little more fun on direct request (2026-08-25): the flat
+     accent border became a slow (6s), low-contrast animated gradient ring
+     (`.quadCellBest::before`, panel.html — golden/amber tones, a light nod
+     to the BEER name), and the pill's label changed from the generic "Top
+     pick" to "On tap" — leans into the beer pun without undercutting that
+     BEER is a real statistical methodology, not a gimmick; the fun lives in
+     ONE word choice and a subtle animation, not in cartoonish styling
+     anywhere the actual numbers live. Kept deliberately slow/low-contrast —
+     this sits next to a live draft board someone's actually trying to read,
+     not a spot for anything that competes for attention.
+  **This was a real design discussion, not an assumption** — see the
+  reasoning below.
+- **Easter egg (2026-08-25, rare on purpose)** — every time the objective
+  best pick changes hands (a different position takes the crown — not every
+  ~3s poll render), there's roughly a 1-in-12 chance
+  (`Math.random() < 1/12`, `renderBest()`, panel.js) the pill instead reads
+  "🍺 Last call" with a faster (2.4s), warmer-toned version of the same
+  gradient (`.quadCellRare`/`.topPickTagRare`). The roll only happens on
+  actual change (tracked via `lastBestKey`), specifically so it can't
+  re-trigger every render — the requirement was "doesn't happen too often,"
+  and a draft only sees the crown change a handful of times total, so this
+  realistically shows up 0-2 times in a normal draft. No confetti, no sound,
+  no layout shift — same size pill, same card, just the copy and gradient
+  warmth change for as long as that player holds the top spot. If this ever
+  needs re-tuning (too rare / too common), the odds and the "on change only"
+  gate are both in one place, not scattered.
+- **One explanatory tooltip, exactly once, not repeated per surface**
+  (2026-08-25) — a small "i" info-dot (`.infoDot`/`.infoPop`, panel.html)
+  sits next to a "Best by position · BEER" label above the grid. Hovering
+  (or focusing, for keyboard users) shows a one-sentence explanation of what
+  BEER value means and how to use it ("draft whichever card has the highest
+  number for the position you need"), plus a "Learn more about VBD" link out
+  to the VBD-cheat-sheet article the user supplied when scoping this build.
+  Deliberately placed ONCE, here, rather than on every card or duplicated in
+  the Rankings Manager — the manager's VALUE column header already has its
+  own native `title=""` hover text explaining the metric in the same spot
+  every other column header's tooltip lives, which is a different,
+  lower-ceremony UI pattern and wasn't touched.
+- **VALUE column in the Rankings Manager table (`renderTable()`,
+  rankings-manager.js)**, sortable by clicking the column header
+  (`sortByValue` toggle) — the first sortable column this table has ever
+  had. Rows without a computed value (no projection data for that player)
+  sort to the bottom rather than being treated as 0, which would otherwise
+  rank an unknown player above a legitimately low-value one.
+- **"Best Picks Right Now" (the top-3 card widget) was deliberately left
+  alone** — still sorted by consensus rank, unchanged. This was a direct
+  user call after walking through what each widget's job actually is (see
+  below) — not an oversight.
+
+**Why the BEST grid changed and Best Picks didn't — the actual reasoning,
+worth preserving since it's not obvious from the code alone.** VBD's whole
+value is that it IS cross-position comparable, so it can answer two
+different questions:
+  - "What's the single best pick, any position, right now" — sort the WHOLE
+    available pool by value, take #1. This is what "Best Picks Right Now"
+    already conceptually does (a single ranked top-3), just currently by
+    consensus rank instead of value.
+  - "What's my best option if I specifically want position X" — sort WITHIN
+    that position by value. This is structurally what the BEST QB/RB/WR/TE
+    grid is FOR — it can never itself answer the first question, since it's
+    position-scoped by construction.
+  A first proposal was a toggle mode on Best Picks (rank-sorted vs.
+  value-sorted) — rejected by the user in favor of upgrading the BEST grid
+  instead (each card picks by value, one card highlighted as the objective
+  overall best), since that answers both questions from one already-existing
+  widget without adding a second value-sorted list elsewhere. If Best Picks
+  Right Now ever needs a value-sorted mode later, that's a distinct, smaller
+  follow-up — not implied or half-built by this change.
+
+**Known gap, logged as a new backlog item, not silently accepted (per the
+build prompt's explicit instruction) — plain BEER is team-agnostic by
+definition, not by a limitation of this build.** It has no idea what's
+already on your roster: it won't discount a RB's value because you already
+drafted three RBs. That's a separate layer (closer to what "BEER+"-style
+enhancements or roster-need-adjusted VBD would add), deliberately out of
+scope for this pass. The team-counts widget already tracks roster
+composition and could feed such a layer later. See the new backlog entry
+below (**BEER+-parity gap**).
+
 ## Feature backlog
 Full list with sequencing lives in `4thGo-feature-backlog.md`. Don't re-derive
 priorities from scratch. Notable status since it was last summarized here:
@@ -756,23 +925,28 @@ priorities from scratch. Notable status since it was last summarized here:
   buildable. If a settings-tuned source is ever found matching this league's
   exact settings, import it as a normal ranking source — no special logic
   needed.
-- **#8 (VORP) / #16 (true value-cliff tiering) — UNBLOCKED (2026-08-23), not yet
-  built.** The blocking data source turned up for free: Sleeper's own
-  projections endpoint (`api.sleeper.app/projections/nfl/{year}`, same one
-  `fetchSleeperAdp()` already calls for Sleeper Live ADP) returns real
-  per-player point projections (`pts_ppr`) sourced from RotoWire, plus
-  `rec`/`rush_yd`/`pass_yd` — actual magnitude data, not just ordinal rank.
-  No new host permission, no new fetch call, just more fields off a response
-  already being pulled. DraftKick's static CSV (see ADP section) is NOT
-  needed for this anymore — it was the fallback plan when no clean same-domain
-  source existed; skip it now unless a stat this endpoint doesn't carry is
-  needed later. Building VORP still needs: (a) a replacement-level calc using
-  this league's actual settings (10 teams, 1QB/2RB/2WR/1TE/2FLEX), (b) a
-  decision on where in the UI it surfaces.
+- **#8 (VORP/VBD) — BUILT (2026-08-25), as plain BEER specifically (not
+  VOLS, not BEER+).** See the new "BEER / VBD" section above for the full
+  writeup: replacement level via man-games on this league's real settings,
+  live recompute off the existing pick-sync plumbing, the BEST grid's
+  per-position value + single objective-best highlight, and the Rankings
+  Manager's new sortable VALUE column. **#16 (true value-cliff tiering) is
+  still separate and NOT built** — BEER gives a continuous value number per
+  player, not tier boundaries; #16 would still need the windowed/clustering
+  tiering approach flagged (not attempted) back in the source-vote-boundary
+  revert above.
+- **BEER+-parity gap (new, 2026-08-25)** — plain BEER, as built, is
+  team-agnostic: it never discounts a position's value based on what's
+  already on your roster, and has no risk-adjustment or QB-streaming layer.
+  Both are BEER+-style enhancements, explicitly out of scope for the #8
+  build per its own prompt. If wanted later: roster-need-adjustment could
+  read the existing team-counts widget's data and discount
+  `buildBeerValues()`'s output per position; risk-adjustment/QB-streaming
+  would need real bust-rate or matchup data this project doesn't have yet.
 - **#13 (team grade vs. league-mates)** — user-flagged as high priority, and
-  now the natural next build: VORP (#8) is the value metric it was blocked on
-  picking, so building #8 first directly unblocks #13 rather than being a
-  detour from it.
+  now the natural next build: VBD (#8) is the value metric it was blocked on
+  picking, and is now built, so #13 is unblocked rather than being a detour
+  from it.
 - **Stats/projections board columns (new, 2026-08-23)** — user wants PROJ
   (pts_ppr, all positions) and a position-conditional STAT column (`rec` for
   RB/WR/TE, `rush_yd` for QB) added to the board. Same Sleeper endpoint as

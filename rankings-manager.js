@@ -18,6 +18,8 @@ let showTaken = false; // independent toggle, layered on top of posFilter — no
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let soloSource = null;   // when set, the whole page shows just this source
 let editingAdp = false;  // the add/import modal is in "ADP" mode
+let projMap = {};        // playerKey -> projected PPR points, for the VALUE (BEER/VBD) column
+let sortByValue = false; // click the VALUE column header to toggle sorting the table by it
 const echo = makeEchoGuard(); // per-key — saving sources must not swallow a live pick update (see shared.js)
 
 // ---------- derived draft state ----------
@@ -82,6 +84,7 @@ function renderSourceBar() {
     `<span style="width:1px;height:16px;background:var(--line2);margin:0 2px"></span>` +
     adpChips +
     `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ FETCH SLEEPER ADP</button>` +
+    `<button class="alt" id="fetchProjectionsBtn" title="Auto-fetch season point projections from the same Sleeper API, used to compute the BEER column">⟳ FETCH PROJECTIONS</button>` +
     `<button class="alt" id="addAdpBtn">+ ADD ADP SOURCE</button>` +
     `<button class="alt" id="addSrcBtn">+ ADD SOURCE</button>` +
     (soloSource ? `<button class="alt" id="showAllBtn">↺ SHOW ALL SOURCES</button>` : "");
@@ -153,6 +156,7 @@ function renderSourceBar() {
   $("addSrcBtn").addEventListener("click", () => openModal(false));
   $("addAdpBtn").addEventListener("click", () => openModal(true));
   $("fetchSleeperAdpBtn").addEventListener("click", fetchSleeperAdp);
+  $("fetchProjectionsBtn").addEventListener("click", fetchProjections);
   if ($("showAllBtn")) $("showAllBtn").addEventListener("click", () => { soloSource = null; renderAll(); });
 }
 
@@ -215,6 +219,30 @@ async function fetchSleeperAdp() {
   }
 }
 
+// Manual wrapper around fetchSleeperProjections() (shared.js) — same pure
+// fetch function the silent auto-refresh uses in both surfaces, just with
+// button disable/text-swap + a toast around it. See shared.js's BEER/VBD
+// section for what this data feeds (the live replacement-level calc).
+async function fetchProjections() {
+  const btn = $("fetchProjectionsBtn");
+  btn.disabled = true;
+  btn.textContent = "⟳ FETCHING…";
+  try {
+    const players = await fetchSleeperProjections();
+    const map = {};
+    players.forEach((p) => { map[p.key] = p.pts; });
+    projMap = map;
+    await saveProjections(map);
+    renderAll();
+    toast(`Projections fetched — ${players.length} players, feeds the BEER column`);
+  } catch (err) {
+    toast(`Sleeper projections fetch failed: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⟳ FETCH PROJECTIONS";
+  }
+}
+
 const MAX_TABLE_ROWS = 400; // render cap — see the disclosure row at the bottom of this function
 function renderTable(rows) {
   const taken = takenMap();
@@ -222,10 +250,27 @@ function renderTable(rows) {
   const adpCols = adpSources.filter((s) => s.enabled);
   const adpConsensus = buildAdpConsensus(adpSources);
   const valueMap = buildValueComparison(adpSources);
+  // BEER/VBD value — see claude.md and shared.js's buildBeerValues() for the
+  // full writeup. Live: recomputed from whoever's still available (taken)
+  // every render, same as the board window.
+  const { values: beerValues } = buildBeerValues(rows, projMap, new Set(taken.keys()));
 
   // Same applyFilters() path panel.js's board uses now (shared.js) — see
   // claude.md for why this used to be a second, independently-drifting copy.
-  const list = applyFilters(rows, { posFilter, showTaken, playerSearch, isGone: (r) => taken.has(r.key) });
+  let list = applyFilters(rows, { posFilter, showTaken, playerSearch, isGone: (r) => taken.has(r.key) });
+  if (sortByValue) {
+    // Undrafted-with-a-value rows first (highest value first), then everyone
+    // without a computed value (no projection data) in their normal order —
+    // pushing those to the bottom instead of treating a missing value as 0,
+    // which would otherwise rank them above legitimately low-value players.
+    list = list.slice().sort((a, b) => {
+      const va = beerValues.get(a.key), vb = beerValues.get(b.key);
+      if (va === undefined && vb === undefined) return 0;
+      if (va === undefined) return 1;
+      if (vb === undefined) return -1;
+      return vb - va;
+    });
+  }
 
   if (!list.length) {
     $("tbl").innerHTML = `<tr><td class="empty">Nothing here.</td></tr>`;
@@ -241,6 +286,7 @@ function renderTable(rows) {
     ${cols.map((s) => `<th style="color:${esc(s.color)}" title="${s.positionOnly ? "Position-only source — shows this source's own within-position tier, not a rank. Reference only, never affects blended rank/tier." : ""}">${esc(s.name.toUpperCase())}${s.positionOnly ? " ⓘ" : ""}</th>`).join("")}
     ${adpCols.map((s) => `<th style="color:${esc(s.color)}">${esc(s.name.toUpperCase())}</th>`).join("")}
     <th title="Sleeper Live ADP vs. your other enabled ADP source(s) (baseline). Green = Sleeper drafts them later than baseline (a discount). Red = Sleeper drafts them earlier than baseline (a reach). Needs Sleeper Live ADP + at least one other ADP source enabled.">VALUE</th>
+    <th id="valueColHead" style="cursor:pointer;user-select:none" title="BEER value — projected PPR points above replacement level at this player's position, recomputed live as the draft goes. Click to sort by it.">BEER${sortByValue ? " ▼" : ""}</th>
     <th></th>
   </tr>`;
 
@@ -249,6 +295,7 @@ function renderTable(rows) {
     const c = POS_COLORS[r.pos] || { text: "var(--dim2)", bg: "transparent", border: "var(--line2)" };
     const adpEntry = adpConsensus.get(r.key);
     const vc = valueMap.get(r.key);
+    const beerVal = beerValues.get(r.key);
     const tier = r.tier && TIER_COLORS[r.tier]
       ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${esc(r.tier)}</span>` : "";
     const flag = flags[r.key];
@@ -265,6 +312,7 @@ function renderTable(rows) {
       }).join("")}
       ${adpCols.map((s) => `<td style="color:${adpEntry?.values[s.id] !== undefined ? "var(--dim2)" : "var(--dim)"}">${esc(adpEntry?.values[s.id] ?? "·")}</td>`).join("")}
       <td>${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}</td>
+      <td style="color:${beerVal !== undefined ? "var(--dim2)" : "var(--dim)"}">${beerVal !== undefined ? `${beerVal >= 0 ? "+" : ""}${beerVal.toFixed(1)}` : "·"}</td>
       <td>
         <span class="flagBtn${flag === "favorite" ? " on fav" : ""}" data-flag="${esc(r.key)}" data-kind="favorite" title="Favorite">★</span>
         <span class="flagBtn${flag === "avoid" ? " on avoid" : ""}" data-flag="${esc(r.key)}" data-kind="avoid" title="Flag to avoid">⊘</span>
@@ -288,6 +336,10 @@ function renderTable(rows) {
   });
   $("tbl").querySelectorAll("[data-flag]").forEach((el) => {
     el.addEventListener("click", () => toggleFlag(el.dataset.flag, el.dataset.kind));
+  });
+  $("valueColHead").addEventListener("click", () => {
+    sortByValue = !sortByValue;
+    renderAll();
   });
 }
 
@@ -877,6 +929,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     merges = await loadMerges();
     renderAll();
   }
+  if (changes[K_PROJ]) {
+    projMap = await loadProjections();
+    renderAll();
+  }
 });
 
 // ---------- seed built-in sources ----------
@@ -910,7 +966,13 @@ async function ensureBuiltinSources() {
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
+  projMap = await loadProjections();
   const v = await chrome.storage.local.get([K_ROSTER]);
   if (draft.myRosterId == null && v[K_ROSTER] != null) draft.myRosterId = Number(v[K_ROSTER]);
   renderAll();
+
+  // Silent background refresh, same pattern as ADP/stat auto-fetches.
+  autoRefreshProjections().then((map) => {
+    if (map) { projMap = map; renderAll(); }
+  });
 })();

@@ -178,6 +178,13 @@ let soloSource = null; // when set, best-picks are computed from just this sourc
 let lastSharedPicks = []; // source-agnostic record of every drafted player, by playerKey
 let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manager
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
+let projMap = {}; // playerKey -> projected PPR points, feeds buildBeerValues() (BEER/VBD, shared.js)
+// Easter egg state for the "On tap" card (see renderBest()) — tracked by
+// player key, not re-rolled on every render, so it only has a chance to
+// trigger when the objective-best player actually changes (a handful of
+// times per draft), not every ~3s poll tick.
+let lastBestKey = null;
+let rareTagActive = false;
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
@@ -197,17 +204,72 @@ function bestAvailable() {
   return out;
 }
 
+// BEST QB/RB/WR/TE grid — each card is that position's best-available player
+// BY BEER VALUE (not consensus rank, per the decision logged in claude.md:
+// this grid's job is "best pick if I want this specific position," which is
+// a value question, not a rank one — a separate value-sorted mode elsewhere
+// was considered and rejected in favor of this). Whichever ONE of the four
+// cards has the single highest value across all four positions gets a
+// small "TOP PICK" tag and an accent border — that's the answer to "what's
+// the objective best pick right now, any position," computed by comparing
+// the four already-chosen per-position players against each other rather
+// than needing a second, differently-sorted widget. The one-sentence "what
+// is BEER" explanation lives in a single info-icon tooltip above this grid
+// (panel.html, `.bestHead .infoDot`) — deliberately not repeated per-card.
 function renderBest() {
-  const best = bestAvailable();
-  $("best").innerHTML = ["QB","RB","WR","TE"].map((pos) => {
+  const rows = buildConsensus(activeSources(sources, soloSource), merges);
+  const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
+  const { values: beerValues } = buildBeerValues(rows, projMap, takenKeySet());
+  const best = {};
+  POSITIONS.forEach((pos) => {
+    const candidates = rows.filter((r) => r.pos === pos && !isGone(r) && beerValues.has(r.key));
+    if (candidates.length) {
+      best[pos] = candidates.reduce((a, b) => (beerValues.get(b.key) > beerValues.get(a.key) ? b : a));
+    } else {
+      // No projection data for anyone left at this position — fall back to
+      // consensus rank so the card still shows someone instead of going blank.
+      best[pos] = rows.filter((r) => r.pos === pos && !isGone(r))
+        .sort((a, b) => (a.consensus ?? Infinity) - (b.consensus ?? Infinity))[0];
+    }
+  });
+  let objectiveBestPos = null, objectiveBestVal = -Infinity;
+  POSITIONS.forEach((pos) => {
+    const p = best[pos];
+    if (!p) return;
+    const v = beerValues.get(p.key);
+    if (v !== undefined && v > objectiveBestVal) { objectiveBestVal = v; objectiveBestPos = pos; }
+  });
+  // Roll the easter egg only when the objective-best player actually
+  // changes — not on every render — so it stays rare across a whole draft
+  // instead of flickering on and off every poll cycle. ~1-in-12 odds each
+  // time the crown changes hands.
+  const bestKey = objectiveBestPos ? best[objectiveBestPos].key : null;
+  if (bestKey !== lastBestKey) {
+    lastBestKey = bestKey;
+    rareTagActive = bestKey ? Math.random() < 1 / 12 : false;
+    // Fired once, right when it triggers — the animation alone (however
+    // juiced up) could still read as "is something wrong," so a toast
+    // makes it unambiguous this is just a fun rare pull, not a signal.
+    if (rareTagActive) {
+      toast("🍺 Easter egg unlocked — \"Last call\" pull is 1-in-12 odds and means nothing statistically. The BEER math is still stone-cold sober.");
+    }
+  }
+  $("best").innerHTML = POSITIONS.map((pos) => {
     const t = posTint(pos);
     const p = best[pos];
-    return `<div class="quadCell" style="background:${t.bg};border-color:${t.bg}">
-      <span class="lbl" style="color:${t.fg}">Best ${esc(pos)}</span>
+    const val = p ? beerValues.get(p.key) : undefined;
+    const isObjectiveBest = pos === objectiveBestPos;
+    const isRare = isObjectiveBest && rareTagActive;
+    return `<div class="quadCell${isObjectiveBest ? " quadCellBest" : ""}${isRare ? " quadCellRare" : ""}" style="background:${t.bg};border-color:${t.bg}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
+        <span class="lbl" style="color:${t.fg}">Best ${esc(pos)}</span>
+        ${isObjectiveBest ? `<span class="topPickTag${isRare ? " topPickTagRare" : ""}" title="${isRare ? "Rare pour — you don't see this every draft" : ""}">${isRare ? "🍺 Last call" : "On tap"}</span>` : ""}
+      </div>
       <div class="nm2">
         <strong>${p ? esc(p.name) : "—"}</strong>
         ${p && p.tier ? `<span>T-${esc(p.tier)}</span>` : ""}
       </div>
+      <span class="vbdVal">${val !== undefined ? `BEER ${val >= 0 ? "+" : ""}${val.toFixed(1)}` : ""}</span>
     </div>`;
   }).join("");
 }
@@ -574,6 +636,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes[K_MERGES]) {
     merges = await loadMerges();
     renderAll();
+  }
+  if (changes[K_PROJ]) {
+    projMap = await loadProjections();
+    renderAll(); // BEST grid's VBD values + objective-best badge depend on this
   }
 });
 
@@ -1001,8 +1067,15 @@ $("playerSearch").addEventListener("input", () => {
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
+  projMap = await loadProjections();
 
   // Settings start open so first-run has the draft ID box visible.
   $("settingsBtn").classList.add("on");
   renderAll();
+
+  // Silent background refresh, same pattern as ADP — don't block first
+  // render on a network round trip, just re-render once fresh data lands.
+  autoRefreshProjections().then((map) => {
+    if (map) { projMap = map; renderAll(); }
+  });
 })();

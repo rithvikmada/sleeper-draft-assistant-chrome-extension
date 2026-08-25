@@ -247,13 +247,78 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .empty2 { grid-column: 1/-1; color: var(--text-muted); text-align: center; padding: 18px; font-size: var(--text-xs); }
 
 /* best-per-position quad */
+.bestHead { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
+.infoDot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 1px solid var(--text-muted); color: var(--text-muted);
+  font: 9px/1 var(--font-mono); font-style: normal; cursor: default; position: relative;
+  flex: none;
+}
+.infoDot:hover, .infoDot:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+/* top:100% (flush against the dot, zero gap) is deliberate — a positional
+   offset like top:18px leaves a dead strip between the dot's box and the
+   popup's box that isn't part of either element, so moving the mouse
+   through it drops :hover before the popup is ever reached, and the link
+   inside becomes unreachable. The visual gap people expect comes from
+   padding-top on the box itself instead, which IS still inside the
+   hoverable box the whole way down. */
+.infoPop {
+  display: none; position: absolute; z-index: 20; top: 100%; left: 0;
+  width: 240px; padding: 16px 12px 10px; border-radius: var(--radius-md);
+  background: var(--surface-raised); border: 1px solid var(--border-default);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  font: var(--type-ui); font-size: var(--text-2xs); line-height: 1.5;
+  color: var(--text-secondary); text-transform: none; letter-spacing: normal;
+  cursor: auto;
+}
+.infoDot:hover .infoPop, .infoDot:focus-visible .infoPop { display: block; }
+.infoPop a { color: var(--accent); text-decoration: none; }
+.infoPop a:hover { text-decoration: underline; }
 #best { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 @media (max-width: 480px) { #best { grid-template-columns: 1fr 1fr; } }
-.quadCell { border-radius: var(--radius-card); padding: 8px 10px; border: 1px solid; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.quadCell { border-radius: var(--radius-card); padding: 8px 10px; border: 1px solid; display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
 .quadCell .lbl { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .quadCell .nm2 { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .quadCell .nm2 strong { font: var(--type-ui); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quadCell .nm2 span { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); flex: none; }
+.quadCell .vbdVal { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); }
+/* "On tap" card — a slow, subtle animated gradient ring (golden/amber tones,
+   a light nod to the BEER name without leaning on it too hard) instead of a
+   flat accent border. Kept slow (6s) and low-contrast on purpose — this
+   should read as a nice touch, not a strobing distraction next to a live
+   draft board someone's actually trying to read. */
+.quadCellBest { border-color: transparent !important; }
+.quadCellBest .vbdVal { color: var(--accent); }
+@keyframes onTapShimmer { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+.quadCellBest::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
+  background: linear-gradient(120deg, var(--accent), #ffb84d, var(--accent), #f5c242);
+  background-size: 300% 300%; animation: onTapShimmer 6s ease infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+}
+.topPickTag {
+  font: var(--type-label); font-size: 8.5px; letter-spacing: var(--tracking-label);
+  text-transform: uppercase; color: var(--on-accent);
+  background: linear-gradient(120deg, var(--accent), #ffb84d, var(--accent));
+  background-size: 300% 300%; animation: onTapShimmer 6s ease infinite;
+  border-radius: var(--radius-pill); padding: 1.5px 6px; flex: none;
+}
+/* Rare variant — see panel.js's renderBest() for the (deliberately
+   infrequent) odds this ever shows up. Made deliberately more noticeable
+   than the everyday "On tap" card — a few seconds of glow + a pop on the
+   pill so it actually reads as "something special happened," not just a
+   slightly different color — but it settles down to a calmer shimmer after
+   ~3.6s rather than glowing/bouncing for the player's entire reign at #1.
+   panel.js also fires a one-time toast the moment this triggers, so there's
+   no ambiguity about whether it's a real signal or just the easter egg. */
+@keyframes rareGlow { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,184,77,0); } 50% { box-shadow: 0 0 16px 3px rgba(255,184,77,.5); } }
+@keyframes rarePop { 0% { transform: scale(0.8); } 55% { transform: scale(1.18); } 100% { transform: scale(1); } }
+.quadCellRare { animation: rareGlow 1.2s ease-in-out 3; }
+.quadCellRare::before { animation: onTapShimmer 2.2s ease infinite; background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d, #ffb84d); background-size: 300% 300%; }
+.topPickTagRare { animation: rarePop .45s ease, onTapShimmer 2.2s ease infinite; background: linear-gradient(120deg, #ffb84d, var(--accent), #ff8a3d); background-size: 300% 300%; }
 
 /* filter bar */
 #filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -351,6 +416,15 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div id="sourceList"></div>
     <div id="bestPicks"></div>
     <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="btn outline">Show all</button></div>
+    <div class="bestHead">
+      <span class="fieldLabel">Best by position · BEER</span>
+      <span class="infoDot" tabindex="0" role="img" aria-label="What is BEER value?">i
+        <span class="infoPop">
+          <strong style="color:var(--text-primary)">BEER value</strong> = a player's projected points above the best replacement still available at their position, recalculated live as the draft goes — higher is better, so draft whichever card has the highest number for the position you need.
+          <br><a href="https://subvertadown.com/article/the-purpose-of-vbd-cheat-sheets----how-value-based-drafting-tools-help-your-fantasy-draft-strategy" target="_blank" rel="noopener">Learn more about VBD →</a>
+        </span>
+      </span>
+    </div>
     <div id="best"></div>
     <div id="filters">
       <div class="segmented" id="posSeg">

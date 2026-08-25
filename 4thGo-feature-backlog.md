@@ -81,21 +81,25 @@ thoughts as they come. We'll batch these into actual coding sessions later.
 - **Reminder flag: ask me to actually do this research before we start coding**, since
   it should inform #2, #5, and #6 rather than happen after.
 
-## 8. VORP (Value Over Replacement Player) — deferred, own future pass
-- Explicitly NOT part of the Rankings Manager build (see rankings-manager-prompt.md).
-- Real reason it's deferred: VORP requires actual point PROJECTIONS, not ranks.
-  The current rankings data is ordinal (1st, 2nd, 3rd...) — VORP needs magnitude
-  (how many points better is this player than the next-best replacement), which
-  ranks alone can't provide.
-- To build this properly later, will need: (a) a projections data source (e.g.
-  FantasyPros publishes point projections separately from their ECR rankings —
-  check if that's exportable), (b) a defined "replacement level" calculation
-  using this league's exact settings (10 teams, starters, reasonable bench
-  buffer), (c) probably its own view/tab rather than a bolt-on to existing UI.
-- Connects to backlog #4 (league-specific scoring logic) — TE premium and
-  2-FLEX value adjustments are conceptually the same kind of "true value beyond
-  raw rank" problem VORP solves, so these two items may end up sharing logic
-  when eventually built.
+## 8. VORP / VBD — BUILT 2026-08-25, as plain BEER (man-games baseline)
+- Built in the `feature/beer-vbd` worktree/branch, per `beer-vbd-prompt.md`.
+  See claude.md's "BEER / VBD" section for the full writeup.
+- Data source: Sleeper's own projections endpoint (`pts_ppr`), same one ADP
+  already uses — the earlier "will need a projections data source" blocker
+  from this entry turned out to already exist for free.
+- Replacement level uses this league's actual settings (10 teams,
+  1QB/2RB/2WR/1TE/2FLEX), via a documented man-games/FLEX-share assumption —
+  see claude.md for the exact numbers and reasoning.
+- Live: recomputes off currently-available players as the draft progresses,
+  reusing the existing pick-sync plumbing, no new polling.
+- Surfaces as VBD values on the BEST QB/RB/WR/TE grid (with a highlighted
+  objective-best-pick card) and a new sortable VALUE column in the Rankings
+  Manager table — not a separate view/tab as originally guessed above.
+- **Not built, logged separately**: BEER+'s risk-adjustment/QB-streaming
+  layers, and roster-need-aware value discounting (plain BEER is
+  team-agnostic) — see claude.md's "BEER+-parity gap" backlog entry.
+- Connects to backlog #4 (league-specific scoring logic), which was
+  separately dropped (no consistent industry formula found) — see claude.md.
 
 ## 9. ADP-vs-rank column — ◐ BUILT, but NOT auto-pulled (premise was wrong)
 - Formerly backlog #6 (heat map). Low-cost to add now since we're already
