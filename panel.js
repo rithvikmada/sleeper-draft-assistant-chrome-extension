@@ -1372,12 +1372,26 @@ function showTip(target, text) {
     : `${r.bottom + 6}px`;
   tipEl = el;
 }
+// Tooltips wait for a real, sustained hover before showing (2026-08-25) —
+// they used to fire instantly on mouseover, which meant the board's own
+// "double-click to cross off" tip (on every row) was visible almost
+// constantly while scanning the list with the mouse, since the cursor is
+// nearly always sitting over SOME row. TIP_DELAY_MS is long enough that
+// scrolling/skimming across rows never triggers it, but a genuine pause to
+// read still does. The pending timer is cleared on mouseout so a quick
+// pass-through never shows anything at all.
+const TIP_DELAY_MS = 550;
+let tipTimer = null;
 document.addEventListener("mouseover", (e) => {
   const el = e.target.closest("[data-tip]");
-  if (el) showTip(el, el.dataset.tip);
+  if (!el) return;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => showTip(el, el.dataset.tip), TIP_DELAY_MS);
 });
 document.addEventListener("mouseout", (e) => {
-  if (e.target.closest("[data-tip]")) hideTip();
+  if (!e.target.closest("[data-tip]")) return;
+  clearTimeout(tipTimer);
+  hideTip();
 });
 
 // ---------- stat picker (choose which stat columns show, per position) ----------
