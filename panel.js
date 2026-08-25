@@ -971,8 +971,6 @@ function startPolling(draftId) {
   chrome.storage.local.set({ savedDraftId: draftId });
   if (countdownTimer) clearInterval(countdownTimer);
   countdownTimer = setInterval(tickStatus, 1000);
-  // Setup only matters once — give the space back to the board now that we're live.
-  closeSettingsPanel();
 }
 
 function stopPolling() {
