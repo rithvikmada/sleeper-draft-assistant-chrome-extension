@@ -1065,8 +1065,8 @@ const STAT_OPTION_DEFS = {
 const DEFAULT_VISIBLE_STATS = {
   QB: ["rush_yd_g", "pass_att_g", "fpdb"],
   RB: ["rec_g", "snaps_g", "rush_att_g"],
-  WR: ["tgt_g", "tgt_per_snap", "yd_per_snap"],
-  TE: ["tgt_g", "snap_share", "yd_per_snap"],
+  WR: ["tgt_g", "tgt_share", "yd_per_snap"],
+  TE: ["tgt_g", "tgt_share", "snap_share"],
 };
 const K_STAT_PREFS = "statColumnPrefs"; // { QB:[ids...], RB:[...], WR:[...], TE:[...] } — which STAT_OPTION_DEFS entries show, per position
 async function loadStatPrefs() {
