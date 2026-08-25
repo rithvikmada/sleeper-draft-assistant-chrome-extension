@@ -1153,17 +1153,17 @@ function statGroupLayout(order, visibleStats) {
 // instead, so an order CHANGE (selecting a player) can animate via CSS
 // transition by updating just those values on the existing elements (see
 // applyStatGroupOrder in panel.js) rather than re-rendering this HTML.
-// Hovering a label shows its full name (data-full, read by panel.js's
-// custom tooltip) instead of the native title="" attribute — a browser
-// tooltip can't be styled to match the board and has its own built-in show
-// delay.
+// Hovering a label shows its full name (data-tip, read by panel.js's
+// generalized custom tooltip) instead of the native title="" attribute — a
+// browser tooltip can't be styled to match the board and has its own
+// built-in show delay.
 function renderStatHeaderGroups(order, visibleStats) {
   const { widths, offsets } = statGroupLayout(order, visibleStats);
   return STAT_GROUP_SEQUENCE.map((pos) => {
     const color = pos === "BASIC" ? "var(--accent)" : (POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : "var(--text-primary)");
     const defs = pos === "BASIC" ? STAT_META.BASIC : STAT_OPTION_DEFS[pos].filter((o) => (visibleStats[pos] || []).includes(o.id));
     const cells = defs.map((m) =>
-      `<span class="statHeadCol" style="color:${color}" data-full="${esc(m.full)}">${esc(m.label)}</span>`
+      `<span class="statHeadCol" style="color:${color}" data-tip="${esc(m.full)}">${esc(m.label)}</span>`
     ).join("");
     return `<span class="statHeadGroup" data-pos="${esc(pos)}" style="width:${widths[pos]}px;transform:translateX(${offsets[pos]}px)">${cells}</span>`;
   }).join("");

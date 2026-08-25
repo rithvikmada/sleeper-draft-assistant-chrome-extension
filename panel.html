@@ -228,6 +228,46 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #cacheCountdown.fresh { color: var(--green-500); }
 #refreshBtn.spin { opacity: .55; }
 
+/* EXPERIMENTAL (queue/draft-write branch) — the Sleeper queue popover:
+   opened from the "Queue ▾" chip in #filters (option B of a few layouts
+   mocked up and picked directly), reorderable via native HTML5 drag-and-drop,
+   removable and draftable per-row. Sized larger than a typical small popover
+   (340px, 40px rows, 13px text) specifically so it's comfortable to edit
+   on the fly mid-draft, not just glance at. See openSleeperQueuePopover /
+   renderSleeperQueuePopover in panel.js. */
+.queuePopover { position: fixed; z-index: 60; width: 340px; max-height: 420px; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 10px 12px; }
+.queuePopover[hidden] { display: none; }
+.queueHeader { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.queueEmpty { font: var(--type-body); font-size: 13px; color: var(--text-muted); }
+.queueList { display: flex; flex-direction: column; gap: 3px; }
+.queueRow { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 6px; border-radius: var(--radius-sm); cursor: grab; transition: background-color var(--dur-fast) var(--ease-out); }
+.queueRow:hover { background: var(--surface-row-hover); }
+.queueRow.dragging { opacity: .4; }
+.queueRow.dragOver { box-shadow: inset 0 2px 0 var(--accent); }
+.queueDrag { color: var(--text-disabled); font-size: 14px; flex: none; user-select: none; }
+/* One-step move buttons — a faster, more precise alternative to drag for
+   nudging a player a spot or two (see moveSleeperQueueItem in panel.js).
+   Stacked tight (no gap) so the pair reads as one up/down control. */
+.queueMoveBtns { display: flex; flex-direction: column; flex: none; }
+.queueMoveBtn { width: 16px; height: 14px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 3px; }
+.queueMoveBtn:hover:not(:disabled) { background: var(--chalk-a12); color: var(--accent); }
+.queueMoveBtn:disabled { opacity: .3; cursor: default; }
+.queueNum { width: 18px; text-align: right; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; flex: none; }
+.queueName { flex: 1; min-width: 0; font: var(--type-ui); font-size: 14px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queueDraftBtn, .queueRemoveBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.queueDraftBtn:hover { background: var(--chalk-a12); color: var(--accent); }
+.queueRemoveBtn:hover { background: var(--red-a12); color: var(--red-500); }
+
+/* EXPERIMENTAL — matching mini queue/draft buttons on the Best Available
+   cards (#best quad grid + #bestPicks top-3), same icons/behavior as the
+   board row and queue popover versions. Deliberately smaller than the
+   popover's own buttons (18px, not 22px) since these share tight card
+   headers with other content. */
+.bestActionBtn { width: 18px; height: 18px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.bestActionBtn:hover { background: var(--chalk-a12); color: var(--accent); }
+.bestActionBtn.on { color: var(--accent); }
+.bestActions { display: flex; align-items: center; gap: 2px; }
+
 #teamCounts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .teamHint { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 #sourceList { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
@@ -305,9 +345,9 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    .rowFlagBtn, plus a hover tint and an "on" state for the queue toggle. The
    spacer variant keeps row height/alignment identical for rows that don't
    have a matched Sleeper player_id (see sleeperBtns in panel.js). */
-.rowQueueBtn, .rowDraftBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; border-radius: 3px; transition: background-color var(--dur-fast) var(--ease-out); }
+.rowQueueBtn, .rowDraftBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; border-radius: 4px; transition: background-color var(--dur-fast) var(--ease-out); }
 .rowQueueBtn:hover, .rowDraftBtn:hover { background: var(--chalk-a12); }
-.rowFlagSpacer { width: 16px; height: 16px; flex: none; }
+.rowFlagSpacer { width: 22px; height: 22px; flex: none; }
 .rk2 { width: 38px; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); flex: none; }
 .nmCell2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
 .nmLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -349,12 +389,46 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    top of renderBoard, panel.js) — not by ordinary mouseout. */
 .row2.selected { background: var(--surface-row-hover); }
 
-/* Custom header-label tooltip (backlog: stat column hover) — deliberately
-   not the native title="" tooltip: that's OS-rendered, has a built-in
-   hover delay before it appears, and can't be styled to match the board's
-   design system. This is a small themed floating box instead, shown/hidden
-   from panel.js's mouseover/mouseout on #colHead. */
-.statTooltip { position: fixed; z-index: 60; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-primary); font: var(--type-ui); font-size: 11px; padding: 5px 9px; border-radius: var(--radius-sm); box-shadow: var(--shadow-menu); pointer-events: none; white-space: nowrap; }
+/* Generalized custom tooltip — originally just for the stat column headers,
+   now the replacement for every title="" in this app (see showTip/hideTip
+   and the document-level data-tip listener in panel.js). Deliberately not
+   the native title="" tooltip: that's OS-rendered, has a built-in hover
+   delay, and can't be styled to match the board's design system. Wraps with
+   a max-width now (used to be nowrap) since some migrated tooltips (the
+   Sleeper token field's description, the write-toggle's) are full sentences,
+   not short labels like the stat headers this was built for. */
+.statTooltip { position: fixed; z-index: 60; max-width: 260px; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-primary); font: var(--type-ui); font-size: 11px; line-height: 1.4; padding: 5px 9px; border-radius: var(--radius-sm); box-shadow: var(--shadow-menu); pointer-events: none; }
+
+/* EXPERIMENTAL (queue/draft-write branch) — small "i" button next to the
+   Sleeper token field, opening a short click-to-show instructions popover.
+   Click-to-open (not hover, unlike .statTooltip above) since the content is
+   a short numbered list someone needs a moment to actually read, not a
+   glance-and-gone label. */
+.infoBtn { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); font: 600 9px/1 var(--font-body); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; margin-left: 4px; transition: var(--transition-control); }
+.infoBtn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.infoPopover { position: fixed; z-index: 60; width: 260px; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-secondary); font: var(--type-body); font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
+.infoPopover b { color: var(--text-primary); }
+.infoPopover ol { margin: 4px 0 0; padding-left: 16px; }
+.infoPopover li { margin-bottom: 2px; }
+
+/* EXPERIMENTAL — the test-connection button's result text (see
+   testSleeperConnection in panel.js). Color/text swap in place, no layout
+   shift between states. */
+.testStatus { font: var(--type-ui); font-size: var(--text-xs); color: var(--text-muted); }
+.testStatus.ok { color: var(--green-500); }
+.testStatus.err { color: var(--red-500); }
+
+/* EXPERIMENTAL (queue/draft-write branch) — themed replacement for
+   window.confirm() on the "draft this player now" action, specifically so
+   it can carry a "don't show this again" checkbox (a native confirm() has
+   no way to do that). See confirmDraftOnSleeper in panel.js. */
+.modalOverlay { position: fixed; inset: 0; z-index: 70; background: var(--surface-scrim); display: flex; align-items: center; justify-content: center; }
+.modalOverlay[hidden] { display: none; }
+.modalBox { width: 300px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 16px; }
+.modalTitle { font: var(--type-heading); color: var(--text-primary); margin-bottom: 6px; }
+.modalBody { font: var(--type-body); color: var(--text-secondary); margin-bottom: 12px; }
+.modalCheckbox { display: flex; align-items: center; gap: 7px; font: var(--type-ui); font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: 14px; cursor: pointer; }
+.modalActions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* flag menu (favorite / avoid) */
 .flagMenu { position: fixed; z-index: 50; min-width: 150px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 4px; display: flex; flex-direction: column; }
@@ -406,8 +480,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </div>
       <div class="headRight">
         <span id="pickCounter"></span>
-        <button id="openManager" class="btn outline" title="Open the Rankings Manager">Manager</button>
-        <button id="settingsBtn" class="iconBtn2" title="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
+        <button id="openManager" class="btn outline" data-tip="Open the Rankings Manager">Manager</button>
+        <button id="settingsBtn" class="iconBtn2" data-tip="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
       </div>
     </div>
     <div class="statusRow">
@@ -423,10 +497,46 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
         </div>
         <div class="field">
           <span class="fieldLabel">Your slot</span>
-          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" title="Your draft slot / roster number" /></div>
+          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" data-tip="Your draft slot / roster number" /></div>
         </div>
         <button id="connectBtn" class="btn primary">Sync</button>
         <button id="stopBtn" class="btn danger" style="display:none">Stop</button>
+        <!-- EXPERIMENTAL (queue/draft-write branch). Off by default — the
+             board's normal experience (rows, flag button, everything else)
+             renders identically whether this is on or off; the toggle below
+             is the ONLY thing that changes it. Persisted (K_SLEEPER_WRITE_ENABLED
+             in panel.js), unlike the token itself below, which is
+             session-memory only: never written to chrome.storage, cleared
+             when this window closes. The token field only appears once this
+             is on — everything the feature adds is gated on BOTH being true
+             (see sleeperWriteReady() in panel.js), not just this toggle. -->
+        <div class="field">
+          <span class="fieldLabel">Draft actions</span>
+          <button id="sleeperWriteToggle" class="chip" data-tip="Turn on queue/draft buttons on the board (experimental — see the info icon once enabled for how it works)">Off</button>
+        </div>
+        <div class="field" id="sleeperTokenField" style="display:none">
+          <span class="fieldLabel">Sleeper token <button type="button" id="sleeperTokenInfo" class="infoBtn" aria-label="How to get your Sleeper token">i</button></span>
+          <div class="input2"><input id="sleeperToken" type="password" placeholder="paste for this session" data-tip="From a captured Sleeper request's Authorization header. Kept in memory only — never saved, cleared when this window closes." /></div>
+        </div>
+        <!-- EXPERIMENTAL — an extra safeguard on top of the confirm modal,
+             not a replacement for it (see K_SLEEPER_DBLCLICK_DRAFT in
+             panel.js). Defaults on. Only shown once Draft actions is on —
+             it's meaningless otherwise. -->
+        <div class="field" id="sleeperDblClickField" style="display:none">
+          <span class="fieldLabel">Double-click to draft</span>
+          <button id="sleeperDblClickToggle" class="chip active" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too).">On</button>
+        </div>
+        <!-- EXPERIMENTAL — lets someone confirm their tab/token setup works
+             BEFORE a draft starts, when there's nothing safe to test a real
+             queue/draft action against yet. See testSleeperConnection in
+             panel.js — a read-only query, no side effects on Sleeper. -->
+        <div class="field" id="sleeperTestField" style="display:none">
+          <span class="fieldLabel">&nbsp;</span>
+          <div style="display:flex;align-items:center;gap:8px;height:32px">
+            <button id="sleeperTestBtn" class="btn secondary" data-tip="Runs a real, harmless check against Sleeper — confirms the tab and token both actually work">Test</button>
+            <span id="sleeperTestStatus" class="testStatus"></span>
+          </div>
+        </div>
       </div>
       <div id="refreshRow" style="display:none">
         <button id="refreshBtn" class="btn secondary">Refresh now</button>
@@ -443,18 +553,24 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div id="filters">
       <div class="segmented" id="posSeg">
         <button class="pf seg active" data-pos="ALL">All</button>
-        <button class="pf seg" data-pos="RB/WR" title="RB and WR only — no QB, no TE">RB/WR</button>
+        <button class="pf seg" data-pos="RB/WR" data-tip="RB and WR only — no QB, no TE">RB/WR</button>
         <button class="pf seg" data-pos="QB">QB</button>
         <button class="pf seg" data-pos="RB">RB</button>
         <button class="pf seg" data-pos="WR">WR</button>
         <button class="pf seg" data-pos="TE">TE</button>
       </div>
-      <button class="chip" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">Show taken</button>
+      <button class="chip" id="takenToggle" data-tip="Also show drafted players, crossed out, at the current position filter">Show taken</button>
       <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>
-      <button class="chip" id="statPickerBtn" title="Choose which stat columns show for each position">Stats ▾</button>
+      <button class="chip" id="statPickerBtn" data-tip="Choose which stat columns show for each position">Stats ▾</button>
+      <!-- EXPERIMENTAL (queue/draft-write branch) — see renderSleeperQueueBtn/
+           openSleeperQueuePopover in panel.js. Hidden entirely unless Draft
+           actions is on, same "zero footprint when off" rule as everything
+           else this feature adds. -->
+      <button class="chip" id="sleeperQueueBtn" style="display:none" data-tip="View and edit your Sleeper draft queue">Queue ▾</button>
     </div>
   </div>
   <div id="statPickerPanel" class="statPickerPanel" hidden></div>
+  <div id="sleeperQueuePopover" class="queuePopover" hidden></div>
   <div id="colHead">
     <span class="c-flag"></span>
     <span class="c-rank">Rank</span>
@@ -465,6 +581,19 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
   </div>
   <div id="board"></div>
   <div id="toast"></div>
+  <!-- EXPERIMENTAL (queue/draft-write branch) — see confirmDraftOnSleeper in
+       panel.js. -->
+  <div id="draftConfirmModal" class="modalOverlay" hidden>
+    <div class="modalBox">
+      <div class="modalTitle">Draft on Sleeper?</div>
+      <div class="modalBody" id="draftConfirmBody"></div>
+      <label class="modalCheckbox"><input type="checkbox" id="draftConfirmSkip" /> Don't show this again</label>
+      <div class="modalActions">
+        <button id="draftConfirmCancel" class="btn secondary">Cancel</button>
+        <button id="draftConfirmOk" class="btn primary">Draft</button>
+      </div>
+    </div>
+  </div>
   <script src="rankings.js"></script>
   <script src="shared.js"></script>
   <script src="panel.js"></script>
