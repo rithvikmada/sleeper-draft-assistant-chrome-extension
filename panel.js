@@ -880,6 +880,31 @@ function initials(name) {
   return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
 }
 
+// Shared by the Roster popover and the Sleeper queue popover — headshot:
+// Sleeper's own numeric player_id (sleeperIds, loaded from K_SLEEPER_IDS —
+// already fetched for the queue/draft-write feature off the projections
+// endpoint, no new fetch/permission needed here) against Sleeper's public
+// thumb CDN. Team logo: same CDN, keyed off the consensus row's team
+// abbreviation, lowercased (confirmed against a real response — Sleeper's
+// logo files use lowercase 3-letter codes). Both are plain <img>-equivalent
+// background-images on a browser-level <div>, which MV3's default CSP
+// doesn't restrict (that only gates script-src/object-src) — no
+// manifest.json change needed. Falls back to initials / a plain team-text
+// badge when either is missing (unmatched player, or no team on file —
+// e.g. a free agent).
+function avatarHtml(key, name, pos, team, size = "") {
+  const t = posTint(pos);
+  const sleeperId = sleeperIds[key];
+  const style = sleeperId
+    ? `border-color:${t.fg};background-image:url('https://sleepercdn.com/content/nfl/players/thumb/${sleeperId}.jpg')`
+    : `border-color:${t.fg}`;
+  const inner = sleeperId ? "" : esc(initials(name));
+  const badge = team
+    ? `<span class="avatarBadge" style="background-image:url('https://sleepercdn.com/images/team_logos/nfl/${team.toLowerCase()}.png')">${sleeperId ? "" : esc(team)}</span>`
+    : "";
+  return `<span class="avatarCircle${size ? ` ${size}` : ""}" style="${style}">${inner}${badge}</span>`;
+}
+
 function renderRosterBtn() {
   const n = lastSharedPicks.filter((p) => p.byMe).length;
   $("rosterBtn").textContent = `Roster (${n}) ▾`;
@@ -924,35 +949,15 @@ function renderRosterPopover() {
     if (!pick) {
       return `<div class="rosterRow empty">
         ${slotChipHtml(slotLabel)}
-        <span class="rosterAvatar dashed">—</span>
+        <span class="avatarCircle dashed">—</span>
         <div><div class="rosterName" style="color:var(--text-disabled)">Open</div></div>
         <div class="rosterPick dim">—</div>
       </div>`;
     }
     const row = byKey.get(pick.key);
     const team = row && row.team ? row.team : "";
-    const t = posTint(pick.pos);
     const dp = formatDraftPick(pick.pickNo);
     const dim = slotLabel === "BN" ? " dim" : "";
-    // Headshot: Sleeper's own numeric player_id (sleeperIds, loaded from
-    // K_SLEEPER_IDS — already fetched for the queue/draft-write feature off
-    // the projections endpoint, no new fetch/permission needed here) against
-    // Sleeper's public thumb CDN. Team logo: same CDN, keyed off the
-    // consensus row's team abbreviation, lowercased (confirmed against a
-    // real response — Sleeper's logo files use lowercase 3-letter codes).
-    // Both are plain <img>-equivalent background-images loaded from a
-    // browser-level <div>, which MV3's default CSP doesn't restrict (that
-    // only gates script-src/object-src) — no manifest.json change needed.
-    // Falls back to initials / a plain team-text badge when either is
-    // missing (unmatched player, or no team on file — e.g. a free agent).
-    const sleeperId = sleeperIds[pick.key];
-    const avatarStyle = sleeperId
-      ? `border-color:${t.fg};background-image:url('https://sleepercdn.com/content/nfl/players/thumb/${sleeperId}.jpg')`
-      : `border-color:${t.fg}`;
-    const avatarInner = sleeperId ? "" : esc(initials(pick.name));
-    const teamBadge = team
-      ? `<span class="rosterTeamBadge" style="background-image:url('https://sleepercdn.com/images/team_logos/nfl/${team.toLowerCase()}.png')">${sleeperId ? "" : esc(team)}</span>`
-      : "";
     // Position-rank tag ("WR 49") in place of a round/pick explainer — this
     // is what actually answers "did I get my RB2 and RB5, or my WR10 and
     // WR15", which the pick number alone can't.
@@ -960,7 +965,7 @@ function renderRosterPopover() {
     const prHtml = pr != null ? `<span class="rd">${esc(pick.pos)} ${pr}</span>` : "";
     return `<div class="rosterRow">
       ${slotChipHtml(slotLabel)}
-      <span class="rosterAvatar" style="${avatarStyle}">${avatarInner}${teamBadge}</span>
+      ${avatarHtml(pick.key, pick.name, pick.pos, team)}
       <div><div class="rosterName">${esc(pick.name)}</div><div class="rosterMeta">${esc(pick.pos)}${team ? " · " + esc(team) : ""}</div></div>
       <div class="rosterPick${dim}">${dp ? `${dp.label}${prHtml}` : "—"}</div>
     </div>`;
@@ -1895,6 +1900,7 @@ function renderSleeperQueuePopover() {
     const r = byKey.get(key);
     const name = r ? r.name : key.split("|")[0];
     const pos = r ? r.pos : key.split("|")[1] || "";
+    const team = r && r.team ? r.team : "";
     return `<div class="queueRow" draggable="true" data-key="${esc(key)}">
       <span class="queueDrag" aria-hidden="true">⠿</span>
       <span class="queueMoveBtns">
@@ -1902,6 +1908,7 @@ function renderSleeperQueuePopover() {
         <button class="queueMoveBtn" data-key="${esc(key)}" data-dir="down" aria-label="Move ${esc(name)} down" data-tip="Move down"${i === last ? " disabled" : ""}>${ico("chevron-down", { size: 12 })}</button>
       </span>
       <span class="queueNum">${i + 1}</span>
+      ${avatarHtml(key, name, pos, team, "sm")}
       <span class="queueName">${esc(name)}</span>
       ${posBadgeHtml(pos, null, "sm")}
       <button class="queueDraftBtn" data-key="${esc(key)}" aria-label="Draft ${esc(name)} on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 15 })}</button>
