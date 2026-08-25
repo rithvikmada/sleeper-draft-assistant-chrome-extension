@@ -1933,3 +1933,35 @@ function buildTeamPositionRanks(picks, beerValues) {
   });
   return ranks;
 }
+
+// Overall team grade — the rollup across all four positions that
+// buildTeamPositionRanks (above) deliberately left for a separate pass (see
+// claude.md's #13 write-up). Sums a team's BEER value across EVERY drafted
+// player, any position, and ranks all teams against that one number.
+//
+// No position-weighting scheme needed here, and that's not a shortcut — a
+// player's BEER value is ALREADY normalized to replacement level at their
+// own position (that's the entire point of VBD: it makes value comparable
+// ACROSS positions), so summing raw values across positions is a real
+// combined-value number, not an arbitrary blend. If this ever needs
+// weighting after all (e.g. discounting bench depth beyond what a team can
+// actually start), that's a deliberate future change — don't add it
+// silently.
+function buildTeamOverallRanks(picks, beerValues) {
+  const byTeam = {};
+  picks.forEach((p) => {
+    if (p.rosterId == null) return;
+    const val = beerValues.get(p.key);
+    if (val === undefined) return;
+    byTeam[p.rosterId] = (byTeam[p.rosterId] || 0) + val;
+  });
+  const teamIds = Object.keys(byTeam).map(Number);
+  const totals = teamIds
+    .map((id) => ({ id, total: byTeam[id] || 0 }))
+    .sort((a, b) => b.total - a.total);
+  const ranks = {};
+  totals.forEach((t, i) => {
+    ranks[t.id] = { rank: i + 1, of: totals.length, total: t.total };
+  });
+  return ranks;
+}

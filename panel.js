@@ -685,7 +685,23 @@ function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = ne
       <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(r.rank).toUpperCase())}</span>
     </span>`;
   }).join("");
-  el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${badgeHtml("neutral", `Tot ${mine.length}`)}`;
+  // Overall team grade (backlog #13's rollup, added after the per-position
+  // ranks) — same fused pill, neutral tone since it's not any one position's
+  // color, built off buildTeamOverallRanks (shared.js: sums BEER value
+  // across every drafted player, any position — no weighting scheme needed
+  // since BEER values are already cross-position comparable).
+  const overallRanks = myTeamId != null ? buildTeamOverallRanks(picks, beerValues) : {};
+  const myOverall = myTeamId != null ? overallRanks[myTeamId] : null;
+  const totalPill = (myOverall && mine.length > 0)
+    ? (() => {
+        const { bg, fg } = rankColor(myOverall.rank, myOverall.of);
+        return `<span class="posRankPill t-neutral" title="Overall team value ranks ${esc(ordinal(myOverall.rank))} of ${myOverall.of} in the league by total BEER value">
+          <span class="prpTop t-neutral">Tot ${mine.length}</span>
+          <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(myOverall.rank).toUpperCase())}</span>
+        </span>`;
+      })()
+    : badgeHtml("neutral", `Tot ${mine.length}`);
+  el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${totalPill}`;
 }
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"], v = n % 100;

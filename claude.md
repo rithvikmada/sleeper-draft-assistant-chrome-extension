@@ -999,9 +999,10 @@ priorities from scratch. Notable status since it was last summarized here:
   explicitly out of scope per the #8 build's own prompt — the crown change
   above is a narrow, UI-selection-only exception to that, not a reversal of
   it.
-- **#13 (positional rank vs. league-mates) — BUILT (2026-08-25), the
-  per-position slice of it (not yet the "overall team grade" rollup — see
-  below).** `buildTeamPositionRanks(picks, beerValues)` (shared.js) groups
+- **#13 (positional rank vs. league-mates) — BUILT (2026-08-25), both the
+  per-position slice AND the overall team-grade rollup (added same day,
+  slightly later — see the end of this entry).**
+  `buildTeamPositionRanks(picks, beerValues)` (shared.js) groups
   every drafted player by which roster took them, sums each team's BEER
   value per position, and ranks all 10 teams against each other.
   **UI (`.posRankPill`, panel.html/panel.js) — fused two-row pill, chosen
@@ -1046,9 +1047,21 @@ priorities from scratch. Notable status since it was last summarized here:
   against EITHER `roster_id` OR `draft_slot` when a pick is first tagged
   "mine," while `rosterId` always prefers `roster_id` — an edge case where
   they disagree is possible, and this sidesteps it rather than assuming.
-  Not yet built: an "overall team grade" rollup across all four positions
-  into one number/rank — that's a distinct follow-up (see
-  `4thGo-feature-backlog.md` #13), not implied or half-built by this.
+  **Overall team grade rollup — BUILT as a same-day follow-up.**
+  `buildTeamOverallRanks(picks, beerValues)` (shared.js) sums a team's BEER
+  value across EVERY drafted player, any position, and ranks all teams
+  against that one number. **No position-weighting scheme was needed, and
+  that's not a shortcut** — a player's BEER value is already normalized to
+  replacement level AT THEIR OWN POSITION (that's the entire point of VBD:
+  it makes value comparable across positions), so summing raw values across
+  positions is a real combined number, not an arbitrary blend the way
+  averaging ranks would be. Surfaces as the same fused pill design as the
+  per-position ranks, just neutral-toned (`.posRankPill.t-neutral`) since
+  it isn't any one position's color — replaces the old plain "Tot N" badge
+  in the board's "My team" widget with a "Tot N" pill + rank strip, same
+  gradient. If bench-depth discounting or some other weighting is ever
+  wanted on top of this, that's a deliberate future change, not something
+  half-built here — this is a straight, unweighted sum.
 - **Stats/projections board columns — BUILT (2026-08-24).** See "Stat
   columns" section below for the full design/data/UI writeup. Originally
   scoped as one PROJ + one position-conditional stat; grew through the same

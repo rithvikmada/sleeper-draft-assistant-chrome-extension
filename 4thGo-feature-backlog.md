@@ -153,7 +153,7 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   polling when the panel is closed. Deliberately not built now, since the constraint
   was to leave the polling/cache path in `panel.js` untouched.
 
-## 13. Positional rank vs. league-mates — per-position slice BUILT 2026-08-25
+## 13. Positional rank vs. league-mates — BUILT in full 2026-08-25
 - Original ask: a rank per position ("your RBs are 3rd of 10, your WRs are 1st")
   plus an overall team letter grade, so in-draft decisions can be made off
   RELATIVE standing, not your own roster viewed in isolation.
@@ -172,15 +172,15 @@ thoughts as they come. We'll batch these into actual coding sessions later.
   that #8 is built — sum of BEER value per position, same reasoning as the
   man-games calc. The "where it lives" question resolved to the existing
   board-window widget, no new UI surface needed.
-- **Not yet built — a genuinely separate follow-up now, not implied by the
-  above**: an OVERALL team grade/letter that rolls all four positions into
-  one number or rank, the way the original ask described. Per-position rank
-  answers "how do my RBs compare," not "how does my WHOLE team compare" —
-  that needs a decision on how to weight positions against each other (equal
-  weight? weighted by roster slots, e.g. 2 RB slots vs 1 QB slot?) before
-  it's a single honest number, which per-position rank alone doesn't need to
-  answer. Pick this up as its own scoped task, don't assume it's a trivial
-  extension of what's built.
+- **Overall team grade — BUILT as a same-day follow-up.**
+  `buildTeamOverallRanks()` (shared.js) sums a team's BEER value across
+  every drafted player, any position, and ranks all teams by that total.
+  The weighting question flagged above turned out not to need answering:
+  BEER values are already normalized to replacement level per position
+  (the entire point of VBD), so a straight unweighted sum across positions
+  is a real combined-value number, not an arbitrary blend. Surfaces as the
+  "Tot N" pill in the same "My team" widget, same fused-pill + gradient
+  design as the per-position ranks, just neutral-toned.
 - Team display names in a mock draft (bots may have no useful name) —
   still unaddressed, since the rank chip only ever needed to show YOUR OWN
   rank number, not label every other team by name. Would matter if a future

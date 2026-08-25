@@ -67,7 +67,7 @@ const NAMES = [
   "validateParsedSource", "usableSources", "median", "norm", "playerKey", "esc",
   "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans",
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
-  "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks",
+  "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks", "buildTeamOverallRanks",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -75,7 +75,7 @@ const {
   validateParsedSource, usableSources, median, norm, playerKey, esc,
   makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans,
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
-  buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks,
+  buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks, buildTeamOverallRanks,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -432,6 +432,33 @@ const mk = (id, name, arr) =>
   beerValuesAfter.set("qb-c|QB", 100);
   const ranksAfter = buildTeamPositionRanks(picks, beerValuesAfter);
   eq(ranksAfter[3].QB.rank, 1, "team 3's QB rank improves once its BEER value rises, with no new picks");
+}
+
+// ============================================================
+// buildTeamOverallRanks — the overall-team-grade rollup across all
+// positions, added as a follow-up to buildTeamPositionRanks above.
+// ============================================================
+
+{
+  const beerValues = new Map([
+    ["qb-a|QB", 40], ["rb-a|RB", 20], ["wr-a|WR", 10], // team 1 total: 70
+    ["qb-b|QB", 30], ["rb-b|RB", 5],                   // team 2 total: 35
+    ["qb-c|QB", 10],                                    // team 3 total: 10
+  ]);
+  const picks = [
+    { key: "qb-a|QB", pos: "QB", rosterId: 1 },
+    { key: "rb-a|RB", pos: "RB", rosterId: 1 },
+    { key: "wr-a|WR", pos: "WR", rosterId: 1 },
+    { key: "qb-b|QB", pos: "QB", rosterId: 2 },
+    { key: "rb-b|RB", pos: "RB", rosterId: 2 },
+    { key: "qb-c|QB", pos: "QB", rosterId: 3 },
+    { key: "unknown|QB", pos: "QB", rosterId: 4 }, // no BEER value — excluded
+  ];
+  const ranks = buildTeamOverallRanks(picks, beerValues);
+  eq(ranks[1], { rank: 1, of: 3, total: 70 }, "team 1's combined total (70, across QB+RB+WR) ranks 1st overall");
+  eq(ranks[2], { rank: 2, of: 3, total: 35 }, "team 2's combined total (35) ranks 2nd overall");
+  eq(ranks[3], { rank: 3, of: 3, total: 10 }, "team 3's combined total (10, one QB only) ranks 3rd overall");
+  ok(ranks[4] === undefined, "a pick with no computed BEER value doesn't create a team entry off it alone");
 }
 
 // ============================================================
