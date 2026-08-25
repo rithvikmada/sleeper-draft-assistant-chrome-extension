@@ -79,10 +79,21 @@ chrome.windows.onRemoved.addListener(async (closedId) => {
 
 // When the active tab is a Sleeper draft page, stash the draft ID so the
 // panel can auto-fill it. Draft URLs look like:
-//   https://sleeper.com/draft/nfl/<draft_id>
+//   https://sleeper.com/draft/nfl/<draft_id>          (classic draftboard)
+//   https://sleeper.com/beta/draft/nfl/<draft_id>      (the newer draftboard,
+//                                                        reachable via Sleeper's
+//                                                        own "Try New Draftboard"
+//                                                        menu item)
+// The optional "beta/" segment was missing here originally, which meant a
+// Sleeper tab on the new draftboard was silently invisible to BOTH auto-
+// detect (this function) and the queue/draft write feature's tab lookup
+// below (findSleeperDraftTab uses this same function) — the write buttons
+// just did nothing, no error, because no matching tab was ever found. One
+// regex, used everywhere a Sleeper draft tab needs recognizing, so a future
+// URL-shape change only needs fixing in this one place.
 function extractDraftId(url) {
   if (!url) return null;
-  const m = url.match(/sleeper\.com\/draft\/nfl\/(\d+)/);
+  const m = url.match(/sleeper\.com\/(?:beta\/)?draft\/nfl\/(\d+)/);
   return m ? m[1] : null;
 }
 
@@ -118,23 +129,21 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
 // shape, the x-sleeper-graphql-op header) was captured from Sleeper's real
 // web client via live network traffic during a real mock draft — see
 // claude.md. draft_pick_player's shape is confirmed against a captured curl
-// request. update_draft_queue's shape is inferred (same sport/draft_id
-// convention as draft_pick_player, response was observed as
-// {update_draft_queue:[...player_ids]}) but its exact request args were
-// never directly captured — if Sleeper rejects it, the error surfaces
-// through the toast in panel.js so it's visible rather than silently no-op.
+// request. update_draft_queue's initial guess (matching draft_pick_player's
+// sport/draft_id convention) was wrong — Sleeper's server rejected it live
+// with "Unknown argument 'sport' on field 'update_draft_queue'" — and the
+// shape below (no sport arg) is now confirmed working against a real draft,
+// auth included, not just inferred.
 
-function extractSleeperDraftId(url) {
-  if (!url) return null;
-  const m = url.match(/sleeper\.com\/draft\/nfl\/(\d+)/);
-  return m ? m[1] : null;
-}
-
+// Matches a tab on EITHER draftboard — see extractDraftId's comment above
+// for why both URL shapes need covering here.
 async function findSleeperDraftTab(draftId) {
-  const tabs = await chrome.tabs.query({ url: "https://sleeper.com/draft/nfl/*" });
+  const tabs = await chrome.tabs.query({
+    url: ["https://sleeper.com/draft/nfl/*", "https://sleeper.com/beta/draft/nfl/*"],
+  });
   if (!tabs.length) return null;
   if (!draftId) return tabs[0];
-  return tabs.find((t) => extractSleeperDraftId(t.url) === String(draftId)) || tabs[0];
+  return tabs.find((t) => extractDraftId(t.url) === String(draftId)) || tabs[0];
 }
 
 // Runs INSIDE the Sleeper tab's own page context — chrome.scripting
@@ -142,14 +151,20 @@ async function findSleeperDraftTab(draftId) {
 // over anything from background.js. Catches internally and returns a plain
 // {ok, data|error} object rather than throwing, since an exception here
 // surfaces awkwardly across the executeScript boundary.
-function injectedSleeperGraphQL(operationName, query) {
+function injectedSleeperGraphQL(operationName, query, token) {
+  const headers = {
+    "content-type": "application/json",
+    "x-sleeper-graphql-op": operationName,
+  };
+  // EXPERIMENTAL, temporary — see sleeperToken() in panel.js. Sleeper's own
+  // client attaches this same header from in-memory app state we can't
+  // reach from an injected script; a session-only manual paste stands in
+  // for it until (if) a live-capture mechanism replaces this.
+  if (token) headers["authorization"] = token;
   return fetch("https://sleeper.com/graphql", {
     method: "POST",
     credentials: "same-origin",
-    headers: {
-      "content-type": "application/json",
-      "x-sleeper-graphql-op": operationName,
-    },
+    headers,
     body: JSON.stringify({ operationName, variables: {}, query }),
   })
     .then((res) => res.json())
@@ -162,13 +177,13 @@ function injectedSleeperGraphQL(operationName, query) {
     .catch((e) => ({ ok: false, error: String((e && e.message) || e) }));
 }
 
-async function execSleeperGraphQL(draftId, operationName, query) {
+async function execSleeperGraphQL(draftId, operationName, query, token) {
   const tab = await findSleeperDraftTab(draftId);
   if (!tab) throw new Error("No open Sleeper draft tab found. Open your draft on sleeper.com and try again.");
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     func: injectedSleeperGraphQL,
-    args: [operationName, query],
+    args: [operationName, query, token || ""],
   });
   const out = results && results[0] && results[0].result;
   if (!out) throw new Error("No response from the Sleeper tab.");
@@ -184,7 +199,7 @@ function assertDigits(v, label) {
   if (!/^\d+$/.test(String(v))) throw new Error(`Invalid ${label}.`);
 }
 
-async function sleeperDraftPlayer({ draftId, playerId, pickNo }) {
+async function sleeperDraftPlayer({ draftId, playerId, pickNo, token }) {
   assertDigits(draftId, "draft ID");
   assertDigits(playerId, "player ID");
   assertDigits(pickNo, "pick number");
@@ -199,17 +214,36 @@ async function sleeperDraftPlayer({ draftId, playerId, pickNo }) {
           reactions
         }
       }`;
-  return execSleeperGraphQL(draftId, "draft_pick_player", query);
+  return execSleeperGraphQL(draftId, "draft_pick_player", query, token);
 }
 
-async function sleeperUpdateDraftQueue({ draftId, playerIds }) {
+async function sleeperUpdateDraftQueue({ draftId, playerIds, token }) {
   assertDigits(draftId, "draft ID");
   playerIds.forEach((id) => assertDigits(id, "player ID"));
   const idList = playerIds.map((id) => `"${id}"`).join(", ");
+  // No "sport" argument here, unlike draft_pick_player — confirmed live
+  // against Sleeper's real GraphQL server, which rejected the first attempt
+  // with "Unknown argument 'sport' on field 'update_draft_queue'". Don't
+  // add it back without re-confirming.
   const query = `mutation update_draft_queue {
-        update_draft_queue(sport: "nfl", draft_id: "${draftId}", player_ids: [${idList}])
+        update_draft_queue(draft_id: "${draftId}", player_ids: [${idList}])
       }`;
-  return execSleeperGraphQL(draftId, "update_draft_queue", query);
+  return execSleeperGraphQL(draftId, "update_draft_queue", query, token);
+}
+
+// A READ query (draft_autopickers — which teams have autopick on), not a
+// mutation, specifically so this can run any time without side effects —
+// the whole point is letting someone confirm their token/tab setup actually
+// works BEFORE their draft starts, when there's nothing safe to test with
+// yet (no picks to make, nothing worth queueing). Exercises the exact same
+// path a real write would (tab lookup, injection, auth) so a green result
+// here is a real guarantee, not a weaker proxy check.
+async function sleeperTestConnection({ draftId, token }) {
+  assertDigits(draftId, "draft ID");
+  const query = `query draft_autopickers {
+        draft_autopickers(sport: "nfl", draft_id: "${draftId}")
+      }`;
+  return execSleeperGraphQL(draftId, "draft_autopickers", query, token);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -222,6 +256,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "sleeperUpdateDraftQueue") {
     sleeperUpdateDraftQueue(msg.payload)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg.type === "sleeperTestConnection") {
+    sleeperTestConnection(msg.payload)
       .then((data) => sendResponse({ ok: true, data }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
