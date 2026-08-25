@@ -1322,6 +1322,109 @@ A batch of small board-window (`panel.html`/`panel.js`) requests, done together:
   left edge unconditionally. Row `padding-left` dropped from 16px to 13px so
   border(3px)+padding(13px) still lines up with `#colHead`'s 16px padding.
 
+## Team/Roster dropdown (added 2026-08-25)
+A read-only "what does my whole team look like" popover in the board window,
+mocked up first as a published Artifact (three directions shown, then merged
+per direct feedback) before any code was written — worth repeating that
+process for the next big UI addition, it caught several preferences (draft
+pick vs. BEER value, continuous list vs. grouped sections, chip style) before
+any implementation cost was spent.
+
+- **Deliberately built as `.queuePopover`'s sibling, not a separate design.**
+  User feedback was explicit: the Roster and Sleeper queue popovers should
+  read as one family, not two things built separately and bolted together.
+  `#rosterPopover` carries BOTH `class="queuePopover rosterPopover"` — the
+  first class supplies the shared chrome (position/width/padding/shadow/
+  border), `.rosterPopover` only adds what's actually different (a summary
+  strip, grid-layout rows instead of flex rows, no drag/draft/remove
+  actions since this is read-only review). The header line also literally
+  reuses `.queueHeader` rather than a separate styled header. Any future
+  third "family member" popover should follow this same pattern — add the
+  base class, only write CSS for the actual deltas.
+- **Roster button lives in `#filters`, directly next to `Queue ▾`** (Stats ▾
+  → Roster ▾ → Queue ▾) — moved there from next to `#teamCounts` after
+  direct feedback that the two related dropdowns should sit together.
+  Always visible (not gated behind Draft actions like Queue is), since
+  roster review isn't tied to the experimental queue/draft-write feature.
+- **The "Your turn"/"Your turn in N picks" badge moved from the header's
+  status line to sit directly above `#filters`** (`#turnBadgeRow`, panel.html)
+  — right above the row of buttons you're about to act on, instead of up in
+  a status line that's easy to scroll past mid-draft.
+- **One continuous list, ordered by lineup slot** (QB, RB, RB, WR, WR, TE,
+  FLEX, FLEX, then bench) — not grouped by position with section headers.
+  An early version grouped by position (borrowing the Rankings Manager's own
+  layout); direct feedback reverted it back to one flat list, matching how
+  the Sleeper roster screenshot that inspired this reads. Each row still
+  carries its own position chip (`slotChipHtml()`, panel.js) so position is
+  visible without a section header doing that job.
+- **Real roster size comes from the draft itself, not a guessed constant.**
+  `fetchDraftSettings(draftId)` (panel.js) hits `GET /v1/draft/{id}` — a
+  separate, cheap Sleeper endpoint (same domain, already covered by the
+  existing `api.sleeper.app` host permission) returning a `settings` object
+  with this draft's real per-position slot counts (`slots_qb`/`slots_rb`/
+  `slots_wr`/`slots_te`/`slots_flex`/`slots_bn`). Fetched once per draftId
+  inside `poll()` (fire-and-forget, guarded by `draftSettingsForId` so it
+  doesn't refetch every ~3s tick) and fed into `buildMyRosterSlots()` via
+  `rosterSlotCount()`, which falls back to `LEAGUE_SETTINGS`/a flat
+  `ROSTER_BENCH_SLOTS = 6` guess before the fetch resolves or if a field is
+  ever missing. This exists because the guess was wrong in practice — a real
+  15-man league needed 7 bench slots, not 6 — and Sleeper's draft object
+  already carries the authoritative number (the same template Sleeper's own
+  roster board pre-builds once a draft starts), so there was no reason to
+  keep guessing. K/DST slot counts in that response are ignored even when
+  present, matching this app's blanket no-K/DST handling everywhere else —
+  showing a K/DST slot with no picks that could ever fill it would just be
+  clutter, not useful information.
+- **Draft pick shows as round.pick** (`formatDraftPick()`, e.g. `"3.02"`),
+  **not the BEER value** — direct preference, this is a roster-review
+  surface, not another value ranking. The subtitle underneath it is each
+  player's **position rank** (`"WR 49"`, via the same `computePosRanks()`
+  Best Picks' "RB1"/"WR2" tags already use — not a separate computation),
+  not a spelled-out "Round 3, Pick 2" explainer. Direct feedback: the
+  explainer was redundant once you already know what round.pick notation
+  means, and position rank is what actually answers "did I get my WR10 or
+  my WR40," which the pick number alone can't.
+- **Player headshots + team logos, via Sleeper's own CDN — no new fetch, no
+  manifest change.** `avatarHtml(key, name, pos, team, size)` (panel.js,
+  shared by both this popover and the Sleeper queue popover — see below)
+  looks up `sleeperIds[key]` (Sleeper's numeric player_id — already fetched
+  for the queue/draft-write feature off the projections endpoint,
+  `fetchSleeperPlayerIdMap()` in shared.js) and builds
+  `sleepercdn.com/content/nfl/players/thumb/{id}.jpg` for the headshot,
+  `sleepercdn.com/images/team_logos/nfl/{team-lowercased}.png` for the team
+  badge (confirmed against real responses — logo files use lowercase
+  3-letter codes, e.g. `min.png`, `was.png` not `wsh.png`). **No
+  `manifest.json` change was needed for either** — these render as plain
+  CSS `background-image` on a `<div>`, and MV3's default CSP only restricts
+  `script-src`/`object-src`, not image loading. Falls back to initials /
+  plain team-abbreviation text when a player has no matched Sleeper ID or
+  team on file (an unmatched player, or a free agent).
+- **The Sleeper queue popover got the same avatar treatment on direct
+  follow-up request** (`renderSleeperQueuePopover`, panel.js) — same
+  `avatarHtml()` call, just a smaller `.avatarCircle.sm`/`.avatarBadge`
+  variant sized for the queue's tighter 40px rows. This is the reason
+  `avatarHtml()` is a standalone helper rather than inlined in
+  `renderRosterPopover` — built once, reused, so the two popovers' avatars
+  can't visually drift apart the way two independent inline implementations
+  would.
+- **Rank-strip numbers were reported as "too big" — root cause was an actual
+  CSS bug, not just a sizing preference.** The summary strip's per-position
+  rank tags (`"2ND"`, `"10TH"`) were built with `class="prpRank"`, which only
+  gets its small size from `.posRankPill .prpRank { font-size: 8px; ... }` —
+  a descendant selector requiring a `.posRankPill` ancestor that these spans
+  never had, so they silently fell through to the page's default body font
+  size instead. Fixed with a dedicated `.rosterRankTag` class carrying its
+  own explicit sizing, not dependent on being nested inside anything else.
+  Worth remembering as a general lesson: a "too big" report on something
+  that was clearly styled small in the source is worth checking for an
+  unmatched-selector bug before assuming it's a design-taste disagreement.
+- **Starters/FLEX fill by earliest draft order**, not by BEER value —
+  `buildMyRosterSlots()` sorts "mine" picks by `pickNo` ascending, fills
+  each position's starter slots first, then FLEX from whoever's left among
+  RB/WR/TE, then bench. This was a default judgment call (not confirmed with
+  the user) — revisit if a value-aware FLEX assignment is ever wanted
+  instead.
+
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source
 isolation (previously had a side effect of also disabling the source), a
