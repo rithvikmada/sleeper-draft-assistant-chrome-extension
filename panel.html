@@ -95,6 +95,16 @@ html[data-theme="light"] {
   --border-subtle:rgba(0,0,0,.07); --border-default:rgba(0,0,0,.13);
   --border-strong:rgba(0,0,0,.22); --border-accent:var(--chalk-a40);
 
+  /* The dark-mode chalk-500 (#FFD84D) reads fine on near-black surfaces but
+     washes out to near-invisible against a white page — the exact "yellow
+     merges into the white" complaint. Every chalk step is redefined darker
+     here (not just the text-accent alias) since --accent, button
+     backgrounds, badges, borders, and the tierDiv/value bars all pull
+     straight from --chalk-500 and its alpha variants — overriding just one
+     downstream alias would've left the rest still washed out. */
+  --chalk-700:#5C4600; --chalk-600:#8A6900; --chalk-500:#B08A00; --chalk-400:#CDA732; --chalk-300:#E4C568;
+  --chalk-a12:rgba(176,138,0,.14); --chalk-a24:rgba(176,138,0,.30); --chalk-a40:rgba(176,138,0,.48);
+
   --on-accent:#1A1400;
 
   --edge-top:inset 0 1px 0 rgba(255,255,255,.5);
@@ -398,7 +408,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    LEFT edge of the row, matching the position badge's own color. Plain CSS
    border-left (not box-shadow, which .row2.mine used to own) so it can't
    collide with the "mine" highlight, which now only tints the background. */
-.row2 { display: flex; align-items: center; gap: 10px; height: var(--row-height); padding: 0 16px 0 13px; border-bottom: 1px solid var(--border-subtle); border-left: 3px solid transparent; cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
+.row2 { display: flex; align-items: center; gap: 10px; height: var(--row-height); padding: 0 16px 0 10px; border-bottom: 1px solid var(--border-subtle); border-left: 6px solid transparent; cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
 .row2:hover { background: var(--surface-row-hover); }
 .row2.gone { opacity: .42; }
 .row2.mine { background: var(--chalk-a12); }

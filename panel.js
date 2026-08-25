@@ -1843,6 +1843,7 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
 // ---------- init: restore settings, then load the curated sources ----------
 (async function init() {
   $("settingsBtn").innerHTML = ico("settings", { size: 15 });
+  $("statusBtn").innerHTML = ico("activity", { size: 15 });
   $("openManager").innerHTML = ico("external-link", { size: 13 }) + "Manager";
   $("connectBtn").innerHTML = ico("unplug", { size: 13, color: "var(--on-accent)" }) + "Sync";
   $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refresh now";
