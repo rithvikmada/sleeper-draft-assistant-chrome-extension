@@ -246,6 +246,32 @@ async function sleeperTestConnection({ draftId, token }) {
   return execSleeperGraphQL(draftId, "draft_autopickers", query, token);
 }
 
+// EXPERIMENTAL (Rage bait mode) — sends a message into Sleeper's draft chat.
+// The mutation shape below is now CONFIRMED, not guessed: the first attempt
+// (a made-up object_id/message shape) was rejected live, and the rejection
+// error itself named the real field/type names (RootMutationType, Message,
+// Snowflake), which was enough to pull the real shape via a live GraphQL
+// introspection query run from a Sleeper draft tab's console (same
+// tab-injection trust boundary as everything else here, just done manually
+// once instead of through this extension). create_message's real args are
+// text/parent_type/parent_id/channel_id/attachment_*/etc — parent_type:
+// "draft" + parent_id: draftId is what actually threads a message onto a
+// draft's chat, matching how create_message is also used for league chat
+// (parent_type "league") and topics elsewhere in Sleeper's schema. The
+// Message type has a "text" field, not "message" — the original guess's
+// return-shape mistake too.
+async function sleeperSendChatMessage({ draftId, message, token }) {
+  assertDigits(draftId, "draft ID");
+  const text = String(message || "").slice(0, 300);
+  const query = `mutation create_message {
+        create_message(text: ${JSON.stringify(text)}, parent_type: "draft", parent_id: "${draftId}") {
+          message_id
+          text
+        }
+      }`;
+  return execSleeperGraphQL(draftId, "create_message", query, token);
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return;
   if (msg.type === "sleeperDraftPlayer") {
@@ -262,6 +288,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "sleeperTestConnection") {
     sleeperTestConnection(msg.payload)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg.type === "sleeperSendChatMessage") {
+    sleeperSendChatMessage(msg.payload)
       .then((data) => sendResponse({ ok: true, data }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

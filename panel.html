@@ -156,6 +156,13 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .btn.danger { background: rgba(255,90,90,.12); color: var(--red-500); border-color: rgba(255,90,90,.32); }
 .btn.danger:hover { background: rgba(255,90,90,.20); }
 .btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn.sm { height: 26px; padding: 0 8px; }
+
+.rbMsgList { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.rbMsgRow { display: flex; align-items: center; gap: 6px; }
+.rbMsgRow .rbMsgInput { flex: 1; min-width: 0; }
+.rbMsgRemove { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.rbMsgRemove:hover { background: var(--red-a12); color: var(--red-500); }
 
 .iconBtn2 {
   width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
@@ -385,6 +392,26 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    RB, WR, WR, TE, FLEX, FLEX, then bench) — still-open slots render
    inline, dashed, not in a separate "unfilled" group. */
 .rosterPopover { max-height: 460px; }
+
+/* Rage bait "Manage" popover — same .queuePopover base + flip-above/below
+   positioning as the roster/queue popovers (openRageBaitPopover in panel.js),
+   opened from the Manage button inside #settingsPanel rather than a header
+   button. Collapsing the message list out of #settingsPanel entirely (into
+   this popover) replaced an earlier inline-per-row version after direct
+   feedback that a dozen-plus messages made Settings scroll too long. */
+.rageBaitPopover { width: 300px; max-height: 420px; }
+.rbPopHeader { display: flex; align-items: center; justify-content: space-between; }
+.rbPopClose { width: 22px; height: 22px; }
+.rbPopClose::before { content: ""; display: block; width: 11px; height: 11px; background: currentColor;
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'); }
+.manageRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.countPill {
+  font: var(--type-label); font-size: 10px; letter-spacing: var(--tracking-label); color: var(--text-muted);
+  background: var(--ink-700); border: 1px solid var(--border-default); border-radius: var(--radius-pill);
+  padding: 2px 7px; margin-left: 4px;
+}
+.btn.full { width: 100%; }
 .rosterSummary { display: flex; gap: 4px; padding: 2px 2px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-subtle); }
 .rosterSummary .sItem { flex: 1; text-align: center; }
 .rosterSummary .sItem .sPos { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; margin-bottom: 3px; }
@@ -786,6 +813,34 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
             <span id="sleeperTestStatus" class="testStatus"></span>
           </div>
         </div>
+        <!-- EXPERIMENTAL, for fun only — sends a random trash-talk message
+             into Sleeper's draft chat every few picks. Zero signal, zero
+             effect on rankings/consensus/anything this tool actually
+             computes. Only meaningful (and only shown) once Draft actions is
+             on, same gating as the fields above — see K_RAGEBAIT_ENABLED in
+             panel.js and "Rage bait mode" in claude.md. -->
+        <div class="switchField" id="rageBaitField" style="display:none">
+          <span class="fieldLabel">Rage bait mode</span>
+          <button id="rageBaitToggle" class="switchTrack" role="switch" aria-checked="false" data-tip="Sends a random message into Sleeper's draft chat every few picks, just to mess with your leaguemates. For fun only — no real signal."><span class="switchThumb"></span></button>
+        </div>
+        <!-- Collapsed to one row — "Manage" opens #rageBaitPopover (a sibling
+             of #settingsPanel, positioned off the Manage button) rather than
+             expanding the editable list inline. Direct feedback on an
+             earlier per-row-inline version: it made Settings scroll too long
+             once there were a dozen-plus messages. See mockup discussion in
+             claude.md's Rage bait mode section. -->
+        <div class="field" id="rageBaitMessagesField" style="display:none">
+          <div class="manageRow">
+            <span class="fieldLabel">Rage bait messages <span id="rageBaitCount" class="countPill"></span></span>
+            <button type="button" id="rageBaitManageBtn" class="btn secondary sm" data-tip="Edit the message pool">Manage</button>
+          </div>
+        </div>
+        <div class="field" id="rageBaitTestField" style="display:none">
+          <div style="display:flex;align-items:center;gap:8px;height:32px">
+            <button id="rageBaitTestBtn" class="btn secondary" data-tip="Sends a real test message into Sleeper's draft chat — the first test always says 'Hello, everyone!', after that it's a random pick from the list">Test</button>
+            <span id="rageBaitTestStatus" class="testStatus"></span>
+          </div>
+        </div>
       </div>
       <div id="refreshRow" style="display:none">
         <button id="refreshBtn" class="btn secondary">Refresh now</button>
@@ -797,6 +852,14 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 
     <div id="teamCounts"></div>
     <div id="rosterPopover" class="queuePopover rosterPopover" hidden></div>
+    <div id="rageBaitPopover" class="queuePopover rageBaitPopover" hidden>
+      <div class="queueHeader rbPopHeader">
+        <span>Rage bait messages <button type="button" id="rageBaitResetBtn" class="infoBtn" aria-label="Reset to the default list" data-tip="Reset to the default list">↺</button></span>
+        <button type="button" id="rageBaitPopoverClose" class="iconBtn2 rbPopClose" aria-label="Close"></button>
+      </div>
+      <div id="rageBaitMessagesList" class="rbMsgList"></div>
+      <button type="button" id="rageBaitAddBtn" class="btn secondary sm full" data-tip="Add another message to the pool">+ Add message</button>
+    </div>
     <div id="sourceList"></div>
     <div id="bestPicks"></div>
     <div id="soloBar"><span id="soloLabel"></span><button id="showAllBtn" class="btn outline">Show all</button></div>

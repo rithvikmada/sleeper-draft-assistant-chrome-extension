@@ -252,6 +252,66 @@ function sleeperWriteReady() {
 // Defaults ON (the safer choice). Persisted, since it's a standing
 // preference like the other settings here, not a per-draft/session thing.
 const K_SLEEPER_DBLCLICK_DRAFT = "sleeperDoubleClickDraft";
+
+// ---------- Rage bait mode (for fun only, see claude.md) ----------
+// An auxiliary of Draft actions, not a standalone feature — gated the same
+// way sleeperDblClickField is (only visible/meaningful once sleeperWriteEnabled
+// is true; also independently re-checked at fire time via sleeperWriteReady()
+// so flipping Draft actions off mid-draft can't leave a stray timer still
+// sending messages).
+let rageBaitEnabled = false;
+let rageBaitMessages = []; // falls back to DEFAULT_RAGE_BAIT_MESSAGES (shared.js) when empty
+function currentRageBaitMessages() {
+  return rageBaitMessages.length ? rageBaitMessages : DEFAULT_RAGE_BAIT_MESSAGES;
+}
+// Random pick-count threshold — reset after every fire so the next one lands
+// a fresh random 10-13 picks later, not on a fixed cadence (a fixed N would get
+// obvious/annoying fast; that's the whole point of "every once in a random
+// few picks" from the original ask).
+let rageBaitNextAt = null;
+function rageBaitRandomGap() {
+  return 10 + Math.floor(Math.random() * 4); // 10..13 picks
+}
+// Session-only (not persisted) — tracks whether the Test button has fired at
+// least once THIS window session, so the very first test always says
+// "Hello, everyone!" (per spec) and every one after is a random pick from
+// the list. Resetting on window reopen is fine — there's no real state to
+// preserve here, it's just picking which message a click sends.
+let rageBaitTested = false;
+
+async function sendRageBaitMessage(message) {
+  if (!sleeperWriteReady()) { toast("Turn on Draft actions and paste your Sleeper token first.", true); return false; }
+  if (!currentDraftId) { toast("Sync a draft first.", true); return false; }
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "sleeperSendChatMessage",
+      payload: { draftId: currentDraftId, message, token: sleeperToken() },
+    });
+    if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+    return true;
+  } catch (e) {
+    toast(`Rage bait message failed: ${e.message}`, true);
+    return false;
+  }
+}
+
+// Called from poll() whenever new picks land — see the hook there. Fires at
+// most once per crossing of a random threshold, never on every poll tick.
+// `newestWasMine` guards a real ask: never let a rage bait message land right
+// after the user's own pick — reads as mocking your own pick, not your
+// leaguemates'. Skipping here (rather than re-rolling the threshold) just
+// defers to the next new pick that isn't yours — the threshold itself is
+// left untouched, so the fire isn't delayed any further than that one pick.
+function maybeFireRageBait(newPickTotal, newestWasMine) {
+  if (!rageBaitEnabled || !sleeperWriteReady() || !currentDraftId) return;
+  if (rageBaitNextAt == null) { rageBaitNextAt = newPickTotal + rageBaitRandomGap(); return; }
+  if (newPickTotal < rageBaitNextAt) return;
+  if (newestWasMine) return; // try again on the next new pick instead
+  rageBaitNextAt = newPickTotal + rageBaitRandomGap();
+  const pool = currentRageBaitMessages();
+  const message = pool[Math.floor(Math.random() * pool.length)];
+  sendRageBaitMessage(message).then((ok) => { if (ok) console.debug(`[4th&Go] rage bait sent: "${message}"`); });
+}
 let sleeperDoubleClickDraft = true;
 function draftTipText() {
   return sleeperDoubleClickDraft ? "Double-click to draft now" : "Click to draft now";
@@ -1368,6 +1428,10 @@ async function poll(draftId, { manual = false } = {}) {
         const newest = picks[picks.length - 1];
         const md = newest.metadata || {};
         toast(`Pick ${newest.pick_no}: ${md.first_name || ""} ${md.last_name || ""}`);
+        const newestWasMine =
+          myRosterId !== null &&
+          (Number(newest.roster_id) === myRosterId || Number(newest.draft_slot) === myRosterId);
+        maybeFireRageBait(picks.length, newestWasMine);
       }
       lastPickCount = picks.length;
       lastChangeTime = new Date();
@@ -2328,7 +2392,10 @@ $("sleeperWriteToggle").addEventListener("click", () => {
   $("sleeperTokenField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperTestField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperDblClickField").style.display = sleeperWriteEnabled ? "" : "none";
-  if (!sleeperWriteEnabled) closeSleeperQueuePopover(); // don't leave it open with a now-hidden trigger button
+  $("rageBaitField").style.display = sleeperWriteEnabled ? "" : "none";
+  $("rageBaitMessagesField").style.display = sleeperWriteEnabled && rageBaitEnabled ? "" : "none";
+  $("rageBaitTestField").style.display = sleeperWriteEnabled && rageBaitEnabled ? "" : "none";
+  if (!sleeperWriteEnabled) { closeSleeperQueuePopover(); closeRageBaitPopover(); } // don't leave either open with a now-hidden trigger button
   renderAll(); // every queue/draft button (board rows + both Best widgets) needs to pick up/drop at once
 });
 
@@ -2338,6 +2405,141 @@ $("sleeperDblClickToggle").addEventListener("click", () => {
   $("sleeperDblClickToggle").classList.toggle("on", sleeperDoubleClickDraft);
   $("sleeperDblClickToggle").setAttribute("aria-checked", String(sleeperDoubleClickDraft));
   renderAll(); // draft buttons' tooltip text (draftTipText()) depends on this
+});
+
+// ---------- EXPERIMENTAL, for fun only: Rage bait mode ----------
+$("rageBaitToggle").addEventListener("click", () => {
+  rageBaitEnabled = !rageBaitEnabled;
+  chrome.storage.local.set({ [K_RAGEBAIT_ENABLED]: rageBaitEnabled });
+  $("rageBaitToggle").classList.toggle("on", rageBaitEnabled);
+  $("rageBaitToggle").setAttribute("aria-checked", String(rageBaitEnabled));
+  $("rageBaitMessagesField").style.display = rageBaitEnabled ? "" : "none";
+  $("rageBaitTestField").style.display = rageBaitEnabled ? "" : "none";
+  if (!rageBaitEnabled) closeRageBaitPopover(); // don't leave it open with a now-hidden trigger button
+  rageBaitNextAt = null; // start counting a fresh random gap from whenever it was just turned on
+});
+
+// One row per message, each its own input — replaces an earlier one-per-line
+// textarea version. That textarea looked broken in practice: a long message
+// word-wraps onto a second visual line inside the box, which reads exactly
+// like a second, separate message even though it's really one line of text
+// (a real report: "disturbance" wrapping to its own line looked like the
+// message pool had split mid-sentence). Individual rows can't have that
+// ambiguity — one input, one message, no line-splitting to misread.
+function persistRageBaitMessages() {
+  chrome.storage.local.set({ [K_RAGEBAIT_MESSAGES]: rageBaitMessages });
+  $("rageBaitCount").textContent = String(currentRageBaitMessages().length);
+}
+function renderRageBaitMessagesList() {
+  $("rageBaitCount").textContent = String(currentRageBaitMessages().length);
+  const list = $("rageBaitMessagesList");
+  const msgs = currentRageBaitMessages();
+  list.innerHTML = msgs.map((m, i) => `
+    <div class="rbMsgRow" data-i="${i}">
+      <input class="input2 sm rbMsgInput" value="${esc(m)}" data-i="${i}" placeholder="A rage bait message" />
+      <button type="button" class="rbMsgRemove" data-i="${i}" aria-label="Remove this message" data-tip="Remove this message">${ico("circle-x", { size: 15 })}</button>
+    </div>`).join("");
+  list.querySelectorAll(".rbMsgInput").forEach((el) => {
+    el.addEventListener("change", () => {
+      const i = Number(el.dataset.i);
+      const msgs2 = currentRageBaitMessages().slice();
+      msgs2[i] = el.value.trim();
+      rageBaitMessages = msgs2.filter(Boolean);
+      persistRageBaitMessages();
+      if (!el.value.trim()) renderRageBaitMessagesList(); // an emptied row collapses out rather than leaving a blank one
+    });
+  });
+  list.querySelectorAll(".rbMsgRemove").forEach((el) => {
+    el.addEventListener("click", () => {
+      const i = Number(el.dataset.i);
+      rageBaitMessages = currentRageBaitMessages().filter((_, idx) => idx !== i);
+      persistRageBaitMessages();
+      renderRageBaitMessagesList();
+    });
+  });
+}
+
+$("rageBaitAddBtn").addEventListener("click", () => {
+  rageBaitMessages = [...currentRageBaitMessages(), ""];
+  persistRageBaitMessages();
+  renderRageBaitMessagesList();
+  const inputs = $("rageBaitMessagesList").querySelectorAll(".rbMsgInput");
+  if (inputs.length) inputs[inputs.length - 1].focus();
+});
+
+$("rageBaitResetBtn").addEventListener("click", () => {
+  rageBaitMessages = [];
+  persistRageBaitMessages();
+  renderRageBaitMessagesList();
+  toast("Reset to the default rage bait messages.");
+});
+
+// Same flip-above/below-and-clamp positioning as the Roster/Sleeper queue
+// popovers (openRosterPopover) — the message list can run to a dozen-plus
+// rows, so it needs the same "flip upward near the bottom of the window"
+// handling those already have, not the simpler fixed-dropdown positioning
+// Settings/Status use.
+function closeRageBaitPopover() {
+  $("rageBaitPopover").hidden = true;
+  document.removeEventListener("click", onRageBaitPopoverOutsideClick, true);
+}
+function onRageBaitPopoverOutsideClick(e) {
+  if (e.target.closest("#rageBaitPopover") || e.target.closest("#rageBaitManageBtn")) return;
+  closeRageBaitPopover();
+}
+function openRageBaitPopover() {
+  renderRageBaitMessagesList();
+  const panel = $("rageBaitPopover");
+  const btn = $("rageBaitManageBtn");
+  panel.hidden = false;
+  panel.style.top = "";
+  panel.style.bottom = "";
+  panel.style.maxHeight = "";
+  const r = btn.getBoundingClientRect();
+  const w = panel.offsetWidth;
+  panel.style.left = `${Math.max(4, Math.min(r.right - w, window.innerWidth - w - 4))}px`;
+  const margin = 8;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  if (spaceBelow >= spaceAbove) {
+    panel.style.top = `${r.bottom + 6}px`;
+    panel.style.maxHeight = `${Math.max(160, spaceBelow - 6)}px`;
+  } else {
+    panel.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    panel.style.maxHeight = `${Math.max(160, spaceAbove - 6)}px`;
+  }
+  setTimeout(() => document.addEventListener("click", onRageBaitPopoverOutsideClick, true), 0);
+}
+$("rageBaitManageBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!$("rageBaitPopover").hidden) { closeRageBaitPopover(); return; }
+  openRageBaitPopover();
+});
+$("rageBaitPopoverClose").addEventListener("click", () => closeRageBaitPopover());
+
+// Real send, same as the auto-fire path — first click ever this session
+// always says "Hello, everyone!" (a known-good message to confirm the whole
+// pipe works), every click after that is a random pick from the list, same
+// as a real auto-fire would send.
+$("rageBaitTestBtn").addEventListener("click", async () => {
+  const status = $("rageBaitTestStatus");
+  if (!sleeperWriteEnabled) { status.className = "testStatus err"; status.textContent = "Turn on Draft actions first."; return; }
+  if (!sleeperToken()) { status.className = "testStatus err"; status.textContent = "Paste your token first."; return; }
+  if (!currentDraftId) { status.className = "testStatus err"; status.textContent = "Sync a draft first."; return; }
+  status.className = "testStatus";
+  status.textContent = "Sending…";
+  const message = rageBaitTested
+    ? currentRageBaitMessages()[Math.floor(Math.random() * currentRageBaitMessages().length)]
+    : "Hello, everyone!";
+  const ok = await sendRageBaitMessage(message);
+  if (ok) {
+    rageBaitTested = true;
+    status.className = "testStatus ok";
+    status.textContent = `Sent: "${message}"`;
+  } else {
+    status.className = "testStatus err";
+    status.textContent = "Failed — see toast.";
+  }
 });
 
 // Click-to-open instructions popover for the Sleeper token field — same
@@ -2415,11 +2617,13 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   playerStats = await loadPlayerStats();
   visibleStats = await loadStatPrefs();
   sleeperIds = await loadSleeperIdMap();
-  const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT]);
+  const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT, K_RAGEBAIT_ENABLED, K_RAGEBAIT_MESSAGES]);
   sleeperQueueKeys = qv[K_SLEEPER_QUEUE] || [];
   sleeperWriteEnabled = !!qv[K_SLEEPER_WRITE_ENABLED];
   sleeperSkipDraftConfirmDraftId = qv[K_SLEEPER_SKIP_CONFIRM] || null;
   sleeperDoubleClickDraft = qv[K_SLEEPER_DBLCLICK_DRAFT] !== false; // defaults true — only an explicit false turns it off
+  rageBaitEnabled = !!qv[K_RAGEBAIT_ENABLED];
+  rageBaitMessages = Array.isArray(qv[K_RAGEBAIT_MESSAGES]) ? qv[K_RAGEBAIT_MESSAGES] : [];
   $("sleeperWriteToggle").classList.toggle("on", sleeperWriteEnabled);
   $("sleeperWriteToggle").setAttribute("aria-checked", String(sleeperWriteEnabled));
   $("sleeperTokenField").style.display = sleeperWriteEnabled ? "" : "none";
@@ -2427,6 +2631,12 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   $("sleeperDblClickField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperDblClickToggle").classList.toggle("on", sleeperDoubleClickDraft);
   $("sleeperDblClickToggle").setAttribute("aria-checked", String(sleeperDoubleClickDraft));
+  $("rageBaitField").style.display = sleeperWriteEnabled ? "" : "none";
+  $("rageBaitToggle").classList.toggle("on", rageBaitEnabled);
+  $("rageBaitToggle").setAttribute("aria-checked", String(rageBaitEnabled));
+  $("rageBaitMessagesField").style.display = sleeperWriteEnabled && rageBaitEnabled ? "" : "none";
+  $("rageBaitTestField").style.display = sleeperWriteEnabled && rageBaitEnabled ? "" : "none";
+  renderRageBaitMessagesList();
 
   const tv = await chrome.storage.local.get([K_THEME]);
   applyTheme(tv[K_THEME] || "dark");

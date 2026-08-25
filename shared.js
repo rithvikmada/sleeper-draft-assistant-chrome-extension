@@ -62,6 +62,27 @@ const K_SLEEPER_IDS = "sleeperPlayerIds"; // { updatedAt, ids: { playerKey: slee
                                      // fetchSleeperPlayerIdMap below. Needed to queue/draft a player through
                                      // Sleeper's write API, which addresses players by Sleeper's own numeric
                                      // player_id, not this project's playerKey.
+const K_RAGEBAIT_ENABLED  = "rageBaitEnabled";  // bool — master on/off, only meaningful when Draft actions is also on
+const K_RAGEBAIT_MESSAGES = "rageBaitMessages"; // string[] — the pool a random message gets picked from; falls back to DEFAULT_RAGE_BAIT_MESSAGES when empty/unset
+
+// For-fun only — no signal, no effect on rankings/consensus/anything else this
+// tool computes. Sent verbatim into Sleeper's draft chat (see "Rage bait mode"
+// in claude.md) to mess with leaguemates. Kept intentionally light — needling,
+// not actually mean — since these get sent under the user's own Sleeper name.
+const DEFAULT_RAGE_BAIT_MESSAGES = [
+  "After the news? 🐐😭",
+  "Does he know? 💀💀",
+  "Already???? 🍆🍆",
+  "Were you on autodraft? 😴",
+  "That's your guy? 😂😂",
+  "Holy reach… 🤡",
+  "Are we drafting or donating a roster spot? 💩",
+  "That pick was brought to you by vibes 🎪🧠",
+  "I've seen better value at a garage sale 😂😂😂",
+  "Respect for reaching THAT early. Truly brave 🫡☠️",
+  "The waiver wire is going to LOVE that guy in December 📉💀🍿",
+  "Adding that one to my list of picks to bring up in Week 12 🎯😤",
+];
 
 // ---------- DOM helpers shared by both surfaces ----------
 // Identical in panel.js and rankings-manager.js before this — both are
