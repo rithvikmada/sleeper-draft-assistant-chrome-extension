@@ -67,6 +67,10 @@ const K_INJURIES = "playerInjuries"; // { updatedAt, injuries: { playerKey: {sta
                                      // walks. See INJURY_META/injuryBadge below.
 const K_RAGEBAIT_ENABLED  = "rageBaitEnabled";  // bool — master on/off, only meaningful when Draft actions is also on
 const K_RAGEBAIT_MESSAGES = "rageBaitMessages"; // string[] — the pool a random message gets picked from; falls back to DEFAULT_RAGE_BAIT_MESSAGES when empty/unset
+const K_RAGEBAIT_MIN_GAP  = "rageBaitMinGap";    // number — min picks between auto-fires, user-adjustable in the Manage popover
+const K_RAGEBAIT_MAX_GAP  = "rageBaitMaxGap";    // number — max picks between auto-fires
+const RAGEBAIT_MIN_GAP_DEFAULT = 10;
+const RAGEBAIT_MAX_GAP_DEFAULT = 13;
 
 // For-fun only — no signal, no effect on rankings/consensus/anything else this
 // tool computes. Sent verbatim into Sleeper's draft chat (see "Rage bait mode"

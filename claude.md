@@ -1537,6 +1537,23 @@ leaguemates during a live draft.
   real signal; keep it that way unless asked otherwise. Range was widened
   from an initial 3-7 to 10-13 picks on direct feedback (fires too often at
   the tighter gap).
+- **Interval is user-adjustable (2026-08-25), not just a hardcoded default.**
+  `rageBaitMinGap`/`rageBaitMaxGap` (module-level in `panel.js`, persisted as
+  `K_RAGEBAIT_MIN_GAP`/`K_RAGEBAIT_MAX_GAP`) feed `rageBaitRandomGap()`
+  instead of the old hardcoded `10 + Math.floor(Math.random()*4)` — two
+  small number inputs (`#rageBaitMinGap`/`#rageBaitMaxGap`) sit at the top of
+  the Manage popover, above the message list, defaulting to
+  `RAGEBAIT_MIN_GAP_DEFAULT`/`RAGEBAIT_MAX_GAP_DEFAULT` (10/13, `shared.js`).
+  Both inputs clamp on change (min floors at 1; max floors at whatever min
+  currently is) so the range can never invert or go non-positive, which
+  `rageBaitRandomGap()`'s spread math assumes. Changing either value also
+  resets `rageBaitNextAt` immediately, same as flipping the mode on/off does
+  — otherwise a narrower range typed in mid-countdown wouldn't actually
+  apply until the OLD (wider) countdown finished first, which would read as
+  the setting not having taken effect. The toggle's own tooltip text in
+  Settings was updated from a vague "every few picks" to the actual default
+  ("every 10–13 picks (by default)") once the interval became something a
+  user might actually go looking to change.
 - **Never fires immediately after the user's own pick** (direct requirement,
   not a guess) — a rage bait message landing right after your own pick reads
   as mocking yourself, not your leaguemates. `maybeFireRageBait(newPickTotal,
