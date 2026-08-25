@@ -773,17 +773,209 @@ priorities from scratch. Notable status since it was last summarized here:
   now the natural next build: VORP (#8) is the value metric it was blocked on
   picking, so building #8 first directly unblocks #13 rather than being a
   detour from it.
-- **Stats/projections board columns (new, 2026-08-23)** — user wants PROJ
-  (pts_ppr, all positions) and a position-conditional STAT column (`rec` for
-  RB/WR/TE, `rush_yd` for QB) added to the board. Same Sleeper endpoint as
-  VORP above covers this data — no separate source needed. Per the Window
-  architecture section, these should only render in the (now only) board
-  window when there's actually room, not forced into a narrow resize.
+- **Stats/projections board columns — BUILT (2026-08-24).** See "Stat
+  columns" section below for the full design/data/UI writeup. Originally
+  scoped as one PROJ + one position-conditional stat; grew through the same
+  session into a 5-group, 15-column, animated, position-colored system per
+  direct user iteration.
 - **#14 (manual refresh button value)** — still an open question; the
   cache-expiry countdown may make the button redundant.
 - Everything else (weighted sources, league-specific scoring) is unstarted;
   read the backlog file for the actual sequencing reasoning before picking
   one up.
+
+## Stat columns (added 2026-08-24)
+The board's tiered rows now show a stat block between Player and ADP Value —
+built in one session, iterated heavily against direct user feedback. Read
+this before touching any of it; several early designs were explicitly
+rejected in favor of what's here now.
+
+**Data — two Sleeper endpoints, not one.** `fetchSleeperStatsPlayers()`
+(`shared.js`) pulls from:
+- Current-year `/v1/projections/nfl/{year}` (same endpoint `fetchSleeperAdp()`
+  already used for ADP) — used ONLY for the pinned BASIC group now (`pts_ppr`
+  + `p.player.years_exp`), since that's the one forward-looking forecast in
+  the whole block.
+- Prior-year `/v1/stats/nfl/{year-1}` — a **second, separate endpoint**,
+  same domain/no-auth/no new permission, discovered specifically for this
+  feature. Every QB/RB/WR/TE stat (see below) is computed from this
+  endpoint's raw counts (`gp`, `pass_att`, `pass_sack`, `rush_att`,
+  `rush_yd`, `rec`, `rec_tgt`, `rec_yd`, `off_snp`, `tm_off_snp`) as a
+  PRIOR-SEASON per-game or per-snap RATE — an established usage profile,
+  not a single-season point estimate the way BASIC's PROJ is.
+- **`tm_off_snp` (team offensive snap total) is already a precomputed field
+  on every player row** — unlike targets, no separate team-total
+  aggregation pass is needed for TE's snap-share stat.
+
+**Which stats, and why — final set is user-specified, not research-derived
+(2026-08-24, replacing an earlier PASS/RUSH/TGT%/etc set built from
+correlation research):**
+- **BASIC** (pinned, always first, same 3 stats for every position): EXP
+  (years of NFL experience), PROJ (season-long projected fantasy points),
+  P/WK (PROJ ÷ 17). Unchanged from the original design.
+- **QB**: RU/G (rushing yards/game) + AT/G (pass attempts/game) + FPDB
+  (fantasy points per dropback, PPR).
+- **RB**: RC/G (receptions/game) + SN/G (offensive snaps/game) + AT/G (rush
+  attempts/game).
+- **WR**: TG/G (targets/game) + TPS (targets per offensive snap) + YPS
+  (receiving yards per offensive snap).
+- **TE**: TG/G (targets/game) + SNP% (offensive snap share) + YPS
+  (receiving yards per offensive snap).
+- **5 of the original 12 user-requested stats needed route-run data Sleeper's
+  API doesn't have anywhere** (routes/game, targets per route run, yards per
+  route run, route participation) — confirmed by dumping all 129 fields on a
+  real player and finding no route/routes/dropback key at all. Rather than
+  drop them or fake the numbers, **offensive snaps substitute for routes
+  throughout** (SN/G, TPS, YPS, SNP%) — a real, available signal, though not
+  literally the same thing (a blocking down is a snap but not a route).
+  "Dropbacks" for QB's FPDB is similarly approximated as `pass_att +
+  pass_sack`, the standard definition when no play-by-play dropback count
+  exists. Every substitution is spelled out in its own `full` tooltip text in
+  `fetchSleeperStatsPlayers` (`shared.js`), not just silently relabeled as if
+  it were the literal requested stat — if the user ever gets access to real
+  route data (a paid provider), these are the fields to replace.
+- All label/tooltip text lives in `STAT_META` (`shared.js`) — the single
+  source of truth for what the header shows AND what
+  `fetchSleeperStatsPlayers()` actually populates. Don't add/rename a stat
+  in one place without the other; `STAT_LABELS` is derived FROM `STAT_META`
+  specifically so they can't drift.
+
+**Percentile color-coding was tried and reverted.** Each stat's percentile
+(`pct`, still computed and stored, just unused for color right now) was
+originally used to color the row's number green/gold/gray — user feedback:
+"looks too green," not a useful signal at a glance. Numbers are now plain
+white (`var(--text-primary)`) always. If per-stat coloring is wanted again,
+it needs a less saturated palette or a different visual treatment (e.g. a
+separate small badge) — don't just flip the color back on `.statCol` text,
+that's the exact thing that was rejected.
+
+**Layout: 5 fixed-DOM-order groups (BASIC, QB, RB, WR, TE), positioned via
+CSS transform — not `order`, not real DOM reordering.** Every row (and the
+header) always renders all 5 groups × 3 stats = 15 columns. A row only has
+real values under BASIC and its OWN position's group; the other 3 position
+groups show empty placeholders (`–`) — this is what lets the label live in
+the (position-colored) column header instead of repeating on every row.
+`STAT_GROUP_SEQUENCE` in `shared.js` is the DOM order and never changes;
+each group's *visual* slot comes from an inline `translateX(slot * 134px)`
+set from `statGroupOrder(selectedPos)`. This split (fixed DOM, transform-
+driven visual position) is why the reorder can animate:
+
+**Selecting a player slides that position's group to slot 1 (right after
+BASIC) — this only works because reordering does NOT call `renderBoard()`.**
+A full render rebuilds every row's HTML from scratch, which means brand-new
+DOM nodes with no prior `transform` to animate from — a CSS `transition`
+can't animate a value that was never anything else. `applyStatGroupOrder()`
+instead walks the ALREADY-RENDERED `.statGroup`/`.statHeadGroup` elements
+(header + every visible row) and just updates their `transform` style in
+place, so the existing `transition: transform 220ms` on those elements
+actually plays. Any future change to this reorder behavior must keep going
+through `applyStatGroupOrder()`, not a `renderBoard()` call, or the slide
+silently stops working (still ends up in the right place, just teleports
+instead of animating — an easy regression to miss since nothing looks
+"broken," it just loses the polish).
+- Default order (no selection): BASIC, WR, RB, QB, TE — user's stated
+  preference for which position to see first.
+- Click a row → deselect+reselect logic lives in `panel.js`'s `$("board")`
+  click handler, tracked by **exact player key** (`selectedStatPlayerKey`),
+  not just position — clicking the SAME player again deselects (back to
+  default order); clicking a DIFFERENT player switches to their position.
+  This must stay key-based: switching to position-based tracking would make
+  clicking a second player at the same position a no-op deselect, which
+  isn't what was asked for.
+- The clicked row also gets a persistent `.selected` class (same background
+  as `.row2:hover`, so it looks like "still hovered") that does NOT clear on
+  mouseout — only on clicking that same row again, or the player getting
+  drafted. The drafted-clears-selection check runs at the top of every
+  `renderBoard()` call (`taken`/`manualTaken` lookup), not just the poll
+  path, so a manual crossout or a pick applied from the Rankings Manager tab
+  both correctly clear it too.
+
+**Column-header tooltip is a custom element, not `title=""`.** Hovering a
+stat label shows a small themed floating box (`.statTooltip`,
+`showStatTooltip`/`hideStatTooltip` in `panel.js`) built specifically
+because the native browser tooltip has its own built-in show delay and
+can't be styled to match the board. Full name + unit text lives in
+`STAT_META`, read via each header span's `data-full` attribute — deliberately
+NOT the `title` attribute, which would bring back the native tooltip. This
+tooltip only appears on the header labels, not on row values — an earlier
+version put `title` on every row cell too and that was explicitly walked
+back as not wanted.
+
+**Alignment gotcha, already fixed, don't reintroduce:** header labels use
+`text-align:center`; if a future edit adds a stat cell without matching
+`text-align:center` (and matching width) on `.statCol`, header and row
+values will visibly drift out of column alignment — this exact bug shipped
+once and was reported as "misaligned really badly." Verify any layout change
+here with `getBoundingClientRect()` on both a header label and a row value
+in the same column, not by eyeballing a screenshot (same lesson as the
+older "Design & alignment lessons" section above, for the same reason).
+
+**Auto-fetch on load, not just the manual buttons.** `autoRefreshAdpAndStats()`
+(`shared.js`) runs on every board-window and Rankings-Manager-tab open
+(silent, logs-only on failure), fetching fresh Sleeper Live ADP + stat data
+in the background without blocking the initial render. The manual
+"⟳ FETCH SLEEPER ADP" / "⟳ FETCH STATS" buttons in the Rankings Manager are
+now thin UI wrappers (disabled/text-swap + toast) around the exact same
+pure fetch functions (`fetchSleeperAdpPlayers`/`fetchSleeperStatsPlayers`,
+`shared.js`) — manual and automatic paths can't drift apart because there's
+only one implementation of the actual fetch/parse logic.
+
+**Window default width was widened, then explicitly set back down.** It
+went 1000 → 1200 → 1500 → 1650px as the stat block grew (one column, then
+12, then 15 with BASIC), then the user gave an exact window size they were
+actually using and asked for that as the default — landed at 1280×970
+(`background.js`). The stat block itself doesn't strictly need 1280px+ to
+render correctly, it just leaves less slack in the name column at that
+width. **Don't re-widen `DEFAULT_BOUNDS` to "fit the stat block better"
+without asking first** — the current value is a stated preference, not a
+layout bug.
+
+**Stat picker (added 2026-08-24) — every stat is now selectable, per
+position, not fixed at 3.** User wanted to choose between the original
+correlation-research set (PASS/RUSH/TGT%/AIR/RZ/ATT/REC — current-year
+projections + prior-year role stats) and the later per-game/per-snap set
+(RU/G/TG/G/SNP%/etc), rather than the extension picking one "final" answer.
+- **`STAT_OPTION_DEFS` (`shared.js`) is now the single source of truth** —
+  6 entries per position (3 old + 3 new), each with a stable `id`, `label`,
+  and `full` tooltip text. `fetchSleeperStatsPlayers()` computes ALL 6 per
+  position for every player, always, regardless of what's currently shown —
+  the picker only changes what `renderStatGroups` reads, never triggers a
+  re-fetch. `players[key].options` is a `{id: {label,value,pct,display,full}}`
+  map (replacing the old fixed 3-entry `.stats` array); `.basic` is
+  unchanged (BASIC isn't user-configurable).
+- **Bringing back the old set meant re-adding `buildTeamTargetTotals()`**
+  (target share's denominator) and the current-year `pass_yd`/`rush_yd`/
+  `rush_att`/`rec` projection fields — both were deleted in the prior
+  session when the per-game set replaced the old one outright. Worth
+  knowing if a future session sees them and wonders why they're back.
+- **Selection is a real user preference, `K_STAT_PREFS` (`statColumnPrefs`
+  in storage)**, defaulting to `DEFAULT_VISIBLE_STATS` — explicitly the
+  per-game/per-snap set, i.e. "leave what we have now as default," per
+  direct instruction. `loadStatPrefs()` also strips any id that isn't a
+  real `STAT_OPTION_DEFS` entry, so a stale/hand-edited storage value can't
+  silently blank out a whole group.
+- **Column widths are no longer a fixed 134px/group — they're computed from
+  however many stats are actually selected** (`statGroupLayout` in
+  shared.js: `count * 42px + 8px padding`, 0 if nothing's selected for that
+  position). This is why `.statBlock`/`#colHead .c-stat` no longer carry a
+  CSS width at all — it's set inline by `panel.js`'s `renderBoard()` on
+  every render, and reused by `applyStatGroupOrder()`'s reorder-in-place
+  path (which changes offsets, never widths, since a stat-picker change
+  goes through a full `renderBoard()` instead — different columns need
+  different HTML, not just repositioning).
+- **The picker itself (`#statPickerBtn`/`#statPickerPanel`) is a themed
+  floating checkbox grid**, same pattern as the existing flag menu — 4
+  columns (one per position), 6 checkboxes each, toggling
+  `visibleStats[pos]` directly and persisting on every change. **Gotcha
+  that shipped once and was caught in testing, don't reintroduce it:**
+  giving `.statPickerPanel` an unconditional `display: grid` means that
+  rule beats the browser's own `[hidden] { display: none }` UA rule (equal
+  specificity, author style wins), so the panel never actually hid via the
+  `hidden` attribute alone — fixed with an explicit
+  `.statPickerPanel[hidden] { display: none }` override. Any future
+  `hidden`-attribute-driven show/hide element needs the same explicit
+  override if its visible state sets `display` to anything other than
+  `block`.
 
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source

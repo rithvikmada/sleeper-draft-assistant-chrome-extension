@@ -54,6 +54,13 @@ const K_ADP     = "adpData";        // array of ADP source objects (see makeAdpS
 const K_ROSTER  = "myRosterId";     // which draft slot / roster id is the user's
 const K_FLAGS   = "playerFlags";    // playerKey -> "favorite" | "avoid", set in the manager, shown everywhere
 const K_MERGES  = "playerMerges";   // { variantKey: canonicalKey, ... } — unmatched player reconciliation
+const K_STATS   = "playerStats";    // { updatedAt, year, players: { playerKey: { stats:[{label,value,display,pct,full}] } } }
+                                     // — position-specific role/volume stat pairs, fetched from Sleeper's public
+                                     // stats+projections endpoints (see fetchSleeperStats in rankings-manager.js)
+const K_SLEEPER_IDS = "sleeperPlayerIds"; // { updatedAt, ids: { playerKey: sleeperPlayerId } } — EXPERIMENTAL, see
+                                     // fetchSleeperPlayerIdMap below. Needed to queue/draft a player through
+                                     // Sleeper's write API, which addresses players by Sleeper's own numeric
+                                     // player_id, not this project's playerKey.
 
 // ---------- DOM helpers shared by both surfaces ----------
 // Identical in panel.js and rankings-manager.js before this — both are
@@ -853,7 +860,7 @@ function renderTeamCountsWidget(el, opts) {
   const mine = picks.filter((p) => p.byMe);
   const counts = POSITIONS.map((pos) => {
     const n = mine.filter((p) => p.pos === pos).length;
-    const c = POS_COLORS[pos];
+    const c = (POS_COLORS && POS_COLORS[pos]) || { text: "var(--dim2)", bg: "transparent", border: "var(--border-subtle)" };
     return `<span class="cnt" style="border-color:${c.border}">
       <span style="color:${c.text}">${pos}</span> <b>${n}</b></span>`;
   }).join("");
@@ -966,6 +973,567 @@ async function loadAdp() {
   if (!map.size) return null;
   const label = enabled.length === 1 ? enabled[0].name : `${enabled.length}-source ADP blend`;
   return { map, label, sourceCount: enabled.length };
+}
+
+// ---------- stat projections (backlog: "stats/projections board columns") ----------
+// Which 3 stats to show per position, chosen for correlation with fantasy
+// success (research done during this feature's planning, not a guess):
+//   QB — projected pass yards + rush yards (rushing is what separates top-12
+//        fantasy QBs from the rest; passing volume alone misses that signal)
+//        + projected fantasy points (PROJ) as an overall-value tiebreaker
+//   RB — target share % (a target is worth ~2.7x a rushing attempt in PPR,
+//        and this is the stickiest volume signal year-over-year) + projected
+//        rush attempts (total touches) + projected receptions (REC, the
+//        pass-catching half of touches — a 3rd stat rather than one combined
+//        "touches" number so both volume sources stay individually visible)
+//   WR — target share % (~0.70 year-over-year correlation, the single
+//        stickiest receiving metric) + prior-season air yards (separates a
+//        real downfield role from a checkdown-only one) + projected
+//        receptions (REC, the actual catch-volume forecast)
+//   TE — target share % + prior-season red-zone targets (TE value is
+//        concentrated near the end zone more than any other position) +
+//        projected receptions (REC)
+// Target share needs a team-wide target total to divide into, which isn't a
+// per-player field — see buildTeamTargetTotals below for how that's computed
+// from the same raw data. All 3 stats are always fetched together in one
+// pass (fetchSleeperStatsPlayers) since the underlying endpoints already
+// carry every field needed — no extra network calls per stat.
+// Column-header labels + full name/unit (for the header's hover tooltip) for
+// each group's 3 stat slots — the single source of truth
+// fetchSleeperStatsPlayers uses when building each player's stats, so the
+// header can never drift out of sync with what the rows actually contain.
+// BASIC isn't a real position: it's a 4th "always relevant" group (years of
+// experience + season-long and per-week projected points) that stays
+// pinned in front of whichever position group the user has brought forward,
+// so there's always a volume/production anchor visible no matter what's
+// selected.
+const STAT_META = {
+  BASIC: [
+    { label: "EXP", full: "Years of NFL experience", unit: "yrs" },
+    { label: "PROJ", full: "Projected fantasy points, full season (PPR)", unit: "pts" },
+    { label: "P/WK", full: "Projected fantasy points per game (PPR)", unit: "pts/gm" },
+  ],
+};
+
+// Every SELECTABLE stat for each position — the original correlation-
+// research set (PASS/RUSH/TGT%/etc, current-year projections + prior-year
+// target share/air yards/red-zone) plus the later user-specified per-game/
+// per-snap set (RU/G/AT/G/FPDB/etc), side by side as one pick list rather
+// than two competing "the right 3" answers. `id` is the stable key stored
+// in a player's `options` map (fetchSleeperStatsPlayers) and in
+// DEFAULT_VISIBLE_STATS/K_STAT_PREFS; `label`/`full` feed the header exactly
+// like STAT_META does for BASIC. A user can select any number (0+) per
+// position via the "Stats" picker (panel.js's openStatPicker) — this is NOT
+// capped at 3 the way the board used to be.
+const STAT_OPTION_DEFS = {
+  QB: [
+    { id: "pass_proj", label: "PASS", full: "Projected passing yards" },
+    { id: "rush_proj", label: "RUSH", full: "Projected rushing yards" },
+    { id: "proj_ppr", label: "PROJ", full: "Projected fantasy points, full season (PPR)" },
+    { id: "rush_yd_g", label: "RU/G", full: "Rushing yards per game, prior season" },
+    { id: "pass_att_g", label: "AT/G", full: "Pass attempts per game, prior season" },
+    { id: "fpdb", label: "FPDB", full: "Fantasy points per dropback (PPR), prior season — dropbacks approximated as pass attempts + sacks (no play-by-play dropback count in Sleeper's data)" },
+  ],
+  RB: [
+    { id: "tgt_share", label: "TGT%", full: "Target share, prior season" },
+    { id: "rush_att_proj", label: "ATT", full: "Projected rush attempts" },
+    { id: "rec_proj", label: "REC", full: "Projected receptions" },
+    { id: "rec_g", label: "RC/G", full: "Receptions per game, prior season" },
+    { id: "snaps_g", label: "SN/G", full: "Offensive snaps per game, prior season — a proxy for routes per game, which isn't in Sleeper's data" },
+    { id: "rush_att_g", label: "AT/G", full: "Rush attempts per game, prior season" },
+  ],
+  WR: [
+    { id: "tgt_share", label: "TGT%", full: "Target share, prior season" },
+    { id: "air_yd", label: "AIR", full: "Air yards, prior season" },
+    { id: "rec_proj", label: "REC", full: "Projected receptions" },
+    { id: "tgt_g", label: "TG/G", full: "Targets per game, prior season" },
+    { id: "tgt_per_snap", label: "TPS", full: "Targets per offensive snap, prior season — a proxy for targets per route run, which isn't in Sleeper's data" },
+    { id: "yd_per_snap", label: "YPS", full: "Receiving yards per offensive snap, prior season — a proxy for yards per route run" },
+  ],
+  TE: [
+    { id: "tgt_share", label: "TGT%", full: "Target share, prior season" },
+    { id: "rz_tgt", label: "RZ", full: "Red-zone targets, prior season" },
+    { id: "rec_proj", label: "REC", full: "Projected receptions" },
+    { id: "tgt_g", label: "TG/G", full: "Targets per game, prior season" },
+    { id: "snap_share", label: "SNP%", full: "Offensive snap share, prior season — a proxy for route participation, which isn't in Sleeper's data" },
+    { id: "yd_per_snap", label: "YPS", full: "Receiving yards per offensive snap, prior season — a proxy for yards per route run" },
+  ],
+};
+// Whatever's currently shown by default — the later per-game/per-snap set —
+// stays the default when the picker ships, per direct instruction ("leave
+// the ones we have now as default").
+const DEFAULT_VISIBLE_STATS = {
+  QB: ["rush_yd_g", "pass_att_g", "fpdb"],
+  RB: ["rec_g", "snaps_g", "rush_att_g"],
+  WR: ["tgt_g", "tgt_share", "yd_per_snap"],
+  TE: ["tgt_g", "tgt_share", "snap_share"],
+};
+const K_STAT_PREFS = "statColumnPrefs"; // { QB:[ids...], RB:[...], WR:[...], TE:[...] } — which STAT_OPTION_DEFS entries show, per position
+async function loadStatPrefs() {
+  const v = await chrome.storage.local.get([K_STAT_PREFS]);
+  const stored = v[K_STAT_PREFS];
+  if (!stored) return { ...DEFAULT_VISIBLE_STATS };
+  // Guard against a stale id from a since-renamed/removed option (shouldn't
+  // happen in practice, but a corrupted/hand-edited storage value silently
+  // rendering nothing for a whole group would be a confusing dead end).
+  const clean = {};
+  POSITIONS.forEach((pos) => {
+    const validIds = new Set(STAT_OPTION_DEFS[pos].map((o) => o.id));
+    clean[pos] = Array.isArray(stored[pos]) ? stored[pos].filter((id) => validIds.has(id)) : [...DEFAULT_VISIBLE_STATS[pos]];
+  });
+  return clean;
+}
+async function saveStatPrefs(prefs) {
+  await chrome.storage.local.set({ [K_STAT_PREFS]: prefs });
+}
+
+async function loadPlayerStats() {
+  const v = await chrome.storage.local.get([K_STATS]);
+  return (v[K_STATS] && v[K_STATS].players) || {};
+}
+
+// Percentile-only color scale (not diverging like valueColor — a stat has no
+// "wrong direction", just elite/average/weak within its own position). Was a
+// separate colored dot next to a plain-colored number; simplified to just
+// color the number itself — one visual element instead of two saying the
+// same thing.
+function statTierColor(pct) {
+  if (pct === null || pct === undefined) return "var(--dim)";
+  if (pct >= 80) return "#5FCF8A";
+  if (pct >= 50) return "#F5C242";
+  if (pct >= 25) return "#8A8F8C";
+  return "var(--dim2)";
+}
+
+// All 5 groups (the pinned BASIC group + all 4 positions) are always shown
+// rather than collapsing to one generic slot — a row only has real values
+// in BASIC (every position has season-long production) and its OWN
+// position's group; the other 3 position groups show empty placeholders.
+// The label lives in the column header (colored to match that position, via
+// POS_COLORS) instead of repeating on every row.
+//
+// BASIC always occupies slot 0. The rest default to WR, RB, QB, TE — user's
+// stated preference for which position to see first absent a selection.
+// Selecting a player (panel.js) brings THEIR position to slot 1 (right
+// after BASIC, not all the way to the front, since BASIC is pinned there);
+// deselecting restores the WR/RB/QB/TE default.
+const STAT_GROUP_SEQUENCE = ["BASIC", "QB", "RB", "WR", "TE"]; // fixed DOM order — see renderStatGroups
+const DEFAULT_STAT_POS_ORDER = ["WR", "RB", "QB", "TE"];
+const STAT_COL_WIDTH = 42; // px per individual stat column
+const STAT_GROUP_PAD = 8;  // px horizontal padding per group (4 each side) — 0 if the group has no visible columns
+function statGroupOrder(selectedPos) {
+  const rest = selectedPos && POSITIONS.includes(selectedPos)
+    ? [selectedPos, ...DEFAULT_STAT_POS_ORDER.filter((p) => p !== selectedPos)]
+    : DEFAULT_STAT_POS_ORDER;
+  return ["BASIC", ...rest];
+}
+
+// Group widths are no longer a fixed 134px each — since a user can pick any
+// number of stats (0+) per position, a group's width is however many
+// columns it actually has right now. Returns {widths:{pos:px}, offsets:
+// {pos:px}, totalWidth} for the given order — offsets are cumulative, so
+// each group's translateX is just its own offset, no per-slot math needed.
+function statGroupLayout(order, visibleStats) {
+  const widths = {};
+  STAT_GROUP_SEQUENCE.forEach((pos) => {
+    const count = pos === "BASIC" ? STAT_META.BASIC.length : (visibleStats[pos] || []).length;
+    widths[pos] = count === 0 ? 0 : count * STAT_COL_WIDTH + STAT_GROUP_PAD;
+  });
+  const offsets = {};
+  let x = 0;
+  order.forEach((pos) => { offsets[pos] = x; x += widths[pos]; });
+  return { widths, offsets, totalWidth: x };
+}
+
+// Header row for the stat block — BASIC + 4 position groups, each showing
+// only the stats currently selected for that position (see STAT_OPTION_DEFS
+// / loadStatPrefs), colored to match (POS_COLORS; BASIC gets the accent
+// color since it's not tied to one position). DOM order is always
+// STAT_GROUP_SEQUENCE; visual order/width come from inline transform/width
+// instead, so an order CHANGE (selecting a player) can animate via CSS
+// transition by updating just those values on the existing elements (see
+// applyStatGroupOrder in panel.js) rather than re-rendering this HTML.
+// Hovering a label shows its full name (data-full, read by panel.js's
+// custom tooltip) instead of the native title="" attribute — a browser
+// tooltip can't be styled to match the board and has its own built-in show
+// delay.
+function renderStatHeaderGroups(order, visibleStats) {
+  const { widths, offsets } = statGroupLayout(order, visibleStats);
+  return STAT_GROUP_SEQUENCE.map((pos) => {
+    const color = pos === "BASIC" ? "var(--accent)" : (POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : "var(--text-primary)");
+    const defs = pos === "BASIC" ? STAT_META.BASIC : STAT_OPTION_DEFS[pos].filter((o) => (visibleStats[pos] || []).includes(o.id));
+    const cells = defs.map((m) =>
+      `<span class="statHeadCol" style="color:${color}" data-full="${esc(m.full)}">${esc(m.label)}</span>`
+    ).join("");
+    return `<span class="statHeadGroup" data-pos="${esc(pos)}" style="width:${widths[pos]}px;transform:translateX(${offsets[pos]}px)">${cells}</span>`;
+  }).join("");
+}
+
+// Row cells for the stat block — same fixed-DOM/transform structure as the
+// header above, showing only the position's currently-selected stats (in
+// STAT_OPTION_DEFS order, not selection order, so re-picking doesn't
+// reshuffle existing columns). BASIC always gets real values (every player
+// has a projection); the other 4 groups only show real values for the
+// row's OWN position, the rest are blank. Values render plain white (the
+// per-stat percentile color-coding read as "too green" in practice) — the
+// percentile is still computed and stored (st.pct) in case a more subtle
+// treatment is wanted later, it's just not applied to text color right now.
+function renderStatGroups(r, statsMap, order, visibleStats) {
+  const entry = statsMap[r.key];
+  const basicStats = (entry && entry.basic) || [];
+  const options = (entry && entry.options) || {};
+  const { widths, offsets } = statGroupLayout(order, visibleStats);
+  return STAT_GROUP_SEQUENCE.map((pos) => {
+    const isBasic = pos === "BASIC";
+    const ids = isBasic ? null : (pos === r.pos ? (visibleStats[pos] || []) : []);
+    const cells = isBasic
+      ? basicStats.map((st) => `<span class="statCol">${esc(st.display)}</span>`).join("")
+      : ids.map((id) => {
+          const st = options[id];
+          return st ? `<span class="statCol">${esc(st.display)}</span>` : `<span class="statCol empty">–</span>`;
+        }).join("");
+    return `<span class="statGroup" data-pos="${esc(pos)}" style="width:${widths[pos]}px;transform:translateX(${offsets[pos]}px)">${cells}</span>`;
+  }).join("");
+}
+
+// Re-slots the already-rendered stat groups (header + every visible row) in
+// place, without touching anything else — called on player selection/
+// deselection (panel.js) instead of a full renderBoard(), so the existing
+// DOM elements' transform changes and the CSS transition on
+// .statGroup/.statHeadGroup actually animates the slide. A full re-render
+// would create brand-new elements with no prior state to animate from.
+// Widths don't change on a reorder (only order does), so this only ever
+// updates transform, never width — a stat-picker change goes through a full
+// renderBoard() instead, since the columns themselves are different.
+function applyStatGroupOrder(order, visibleStats) {
+  const { offsets } = statGroupLayout(order, visibleStats);
+  document.querySelectorAll(".statGroup, .statHeadGroup").forEach((el) => {
+    el.style.transform = `translateX(${offsets[el.dataset.pos]}px)`;
+  });
+}
+
+// ---------- Sleeper auto-fetch (ADP + stats) ----------
+// Pure network+parse functions, no DOM/button state — used both by the
+// Rankings Manager's manual "⟳ FETCH…" buttons (which wrap these with
+// disabled/text-swap UI) and by the board window's silent auto-refresh on
+// every load (panel.js's autoRefreshAdpAndStats). Keeping the actual fetch
+// logic here, in one place, means the two call sites can't drift.
+
+const MIN_PLAUSIBLE_ADP_PLAYERS = 100; // below this, the response is partial/degraded, not a real ADP set
+async function fetchSleeperAdpPlayers() {
+  const year = new Date().getFullYear();
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const raw = Array.isArray(data) ? data : [];
+  const players = raw
+    .filter((p) => p.stats && isFinite(p.stats.adp_ppr) && p.player && POSITIONS.includes(p.player.position))
+    .map((p) => ({
+      name: `${p.player.first_name} ${p.player.last_name}`,
+      pos: p.player.position,
+      rank: Number(p.stats.adp_ppr), // coerced at the boundary — see median() above
+    }));
+  // Two very different failures used to share one message. If Sleeper ever
+  // renames adp_ppr, every player fails the shape guard and the old code
+  // reported "No ADP data for 2026 season yet" — which in August is an
+  // entirely believable thing to read, so you'd shrug and move on instead of
+  // noticing their API changed. Tell them apart by whether the response had
+  // players in it at all.
+  if (!players.length) {
+    throw new Error(raw.length
+      ? `Sleeper returned ${raw.length} players but none carried a usable adp_ppr value — their API may have changed`
+      : `No ADP data for the ${year} season yet`);
+  }
+  return players;
+}
+
+// Storage-level upsert (loads/saves K_ADP directly) — used by the board
+// window's silent auto-refresh, which has no local `adpSources` array of its
+// own to keep in sync the way the Rankings Manager's button handler does.
+// Both surfaces' storage.onChanged listeners pick up the resulting write.
+async function upsertAdpSourceInStorage(id, name, color, players) {
+  const list = await loadAdpSources();
+  const idx = list.findIndex((s) => s.id === id);
+  const enabled = idx !== -1 ? list[idx].enabled : true;
+  const src = makeAdpSource(name, players, { id, color, enabled });
+  if (idx !== -1) list[idx] = src; else list.push(src);
+  await saveAdpSources(list);
+}
+
+// Percentile of each value within its own position group (0-100, higher =
+// better) — small (~100-150 player) arrays, so a plain sort is plenty fast.
+function percentileRanker(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  return (v) => {
+    if (n <= 1) return 50;
+    // index of the first value >= v — ties land on the same percentile
+    let lo = 0, hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; }
+    return Math.round((lo / (n - 1)) * 100);
+  };
+}
+
+const MIN_PLAUSIBLE_STATS_PLAYERS = 100;
+
+// Computes each team's total pass-catcher targets from a /stats/ response —
+// the denominator the "tgt_share" option needs, since no single player
+// field carries it. Only summed across RB/WR/TE (QBs don't receive targets,
+// K/DST are already excluded everywhere).
+function buildTeamTargetTotals(statPlayers) {
+  const totals = new Map();
+  statPlayers.forEach((p) => {
+    const team = p.player && p.player.team;
+    const tgt = p.stats && p.stats.rec_tgt;
+    if (!team || !isFinite(tgt)) return;
+    totals.set(team, (totals.get(team) || 0) + tgt);
+  });
+  return totals;
+}
+
+// Fetches EVERY selectable stat (STAT_OPTION_DEFS, all 6 per position) plus
+// the pinned BASIC group — not just whichever ones are currently visible —
+// so changing the stat picker's selection only needs a re-render, never a
+// re-fetch. Pulls from two Sleeper endpoints, same domain/no-auth as the
+// ADP fetch above:
+//  - current-year /v1/projections — BASIC's years-of-experience/projected
+//    points, plus the original correlation-research set's forward-looking
+//    options (pass_proj/rush_proj/proj_ppr/rush_att_proj/rec_proj)
+//  - prior-year /v1/stats — every per-game/per-snap usage rate, plus
+//    target share/air yards/red-zone targets (that same original set's
+//    prior-season role stats) — describing an established usage profile,
+//    not a single-season point estimate the way BASIC's PROJ is
+// Returns { year, players, playerCount } — throws on a degraded/failed fetch.
+async function fetchSleeperStatsPlayers() {
+  const year = new Date().getFullYear();
+  const posQuery = "position[]=QB&position[]=RB&position[]=WR&position[]=TE";
+  const [projRes, statRes] = await Promise.all([
+    fetch(`https://api.sleeper.app/projections/nfl/${year}?season_type=regular&${posQuery}&order_by=pts_ppr`),
+    fetch(`https://api.sleeper.app/stats/nfl/${year - 1}?season_type=regular&${posQuery}&order_by=pts_ppr`),
+  ]);
+  if (!projRes.ok) throw new Error(`Projections HTTP ${projRes.status}`);
+  if (!statRes.ok) throw new Error(`Stats HTTP ${statRes.status}`);
+  const projRaw = await projRes.json();
+  const statRaw = await statRes.json();
+  const projList = Array.isArray(projRaw) ? projRaw : [];
+  const statList = Array.isArray(statRaw) ? statRaw : [];
+
+  if (!projList.length || !statList.length) {
+    throw new Error(`Sleeper returned no usable data (${projList.length} projections, ${statList.length} stats) — the ${year - 1} season's stats may not be published yet`);
+  }
+
+  const teamTargetTotals = buildTeamTargetTotals(statList);
+
+  // Current-year projected volume, keyed by playerKey.
+  const projByKey = new Map();
+  projList.forEach((p) => {
+    if (!p.player || !POSITIONS.includes(p.player.position) || !p.stats) return;
+    const key = playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position);
+    projByKey.set(key, {
+      pos: p.player.position,
+      ptsPpr: isFinite(p.stats.pts_ppr) ? p.stats.pts_ppr : null,
+      yearsExp: isFinite(p.player.years_exp) ? p.player.years_exp : null,
+      passYd: isFinite(p.stats.pass_yd) ? p.stats.pass_yd : null,
+      rushYd: isFinite(p.stats.rush_yd) ? p.stats.rush_yd : null,
+      rushAtt: isFinite(p.stats.rush_att) ? p.stats.rush_att : null,
+      rec: isFinite(p.stats.rec) ? p.stats.rec : null,
+    });
+  });
+
+  // Prior-year role/usage stats, keyed by playerKey. `tm_off_snp` (team
+  // offensive snap total) is already a precomputed field on every player
+  // row, so the snap-share option needs no separate team-total pass the
+  // way target share does above.
+  const rateByKey = new Map();
+  statList.forEach((p) => {
+    if (!p.player || !POSITIONS.includes(p.player.position) || !p.stats) return;
+    const key = playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position);
+    const s = p.stats;
+    const team = p.player.team;
+    const teamTgtTotal = team ? teamTargetTotals.get(team) : null;
+    const gp = isFinite(s.gp) && s.gp > 0 ? s.gp : null;
+    const offSnp = isFinite(s.off_snp) && s.off_snp > 0 ? s.off_snp : null;
+    const dropbacks = isFinite(s.pass_att) ? s.pass_att + (isFinite(s.pass_sack) ? s.pass_sack : 0) : null;
+    const tgt = s.rec_tgt;
+    rateByKey.set(key, {
+      pos: p.player.position,
+      tgtShare: isFinite(tgt) && teamTgtTotal ? (tgt / teamTgtTotal) * 100 : null,
+      airYd: isFinite(s.rec_air_yd) ? s.rec_air_yd : null,
+      rzTgt: isFinite(s.rec_rz_tgt) ? s.rec_rz_tgt : null,
+      rushYdPerG: gp && isFinite(s.rush_yd) ? s.rush_yd / gp : null,
+      passAttPerG: gp && isFinite(s.pass_att) ? s.pass_att / gp : null,
+      fpPerDropback: dropbacks && isFinite(s.pts_ppr) ? s.pts_ppr / dropbacks : null,
+      recPerG: gp && isFinite(s.rec) ? s.rec / gp : null,
+      snapsPerG: gp && offSnp ? offSnp / gp : null,
+      rushAttPerG: gp && isFinite(s.rush_att) ? s.rush_att / gp : null,
+      tgtPerG: gp && isFinite(s.rec_tgt) ? s.rec_tgt / gp : null,
+      tgtPerSnap: offSnp && isFinite(s.rec_tgt) ? s.rec_tgt / offSnp : null,
+      ydPerSnap: offSnp && isFinite(s.rec_yd) ? s.rec_yd / offSnp : null,
+      snapShare: offSnp && isFinite(s.tm_off_snp) && s.tm_off_snp > 0 ? (offSnp / s.tm_off_snp) * 100 : null,
+    });
+  });
+
+  // Maps a STAT_OPTION_DEFS id to its raw numeric value for one player,
+  // pulling from whichever of proj/rate actually carries it. Centralizing
+  // this instead of a per-position if/else block is what lets percentiles
+  // and display formatting below iterate STAT_OPTION_DEFS generically,
+  // regardless of which options a user has selected.
+  function rawOptionValue(id, proj, rate) {
+    switch (id) {
+      case "pass_proj": return proj.passYd;
+      case "rush_proj": return proj.rushYd;
+      case "proj_ppr": return proj.ptsPpr;
+      case "rush_att_proj": return proj.rushAtt;
+      case "rec_proj": return proj.rec;
+      case "tgt_share": return rate.tgtShare;
+      case "air_yd": return rate.airYd;
+      case "rz_tgt": return rate.rzTgt;
+      case "rush_yd_g": return rate.rushYdPerG;
+      case "pass_att_g": return rate.passAttPerG;
+      case "fpdb": return rate.fpPerDropback;
+      case "rec_g": return rate.recPerG;
+      case "snaps_g": return rate.snapsPerG;
+      case "rush_att_g": return rate.rushAttPerG;
+      case "tgt_g": return rate.tgtPerG;
+      case "tgt_per_snap": return rate.tgtPerSnap;
+      case "yd_per_snap": return rate.ydPerSnap;
+      case "snap_share": return rate.snapShare;
+      default: return null;
+    }
+  }
+  function rawBasicValue(id, proj) {
+    if (id === "exp") return proj.yearsExp;
+    if (id === "proj") return proj.ptsPpr;
+    if (id === "perwk") return proj.ptsPpr != null ? proj.ptsPpr / 17 : null;
+    return null;
+  }
+  const BASIC_IDS = ["exp", "proj", "perwk"]; // order matches STAT_META.BASIC
+
+  // Per-label display formatting — whole numbers for season totals/counts
+  // (EXP/PROJ/PASS/RUSH/ATT/REC/AIR/RZ), one decimal for per-game rates
+  // (P/WK and every "X/G" label), a percent for the two share stats, two
+  // decimals for the small per-snap/per-dropback ratios (TPS/YPS/FPDB),
+  // which would round to 0 at 1 decimal.
+  const formatDisplay = (label, value) => {
+    if (label === "TGT%" || label === "SNP%") return `${value.toFixed(0)}%`;
+    if (label === "TPS" || label === "YPS" || label === "FPDB") return value.toFixed(2);
+    if (label === "P/WK" || label === "RU/G" || label === "AT/G" || label === "RC/G" || label === "SN/G" || label === "TG/G") return value.toFixed(1);
+    return Math.round(value).toString();
+  };
+
+  // Every player who shows up in EITHER response — most starters/rotation
+  // players are in both, but a rookie (no prior-year stats) or someone who
+  // missed all of last season (no meaningful rate stats) legitimately isn't.
+  const allKeys = new Set([...projByKey.keys(), ...rateByKey.keys()]);
+  const byPos = { QB: [], RB: [], WR: [], TE: [] };
+  allKeys.forEach((key) => {
+    const proj = projByKey.get(key);
+    const rate = rateByKey.get(key);
+    const pos = (proj && proj.pos) || (rate && rate.pos);
+    if (pos) byPos[pos].push({ key, proj: proj || {}, rate: rate || {} });
+  });
+
+  const players = {};
+  POSITIONS.forEach((pos) => {
+    const entries = byPos[pos];
+
+    // BASIC — percentiles computed within this position (a 10-year veteran
+    // QB and a 10-year veteran TE aren't being compared to each other).
+    const basicRanks = BASIC_IDS.map((id) =>
+      percentileRanker(entries.map((e) => rawBasicValue(id, e.proj)).filter((v) => v != null))
+    );
+    entries.forEach(({ key, proj }) => {
+      const basic = STAT_META.BASIC.map((m, i) => {
+        const v = rawBasicValue(BASIC_IDS[i], proj);
+        return v == null ? null : { label: m.label, full: m.full, value: v, pct: basicRanks[i](v), display: formatDisplay(m.label, v) };
+      }).filter(Boolean);
+      if (basic.length) { players[key] = players[key] || {}; players[key].basic = basic; }
+    });
+
+    // Every selectable option for this position — always computed, so the
+    // stat picker only changes what renderStatGroups reads, never what got
+    // fetched.
+    const optionRanks = {};
+    STAT_OPTION_DEFS[pos].forEach((def) => {
+      optionRanks[def.id] = percentileRanker(
+        entries.map((e) => rawOptionValue(def.id, e.proj, e.rate)).filter((v) => v != null)
+      );
+    });
+    entries.forEach(({ key, proj, rate }) => {
+      const options = {};
+      STAT_OPTION_DEFS[pos].forEach((def) => {
+        const v = rawOptionValue(def.id, proj, rate);
+        if (v == null) return;
+        options[def.id] = { label: def.label, full: def.full, value: v, pct: optionRanks[def.id](v), display: formatDisplay(def.label, v) };
+      });
+      if (Object.keys(options).length) { players[key] = players[key] || {}; players[key].options = options; }
+    });
+  });
+
+  return { year, players, playerCount: Object.keys(players).length };
+}
+
+async function saveStatsToStorage(year, players) {
+  await chrome.storage.local.set({ [K_STATS]: { updatedAt: Date.now(), year, players } });
+}
+
+// EXPERIMENTAL (queue/draft-write branch) — playerKey -> Sleeper's own
+// numeric player_id, built from the same projections endpoint
+// fetchSleeperAdpPlayers/fetchSleeperStatsPlayers already call (each entry
+// there carries a top-level player_id alongside the nested player object;
+// confirmed via a direct query before wiring this in, not assumed). No new
+// fetch, no new host permission — this just captures a field that request
+// already returns and was previously discarded.
+async function fetchSleeperPlayerIdMap() {
+  const year = new Date().getFullYear();
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const raw = Array.isArray(data) ? data : [];
+  const ids = {};
+  raw.forEach((p) => {
+    if (!p.player || !p.player_id || !POSITIONS.includes(p.player.position)) return;
+    const key = playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position);
+    ids[key] = String(p.player_id);
+  });
+  return ids;
+}
+
+async function saveSleeperIdMapToStorage(ids) {
+  await chrome.storage.local.set({ [K_SLEEPER_IDS]: { updatedAt: Date.now(), ids } });
+}
+
+async function loadSleeperIdMap() {
+  const v = await chrome.storage.local.get([K_SLEEPER_IDS]);
+  return (v[K_SLEEPER_IDS] && v[K_SLEEPER_IDS].ids) || {};
+}
+
+// Silent auto-refresh, called on load by both surfaces (panel.js's board
+// window and rankings-manager.js's init) so ADP/usage data doesn't go stale
+// between manual button clicks. Failures are logged, not toasted/thrown —
+// callers already rendered with whatever was last saved, and each surface's
+// storage.onChanged listener re-renders once (if) fresh data lands.
+async function autoRefreshAdpAndStats() {
+  try {
+    const players = await fetchSleeperAdpPlayers();
+    await upsertAdpSourceInStorage("adp_sleeper_live", "Sleeper Live ADP", "#5FA8E8", players);
+  } catch (e) {
+    console.warn("[4th&Go] auto-refresh of Sleeper ADP failed", e);
+  }
+  try {
+    const { year, players } = await fetchSleeperStatsPlayers();
+    await saveStatsToStorage(year, players);
+  } catch (e) {
+    console.warn("[4th&Go] auto-refresh of stat columns failed", e);
+  }
+  try {
+    const ids = await fetchSleeperPlayerIdMap();
+    await saveSleeperIdMapToStorage(ids);
+  } catch (e) {
+    console.warn("[4th&Go] auto-refresh of Sleeper player IDs failed", e);
+  }
 }
 
 // Shared magnitude scale for ALL ADP-gap signals (the tier board's value bar

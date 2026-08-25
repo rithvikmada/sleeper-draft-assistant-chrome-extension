@@ -34,6 +34,8 @@ const ICON_SVG = {
   "star": `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>`,
   "circle-x": `<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>`,
   "flag": `<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>`,
+  "list-plus": `<path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/>`,
+  "circle-check": `<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>`,
 };
 function iconDataUri(name) {
   const inner = ICON_SVG[name] || "";
@@ -178,9 +180,18 @@ let soloSource = null; // when set, best-picks are computed from just this sourc
 let lastSharedPicks = []; // source-agnostic record of every drafted player, by playerKey
 let flags = {}; // playerKey -> "favorite" | "avoid", set in the Rankings Manager
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
+let playerStats = {}; // playerKey -> {basic:[...], options:{id:{...}}}, fetched via "FETCH STATS" in the Rankings Manager (shared.js's renderStatGroups)
+let visibleStats = { ...DEFAULT_VISIBLE_STATS }; // pos -> [id,...] of currently-shown STAT_OPTION_DEFS entries — see openStatPicker
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
+
+// EXPERIMENTAL (queue/draft-write branch) — see background.js's "Sleeper
+// WRITE actions" section for the actual mechanism (script injection into
+// your own open Sleeper tab, no token ever stored here).
+let sleeperIds = {}; // playerKey -> Sleeper's own numeric player_id, loaded from K_SLEEPER_IDS
+const K_SLEEPER_QUEUE = "sleeperQueueKeys"; // this extension's own local mirror of "what should be queued" — playerKey[]
+let sleeperQueueKeys = []; // loaded from storage on init, kept in sync with the button state
 
 // ---------- rendering ----------
 // Both the BEST grid and the tier board are built from the SAME blended
@@ -232,9 +243,34 @@ function computePosRanks(allRows) {
   return ranks;
 }
 
+// Clicking a player's row brings that position's stat group to slot 1 (right
+// after the pinned BASIC group) in the always-visible stat block — see
+// statGroupOrder/STAT_GROUP_SEQUENCE in shared.js. Clicking the SAME row
+// again deselects and restores the default WR/RB/QB/TE order; clicking a
+// DIFFERENT row switches to that player's position instead. Tracked by exact
+// player key, not just position, so re-clicking a specific player is what
+// toggles the selection off — clicking a different player who happens to
+// share a position doesn't. Session-only (not persisted): resets on reload,
+// which is fine since it's a glance aid, not a setting.
+let selectedStatPlayerKey = null;
+let selectedStatPos = null;
+
 function renderBoard() {
+  // A selected player who gets drafted (synced pick or manual crossout)
+  // loses their selection automatically — the only other way to clear it is
+  // clicking that same row again. Checked on every render (not just the
+  // poll path) so it also catches a manual crossout from this window or a
+  // pick applied from the Rankings Manager tab.
+  if (selectedStatPlayerKey && (taken[selectedStatPlayerKey] || manualTaken[selectedStatPlayerKey])) {
+    selectedStatPlayerKey = null;
+    selectedStatPos = null;
+  }
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
+  const groupOrder = statGroupOrder(selectedStatPos);
+  const statBlockWidth = statGroupLayout(groupOrder, visibleStats).totalWidth;
+  $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats);
+  $("statHead").style.width = `${statBlockWidth}px`;
   const allRows = buildConsensus(activeSources(sources, soloSource), merges);
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   const list = applyFilters(allRows, { posFilter, showTaken, playerSearch, isGone });
@@ -291,8 +327,22 @@ function renderBoard() {
       const valueCell = adpCols.length
         ? `${renderValueBadge(vc?.delta ?? null, vc?.baselineAdp)}${gone ? "" : adpBlinkDotHtml(r.pos, vc?.baselineAdp)}`
         : `<span class="valDelta flat">·</span>`;
-      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo">
+      const selected = r.key === selectedStatPlayerKey;
+      // EXPERIMENTAL (queue/draft-write branch) — only shown once we have a
+      // Sleeper player_id for this row (see sleeperIds, loaded from
+      // K_SLEEPER_IDS). No id, no buttons — a name/pos this project's own
+      // rankings recognize but that didn't match anything in Sleeper's own
+      // projections data (a rare mismatch) just can't be queued/drafted from
+      // here; the double-click crossout still works regardless.
+      const sleeperId = sleeperIds[r.key];
+      const queued = sleeperQueueKeys.includes(r.key);
+      const sleeperBtns = sleeperId && !gone
+        ? `<button class="rowQueueBtn${queued ? " on" : ""}" data-key="${esc(r.key)}" aria-label="${queued ? "Remove from Sleeper queue" : "Add to Sleeper queue"}" title="${queued ? "Queued on Sleeper — click to remove" : "Add to Sleeper draft queue"}">${ico("list-plus", { size: 13, color: queued ? "var(--accent)" : "var(--text-disabled)" })}</button>
+           <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" title="Draft this player on Sleeper now">${ico("circle-check", { size: 13, color: "var(--text-disabled)" })}</button>`
+        : `<span class="rowFlagSpacer"></span><span class="rowFlagSpacer"></span>`;
+      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" title="Double-click to cross off / undo">
         <button class="rowFlagBtn" data-key="${esc(r.key)}" aria-label="Flag player">${ico(flagIcon, { size: 13, color: flagColor })}</button>
+        ${sleeperBtns}
         <span class="rk2">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
         <span class="nmCell2">
           <span class="nmLine">
@@ -302,6 +352,7 @@ function renderBoard() {
           </span>
           ${adpCaption}
         </span>
+        <span class="statBlock" style="width:${statBlockWidth}px">${renderStatGroups(r, playerStats, groupOrder, visibleStats)}</span>
         <span class="valCell2">${valueCell}</span>
         <span class="posCell2">${posBadgeHtml(r.pos, posRanks.get(r.key) ?? null, "sm")}</span>
       </div>`;
@@ -574,6 +625,18 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes[K_MERGES]) {
     merges = await loadMerges();
     renderAll();
+  }
+  if (changes[K_STATS]) {
+    playerStats = await loadPlayerStats();
+    renderAll(); // board's stat column depends on this too
+  }
+  if (changes[K_STAT_PREFS] && !echo.isEcho(K_STAT_PREFS)) {
+    visibleStats = await loadStatPrefs();
+    renderAll(); // stat picker selection is board-only, but honor an external change anyway
+  }
+  if (changes[K_SLEEPER_IDS]) {
+    sleeperIds = await loadSleeperIdMap();
+    renderAll(); // queue/draft buttons only show once a player has a known Sleeper ID
   }
 });
 
@@ -870,12 +933,222 @@ function openFlagMenu(x, y, key) {
     document.addEventListener("keydown", onFlagMenuKey);
   }, 0);
 }
+// ---------- stat column header tooltip ----------
+// A small themed floating box instead of the native title="" tooltip — see
+// .statTooltip in panel.html for why (no styling control, built-in OS
+// hover delay). Shown/hidden on plain mouseover/mouseout, so it appears as
+// soon as the pointer enters the label instead of waiting out that delay.
+let statTooltipEl = null;
+function hideStatTooltip() {
+  if (statTooltipEl) { statTooltipEl.remove(); statTooltipEl = null; }
+}
+function showStatTooltip(target, text) {
+  hideStatTooltip();
+  const el = document.createElement("div");
+  el.className = "statTooltip";
+  el.textContent = text;
+  document.body.appendChild(el);
+  const r = target.getBoundingClientRect();
+  const w = el.offsetWidth;
+  const left = Math.max(4, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 4));
+  el.style.left = `${left}px`;
+  el.style.top = `${r.bottom + 6}px`;
+  statTooltipEl = el;
+}
+$("colHead").addEventListener("mouseover", (e) => {
+  const el = e.target.closest(".statHeadCol[data-full]");
+  if (el) showStatTooltip(el, el.dataset.full);
+});
+$("colHead").addEventListener("mouseout", (e) => {
+  if (e.target.closest(".statHeadCol[data-full]")) hideStatTooltip();
+});
+
+// ---------- stat picker (choose which stat columns show, per position) ----------
+// Every STAT_OPTION_DEFS entry — both the original correlation-research set
+// and the later per-game/per-snap set — is always fetched (shared.js's
+// fetchSleeperStatsPlayers), so this picker only changes what renderBoard
+// reads, never triggers a re-fetch. Checkbox state IS visibleStats; no
+// separate draft/staging state to reconcile before applying.
+function closeStatPicker() {
+  $("statPickerPanel").hidden = true;
+  document.removeEventListener("click", onStatPickerOutsideClick);
+}
+function onStatPickerOutsideClick(e) {
+  if (!e.target.closest("#statPickerPanel") && !e.target.closest("#statPickerBtn")) closeStatPicker();
+}
+function renderStatPickerPanel() {
+  const panel = $("statPickerPanel");
+  panel.innerHTML = POSITIONS.map((pos) => {
+    const opts = STAT_OPTION_DEFS[pos].map((def) => {
+      const checked = (visibleStats[pos] || []).includes(def.id);
+      return `<label class="statPickerOpt" title="${esc(def.full)}">
+        <input type="checkbox" data-pos="${esc(pos)}" data-id="${esc(def.id)}" ${checked ? "checked" : ""} />
+        <span class="spoLabel" style="color:${POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : 'currentColor'}">${esc(def.label)}</span>
+      </label>`;
+    }).join("");
+    return `<div class="statPickerGroup">
+      <div class="spgTitle" style="color:${POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : 'currentColor'}">${esc(pos)}</div>
+      ${opts}
+    </div>`;
+  }).join("");
+  panel.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const { pos, id } = cb.dataset;
+      const cur = visibleStats[pos] || [];
+      visibleStats = { ...visibleStats, [pos]: cb.checked ? [...cur, id] : cur.filter((x) => x !== id) };
+      saveStatPrefs(visibleStats).catch((e) => { console.error("[4th&Go] couldn't save stat picker prefs", e); toast("Couldn't save that stat selection.", true); });
+      renderAll(); // column count/width changed — needs a real re-render, not just applyStatGroupOrder's reorder-in-place
+    });
+  });
+}
+function openStatPicker() {
+  renderStatPickerPanel();
+  const panel = $("statPickerPanel");
+  const btn = $("statPickerBtn");
+  panel.hidden = false;
+  // Reset any leftover position/height cap from a previous open before
+  // measuring — otherwise a stale value from last time (especially `bottom`,
+  // set only in the upward-opening branch below) would throw off this pass.
+  panel.style.top = "";
+  panel.style.bottom = "";
+  panel.style.maxHeight = "";
+  const r = btn.getBoundingClientRect();
+  const w = panel.offsetWidth;
+  panel.style.left = `${Math.max(4, Math.min(r.right - w, window.innerWidth - w - 4))}px`;
+
+  // The panel's own CSS max-height (70vh) only bounds it against the WINDOW,
+  // not against where the button happens to sit — a button positioned low
+  // on the page still left top + 70vh spilling off the bottom of the
+  // window, past where any scrollbar or click could reach it. That's what
+  // was reported: TE's checkboxes existed, just permanently off-screen,
+  // with no amount of scrolling able to reach them. A flat "clamp top, cap
+  // height" fix isn't enough either — if a floor on the height is kept for
+  // usability, a short enough window still pushes the bottom off-screen
+  // again. The real fix is picking whichever direction (below or above the
+  // button) actually has more room, and capping height to EXACTLY that
+  // available space — never more than what's provably on-screen.
+  const margin = 8;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  if (spaceBelow >= spaceAbove) {
+    panel.style.top = `${r.bottom + 6}px`;
+    panel.style.maxHeight = `${Math.max(80, spaceBelow - 6)}px`;
+  } else {
+    panel.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    panel.style.maxHeight = `${Math.max(80, spaceAbove - 6)}px`;
+  }
+  setTimeout(() => document.addEventListener("click", onStatPickerOutsideClick), 0);
+}
+$("statPickerBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!$("statPickerPanel").hidden) { closeStatPicker(); return; }
+  openStatPicker();
+});
+
+// ---------- EXPERIMENTAL: Sleeper write actions (queue / draft) ----------
+// See background.js's "Sleeper WRITE actions" section for the mechanism.
+// This extension's own K_SLEEPER_QUEUE list is the local source of truth for
+// "what should be queued" — update_draft_queue's exact request shape wasn't
+// directly captured (only its response was, via live network traffic), so
+// it's treated here as replacing Sleeper's queue with our full intended
+// list on every change, which is the safer assumption for a "set" mutation
+// and also naturally supports add/remove with one call.
+function saveSleeperQueueKeys() {
+  chrome.storage.local.set({ [K_SLEEPER_QUEUE]: sleeperQueueKeys });
+}
+
+async function toggleSleeperQueue(key, name) {
+  if (!currentDraftId) { toast("Sync a draft first.", true); return; }
+  const wasQueued = sleeperQueueKeys.includes(key);
+  const prev = sleeperQueueKeys;
+  sleeperQueueKeys = wasQueued ? sleeperQueueKeys.filter((k) => k !== key) : [...sleeperQueueKeys, key];
+  saveSleeperQueueKeys();
+  renderAll();
+  const playerIds = sleeperQueueKeys.map((k) => sleeperIds[k]).filter(Boolean);
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "sleeperUpdateDraftQueue",
+      payload: { draftId: currentDraftId, playerIds },
+    });
+    if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+    toast(wasQueued ? `${name} removed from Sleeper queue.` : `${name} added to Sleeper queue.`);
+  } catch (e) {
+    sleeperQueueKeys = prev; // revert the optimistic update
+    saveSleeperQueueKeys();
+    renderAll();
+    toast(`Couldn't update Sleeper's queue: ${e.message}`, true);
+  }
+}
+
+async function draftOnSleeper(key, name) {
+  if (!currentDraftId || currentPickNo == null) { toast("Sync a draft first.", true); return; }
+  const playerId = sleeperIds[key];
+  if (!playerId) { toast("No Sleeper player ID matched for this player.", true); return; }
+  // Irreversible in a real league draft — the one write action here that
+  // gets a confirm gate. Queueing doesn't need one (freely reversible,
+  // low-stakes); this does.
+  const ok = window.confirm(`Draft ${name} on Sleeper right now?\n\nThis actually makes the pick — there's no undo.`);
+  if (!ok) return;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "sleeperDraftPlayer",
+      payload: { draftId: currentDraftId, playerId, pickNo: currentPickNo },
+    });
+    if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+    toast(`Drafted ${name} on Sleeper.`);
+    // The actual pick shows up as "Yours" once the next poll syncs — no
+    // local taken[] write here, so this can't drift from what Sleeper's
+    // picks endpoint actually reports.
+  } catch (e) {
+    toast(`Couldn't draft ${name} on Sleeper: ${e.message}`, true);
+  }
+}
+
 $("board").addEventListener("click", (e) => {
   const btn = e.target.closest(".rowFlagBtn");
-  if (!btn) return;
-  e.stopPropagation();
-  const r = btn.getBoundingClientRect();
-  openFlagMenu(r.left, r.bottom + 6, btn.dataset.key);
+  if (btn) {
+    e.stopPropagation();
+    const r = btn.getBoundingClientRect();
+    openFlagMenu(r.left, r.bottom + 6, btn.dataset.key);
+    return;
+  }
+  const queueBtn = e.target.closest(".rowQueueBtn");
+  if (queueBtn) {
+    e.stopPropagation();
+    const row = queueBtn.closest(".row2");
+    toggleSleeperQueue(queueBtn.dataset.key, row?.dataset.name || "Player");
+    return;
+  }
+  const draftBtn = e.target.closest(".rowDraftBtn");
+  if (draftBtn) {
+    e.stopPropagation();
+    const row = draftBtn.closest(".row2");
+    draftOnSleeper(draftBtn.dataset.key, row?.dataset.name || "Player");
+    return;
+  }
+  // A plain click (not the flag button, and short of the dblclick that
+  // crosses a player off) selects that player — see selectedStatPlayerKey
+  // above renderBoard for the select/deselect/switch rules. Re-slotting via
+  // applyStatGroupOrder (not a full renderBoard) is what makes the reorder
+  // actually slide: it updates the existing elements' transform in place
+  // instead of replacing them with fresh ones that have no prior state to
+  // animate from.
+  const row = e.target.closest(".row2");
+  if (!row) return;
+  const key = row.dataset.key;
+  if (selectedStatPlayerKey === key) {
+    // clicking the already-selected row again: unselect, restore default order
+    row.classList.remove("selected");
+    selectedStatPlayerKey = null;
+    selectedStatPos = null;
+  } else {
+    const prevRow = $("board").querySelector(".row2.selected");
+    if (prevRow) prevRow.classList.remove("selected");
+    row.classList.add("selected");
+    selectedStatPlayerKey = key;
+    selectedStatPos = key.split("|").pop();
+  }
+  applyStatGroupOrder(statGroupOrder(selectedStatPos), visibleStats);
 });
 $("board").addEventListener("contextmenu", (e) => {
   const nameEl = e.target.closest(".nmText");
@@ -1001,8 +1274,26 @@ $("playerSearch").addEventListener("input", () => {
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
+  playerStats = await loadPlayerStats();
+  visibleStats = await loadStatPrefs();
+  sleeperIds = await loadSleeperIdMap();
+  const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE]);
+  sleeperQueueKeys = qv[K_SLEEPER_QUEUE] || [];
 
   // Settings start open so first-run has the draft ID box visible.
   $("settingsBtn").classList.add("on");
   renderAll();
+
+  // Refresh Sleeper Live ADP + the stat columns every time the board window
+  // opens, not just when someone hits the manual buttons in the Rankings
+  // Manager — the board is the surface actually used mid-draft, and
+  // day-of-draft ADP/usage data is stale by the time someone remembers to
+  // click a button in a separate tab. Fire-and-forget: the board already
+  // rendered above with whatever was last saved, and storage.onChanged
+  // (below) re-renders once fresh data lands, so a slow/failed fetch never
+  // blocks opening the window. autoRefreshAdpAndStats (shared.js) logs
+  // failures rather than toasting — this runs on every open, and a quiet log
+  // is enough since the manual buttons still work and report loudly if the
+  // user goes looking.
+  autoRefreshAdpAndStats();
 })();

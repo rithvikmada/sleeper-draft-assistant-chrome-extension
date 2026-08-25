@@ -77,9 +77,20 @@
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
+/* html/body used to just grow with content and rely on the whole page
+   scrolling — on a short window (the popup can be resized arbitrarily
+   small), that meant scrolling past the sync box + Best Picks cards +
+   filters every time just to reach the board, and on a genuinely short
+   window some players could end up effectively unreachable ("can't scroll
+   all the way down"). Making body a fixed-viewport flex column with #board
+   as the one scrolling region (below) pins the header in place and
+   guarantees the board's own scrollbar always covers every row, no matter
+   how short the window gets. */
+html, body { height: 100%; }
 body {
   margin: 0; background: var(--surface-app); color: var(--text-primary);
   font: var(--type-body); -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column; overflow: hidden;
 }
 [data-numeric], .numeric { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -188,7 +199,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .chip.active { border-color: var(--chalk-a24); background: var(--chalk-a12); color: var(--accent); }
 
 /* ---------- layout shell ---------- */
-#header { position: sticky; top: 0; z-index: 20; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+#header { flex: none; background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle); padding: 12px 16px 10px; display: flex; flex-direction: column; gap: 6px; }
 .headTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .brandRow { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .brand2 { font-family: var(--font-display); font-weight: 900; font-size: 18px; letter-spacing: -0.02em; color: var(--text-primary); flex: none; }
@@ -261,14 +272,26 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #playerSearchWrap input { width: 100%; }
 
 /* column header + rows */
-#colHead { display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
+#colHead { flex: none; display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 16px; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 #colHead .c-flag { width: 16px; flex: none; }
 #colHead .c-rank { width: 38px; text-align: right; flex: none; }
 #colHead .c-name { flex: 1; }
+#colHead .c-stat { flex: none; position: relative; height: 100%; } /* width set inline by panel.js — varies with the stat picker's selection */
+#colHead .statHeadGroup { position: absolute; top: 0; left: 0; width: 134px; height: 100%; display: flex; align-items: center; padding: 0 4px; transition: transform var(--dur-base) var(--ease-out); }
+#colHead .statHeadGroup[data-pos]:not([data-pos="BASIC"]) { border-left: 1px solid var(--border-subtle); }
+#colHead .statHeadCol { width: 42px; flex: none; text-align: center; cursor: default; }
 #colHead .c-val { width: 90px; flex: none; }
 #colHead .c-pos { width: 52px; flex: none; text-align: right; }
 
-#board { padding: 0 0 24px; }
+/* overflow-x stays hidden (not auto) deliberately — #colHead lives in a
+   separate flex sibling, not inside this scroll container, so an
+   independent horizontal scrollbar here would desync the column labels
+   from the row values the moment someone scrolled sideways (the exact
+   header/row misalignment class of bug this project has hit before — see
+   "Design & alignment lessons"). If horizontal scrolling is ever needed for
+   a very narrow window, header and board need to scroll together as one
+   unit, not as two independently-scrolling siblings. */
+#board { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0 24px; }
 .tierDiv { display: flex; align-items: center; gap: 8px; padding: 5px 16px; background: rgba(255,255,255,.022); border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 .tierDiv .num { color: var(--accent); }
 .tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
@@ -278,6 +301,13 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .row2.gone { opacity: .42; }
 .row2.mine { background: var(--chalk-a12); box-shadow: inset 2px 0 0 var(--accent); }
 .rowFlagBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; }
+/* EXPERIMENTAL (queue/draft-write branch) — same 16x16 icon-button shape as
+   .rowFlagBtn, plus a hover tint and an "on" state for the queue toggle. The
+   spacer variant keeps row height/alignment identical for rows that don't
+   have a matched Sleeper player_id (see sleeperBtns in panel.js). */
+.rowQueueBtn, .rowDraftBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; border-radius: 3px; transition: background-color var(--dur-fast) var(--ease-out); }
+.rowQueueBtn:hover, .rowDraftBtn:hover { background: var(--chalk-a12); }
+.rowFlagSpacer { width: 16px; height: 16px; flex: none; }
 .rk2 { width: 38px; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); flex: none; }
 .nmCell2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; justify-content: center; }
 .nmLine { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -289,6 +319,43 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .valCell2 { width: 90px; flex: none; display: flex; align-items: center; gap: 8px; }
 .posCell2 { width: 52px; flex: none; display: flex; justify-content: flex-end; }
 
+/* Stat block (backlog: "stats/projections board columns") — a pinned BASIC
+   group (experience + projected points, always relevant regardless of
+   position) plus all 4 positions' stat groups are always present, not just
+   the current row's own position, so the label can live in the column
+   header (colored per-position) instead of repeating on every row. A row
+   only has real values under BASIC and its OWN position's group; the other
+   3 position groups show empty placeholders.
+   Each group is a fixed-width absolutely-positioned element (DOM order
+   never changes — see STAT_GROUP_SEQUENCE in shared.js) whose visual slot
+   comes from an inline translateX transform. Selecting a player
+   (panel.js's board click handler) re-slots BASIC/QB/RB/WR/TE by updating
+   just that transform on the existing elements via applyStatGroupOrder —
+   not a full re-render — so the CSS transition below actually animates a
+   slide instead of an instant jump. Faint dividers separate each group,
+   plus one bracketing the whole block from the surrounding name/value
+   columns. See renderStatGroups/renderStatHeaderGroups in shared.js and
+   fetchSleeperStatsPlayers for which stat maps to which position and why. */
+.statBlock { flex: none; position: relative; height: 100%; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); } /* width set inline by panel.js — varies with the stat picker's selection */
+.statGroup { position: absolute; top: 0; left: 0; width: 134px; height: 100%; display: flex; align-items: center; padding: 0 4px; transition: transform var(--dur-base) var(--ease-out); }
+.statGroup[data-pos]:not([data-pos="BASIC"]) { border-left: 1px solid var(--border-subtle); }
+.statCol { width: 42px; flex: none; text-align: center; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
+.statCol.empty { color: var(--text-disabled); font-weight: 400; }
+
+/* Row selection (backlog: stat-block reorder) — clicking a row keeps the
+   same lighter background .row2:hover already gives it, so it stays
+   visibly "on" after the mouse leaves. Cleared only by clicking that same
+   row again or the player getting drafted (see the auto-clear check at the
+   top of renderBoard, panel.js) — not by ordinary mouseout. */
+.row2.selected { background: var(--surface-row-hover); }
+
+/* Custom header-label tooltip (backlog: stat column hover) — deliberately
+   not the native title="" tooltip: that's OS-rendered, has a built-in
+   hover delay before it appears, and can't be styled to match the board's
+   design system. This is a small themed floating box instead, shown/hidden
+   from panel.js's mouseover/mouseout on #colHead. */
+.statTooltip { position: fixed; z-index: 60; background: var(--ink-800); border: 1px solid var(--border-default); color: var(--text-primary); font: var(--type-ui); font-size: 11px; padding: 5px 9px; border-radius: var(--radius-sm); box-shadow: var(--shadow-menu); pointer-events: none; white-space: nowrap; }
+
 /* flag menu (favorite / avoid) */
 .flagMenu { position: fixed; z-index: 50; min-width: 150px; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 4px; display: flex; flex-direction: column; }
 .flagMenu button { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border-radius: var(--radius-sm); font: var(--type-ui); font-size: var(--text-sm); cursor: pointer; width: 100%; color: var(--text-primary); }
@@ -297,6 +364,27 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .flagMenu .fm-avoid.fm-current { color: var(--red-500); font-weight: 700; }
 .flagMenu .fm-clear { color: var(--text-disabled); border-top: 1px solid var(--border-subtle); margin-top: 2px; padding-top: 8px; border-radius: 0; }
 .flagMenu .fm-clear:disabled { cursor: not-allowed; }
+
+/* Stat picker (backlog: "filter and choose stats for each position") — a
+   themed dropdown, same floating-menu pattern as .flagMenu above, listing
+   every STAT_OPTION_DEFS entry per position as a checkbox so any number
+   (0+) can be shown at once, not just the fixed 3 the board used to cap
+   at. See openStatPicker/toggleStatPref in panel.js. */
+/* Compact 4-across layout — one narrow column per position, checkbox +
+   short label only (the long description moved to a native title=""
+   tooltip instead of its own visible line — see renderStatPickerPanel in
+   panel.js). Previously one description-per-row made this list tall enough
+   to need real scrolling for a 24-option picker; this fits QB/RB/WR/TE
+   side by side in the same ~6-row height as a single position used to
+   take, no horizontal scrollbar (fixed grid, not overflow-x). */
+.statPickerPanel { position: fixed; z-index: 50; width: 360px; max-height: 70vh; overflow-y: auto; overflow-x: hidden; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); padding: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 8px; }
+.statPickerPanel[hidden] { display: none; } /* author display:grid above otherwise beats the UA [hidden]{display:none} rule */
+.statPickerGroup { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.statPickerGroup .spgTitle { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; padding: 2px 2px 4px; }
+.statPickerOpt { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 2px; border-radius: var(--radius-sm); cursor: pointer; font: var(--type-ui); font-size: var(--text-xs); color: var(--text-primary); }
+.statPickerOpt:hover { background: var(--surface-row-hover); }
+.statPickerOpt input { margin: 0; flex: none; }
+.statPickerOpt .spoLabel { font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 #toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%) translateY(120%);
@@ -363,12 +451,15 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </div>
       <button class="chip" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">Show taken</button>
       <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>
+      <button class="chip" id="statPickerBtn" title="Choose which stat columns show for each position">Stats ▾</button>
     </div>
   </div>
+  <div id="statPickerPanel" class="statPickerPanel" hidden></div>
   <div id="colHead">
     <span class="c-flag"></span>
     <span class="c-rank">Rank</span>
     <span class="c-name">Player</span>
+    <span class="c-stat" id="statHead"><!-- filled by renderStatHeaderGroups() in panel.js, on every renderBoard() --></span>
     <span class="c-val">ADP Value</span>
     <span class="c-pos">Pos</span>
   </div>
