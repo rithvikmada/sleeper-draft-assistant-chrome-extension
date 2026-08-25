@@ -977,6 +977,62 @@ projections + prior-year role stats) and the later per-game/per-snap set
   override if its visible state sets `display` to anything other than
   `block`.
 
+## Board UI polish batch (2026-08-25)
+A batch of small board-window (`panel.html`/`panel.js`) requests, done together:
+- **Light mode** — `html[data-theme="light"]` in `panel.html` is a straight
+  token swap of the same ink/text/surface/border custom properties dark mode
+  already defines (signal colors, position colors, spacing/type scale are
+  untouched). Toggled via the new sun/moon button in the header
+  (`themeToggleBtn`/`applyTheme()` in `panel.js`), persisted to
+  `chrome.storage.local` under `K_THEME` (`boardTheme`), applied to
+  `<html>` (not `<body>`) so it's set before first paint.
+- **Status dropdown** — a new header button (`statusBtn`/`#statusPanel`,
+  `renderStatusPanel()` in `panel.js`) shows the current Sleeper sync line
+  plus a "when was each enabled source last imported" list (ranking sources
+  + ADP sources together), each flagged stale past 24h
+  (`SOURCE_STALE_MS`). Purely a glance aid — doesn't drive any other
+  behavior. Same floating-dropdown mechanics as Settings below.
+- **Settings is a floating dropdown now, not a full-header drawer.**
+  `#settingsPanel` used to be an inline block that pushed the whole header
+  open at its full width (a real complaint — "settings opens up the full
+  width of the viewport"). It's now `position:fixed`, a fixed 304px width,
+  anchored under `#settingsBtn` on open via `getBoundingClientRect`
+  (`openSettingsPanel()`/`closeSettingsPanel()`/`positionFloatingPanel()`),
+  closes on outside click, and only one of Settings/Status is open at a
+  time. `startPolling()`/`stopPolling()` now call these helpers instead of
+  toggling `.collapsed`/`.on` directly.
+- **Draft actions / Double-click-to-draft are real toggle switches now**,
+  not text-swapping "On"/"Off" chip buttons — `.switchTrack`/`.switchThumb`
+  CSS in `panel.html`, `role="switch"`/`aria-checked` wired in
+  `panel.js`. These are settings; a switch reads as a setting at a glance
+  where a button that changes its own label didn't.
+  **Sleeper token instructions clarified** — the info popover
+  (`sleeperTokenInfo` click handler) now explicitly says to capture the
+  GraphQL request from a Sleeper **mock draft tab** in the browser, not from
+  this extension's own board window (which has no GraphQL traffic of its
+  own to capture).
+- **Removed the "Sleeper live sync · Full PPR" text** next to the logo — was
+  static, non-interactive, and redundant with the status line already below
+  it.
+- **Position-filtering the board now also defaults the stat-group order**,
+  not just clicking a player. `effectiveStatPos()` in `panel.js` returns the
+  explicitly-selected player's position if one is selected (still wins),
+  else the current `posFilter` if it's a single position (QB/RB/WR/TE, not
+  ALL/RB/WR), else null (default WR/RB/QB/TE order) — used everywhere
+  `statGroupOrder(selectedStatPos)` used to be called directly. Reasoning:
+  once the board is filtered to one position, every visible row already has
+  that position's own group as the only one with real data, so clicking a
+  row to bring it forward would mostly be a no-op anyway.
+- **Left position-color bar restored** — an early version of this project
+  had one before dots/squares were tried (see `sourceDotHtml`, still used
+  for source icons elsewhere and NOT what this is). `.row2` now gets a 3px
+  `border-left` colored via `data-pos` attribute (`--pos-qb`/`--pos-rb`/
+  `--pos-wr`/`--pos-te`), replacing `.row2.mine`'s old `box-shadow: inset 2px
+  0 0 var(--accent)` (which would've collided with a border-based bar) —
+  `.mine` now only tints the row background, the position color owns the
+  left edge unconditionally. Row `padding-left` dropped from 16px to 13px so
+  border(3px)+padding(13px) still lines up with `#colHead`'s 16px padding.
+
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source
 isolation (previously had a side effect of also disabling the source), a

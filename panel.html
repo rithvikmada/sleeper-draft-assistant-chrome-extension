@@ -75,6 +75,32 @@
   --row-height:40px;
 }
 
+/* Light mode — a straight token-swap of the same custom properties dark mode
+   defines above (see themeToggleBtn / applyTheme in panel.js). Toggled via
+   [data-theme] on <html>, persisted to chrome.storage (K_THEME). Position
+   colors, signal colors (green/red/cyan/etc), and spacing/type scale are
+   left untouched — only the ink/chalk surface+text tokens actually invert. */
+html[data-theme="light"] {
+  --ink-950:#FFFFFF; --ink-900:#F7F8F7; --ink-850:#F0F2F0; --ink-800:#E7EAE7; --ink-750:#DEE2DE;
+  --ink-700:#D2D7D2; --ink-600:#C2C8C2; --ink-500:#A9B0A8; --ink-400:#848C83; --ink-300:#5C645B;
+  --ink-200:#3C443B; --ink-100:#242A23; --ink-050:#12160F; --white:#FFFFFF;
+
+  --surface-app:var(--ink-900); --surface-panel:#FFFFFF; --surface-raised:#FFFFFF;
+  --surface-row-hover:rgba(0,0,0,.035); --surface-sunken:var(--ink-850);
+  --surface-scrim:rgba(20,24,20,.45); --surface-input:#FFFFFF;
+
+  --text-primary:var(--ink-050); --text-secondary:var(--ink-200); --text-muted:var(--ink-300);
+  --text-disabled:var(--ink-400); --text-accent:var(--chalk-700);
+
+  --border-subtle:rgba(0,0,0,.07); --border-default:rgba(0,0,0,.13);
+  --border-strong:rgba(0,0,0,.22); --border-accent:var(--chalk-a40);
+
+  --on-accent:#1A1400;
+
+  --edge-top:inset 0 1px 0 rgba(255,255,255,.5);
+  --shadow-menu:0 16px 40px -12px rgba(20,24,20,.28),0 0 0 1px rgba(0,0,0,.08);
+}
+
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 /* html/body used to just grow with content and rely on the whole page
@@ -217,16 +243,45 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #status.pulse { animation: pulse2 .5s ease; }
 @keyframes pulse2 { 0% { opacity: .35; } 100% { opacity: 1; } }
 
-#settingsPanel { overflow: hidden; max-height: 200px; opacity: 1; transition: max-height var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out), margin var(--dur-base) var(--ease-out); background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-top: 4px; }
-#settingsPanel.collapsed { max-height: 0; opacity: 0; margin-top: 0; border-color: transparent; }
-#settingsPanel .inner { padding: 12px 14px; display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-#settingsPanel .field { display: flex; flex-direction: column; gap: 4px; }
-#draftId { width: 260px; }
-#myRoster { width: 84px; }
-#refreshRow { display: flex; align-items: center; gap: 10px; padding: 0 14px 12px; }
+/* Settings is a floating dropdown now (2026-08-25), not an inline drawer
+   that pushed the whole header open to the header's full width. Anchored
+   under #settingsBtn on open (see openSettingsPanel in panel.js), fixed
+   304px width so it reads as one clean control surface instead of a wide
+   strip of loosely-related fields. */
+#settingsPanel { position: fixed; z-index: 60; width: 304px; opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); }
+#settingsPanel.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+#settingsPanel.collapsed { opacity: 0; transform: translateY(-4px); pointer-events: none; } /* legacy alias — see panel.js */
+#settingsPanel .inner { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+#settingsPanel .fieldRow { display: flex; gap: 10px; align-items: flex-end; }
+#settingsPanel .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+#settingsPanel .switchField { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+#draftId { width: 100%; }
+#myRoster { width: 100%; }
+#refreshRow { display: flex; align-items: center; gap: 10px; padding: 0 14px 14px; }
 #lastSync, #cacheCountdown { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); }
 #cacheCountdown.fresh { color: var(--green-500); }
 #refreshBtn.spin { opacity: .55; }
+
+/* real toggle switches (Draft actions / Double-click to draft) — replacing
+   the old text-swapping "On"/"Off" chip buttons, per direct request: these
+   are settings, and a switch reads as a setting at a glance where a plain
+   button didn't. */
+.switchTrack { width: 34px; height: 20px; flex: none; border-radius: 999px; background: var(--ink-600); border: 1px solid var(--border-default); position: relative; cursor: pointer; padding: 0; transition: var(--transition-control); }
+.switchTrack.on { background: var(--accent); border-color: var(--accent); }
+.switchThumb { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: var(--ink-100); transition: transform var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
+.switchTrack.on .switchThumb { transform: translateX(14px); background: var(--on-accent); }
+
+/* status dropdown — sync health + per-source last-updated at a glance */
+#statusPanel { position: fixed; z-index: 60; width: 300px; max-height: 70vh; overflow-y: auto; opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 12px; }
+#statusPanel.open { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.statusSectionLabel { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); margin: 10px 0 4px; }
+.statusSectionLabel:first-child { margin-top: 0; }
+.statusSyncLine { display: flex; align-items: center; gap: 6px; font: var(--type-body); font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+.statusSrcRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; font: var(--type-ui); font-size: 12px; }
+.statusSrcRow .nm { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.statusSrcRow .age { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.statusSrcRow .age.stale { color: var(--orange-500); }
+.statusEmpty { font: var(--type-body); font-size: 12px; color: var(--text-muted); }
 
 /* EXPERIMENTAL (queue/draft-write branch) — the Sleeper queue popover:
    opened from the "Queue ▾" chip in #filters (option B of a few layouts
@@ -336,10 +391,21 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .tierDiv .num { color: var(--accent); }
 .tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
 
-.row2 { display: flex; align-items: center; gap: 10px; height: var(--row-height); padding: 0 16px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
+/* Left position-color bar (2026-08-25) — brought back from an early version
+   of this project. Dots/squares next to the position tag on the right were
+   tried in between (see sourceDotHtml, still used elsewhere for source
+   icons) but the user's stated preference is a solid color bar down the
+   LEFT edge of the row, matching the position badge's own color. Plain CSS
+   border-left (not box-shadow, which .row2.mine used to own) so it can't
+   collide with the "mine" highlight, which now only tints the background. */
+.row2 { display: flex; align-items: center; gap: 10px; height: var(--row-height); padding: 0 16px 0 13px; border-bottom: 1px solid var(--border-subtle); border-left: 3px solid transparent; cursor: pointer; transition: background-color var(--dur-fast) var(--ease-out); }
 .row2:hover { background: var(--surface-row-hover); }
 .row2.gone { opacity: .42; }
-.row2.mine { background: var(--chalk-a12); box-shadow: inset 2px 0 0 var(--accent); }
+.row2.mine { background: var(--chalk-a12); }
+.row2[data-pos="QB"] { border-left-color: var(--pos-qb); }
+.row2[data-pos="RB"] { border-left-color: var(--pos-rb); }
+.row2[data-pos="WR"] { border-left-color: var(--pos-wr); }
+.row2[data-pos="TE"] { border-left-color: var(--pos-te); }
 .rowFlagBtn { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; }
 /* EXPERIMENTAL (queue/draft-write branch) — same 16x16 icon-button shape as
    .rowFlagBtn, plus a hover tint and an "on" state for the queue toggle. The
@@ -476,11 +542,12 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div class="headTop">
       <div class="brandRow">
         <span class="brand2">4th<span class="amp">&amp;</span>Go</span>
-        <span class="syncLabel">Sleeper live sync &middot; Full PPR</span>
       </div>
       <div class="headRight">
         <span id="pickCounter"></span>
         <button id="openManager" class="btn outline" data-tip="Open the Rankings Manager">Manager</button>
+        <button id="themeToggleBtn" class="iconBtn2" data-tip="Switch between dark and light" aria-label="Toggle theme"></button>
+        <button id="statusBtn" class="iconBtn2" data-tip="Sleeper connection &amp; source freshness at a glance" aria-label="Status"></button>
         <button id="settingsBtn" class="iconBtn2" data-tip="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
       </div>
     </div>
@@ -489,18 +556,22 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
     </div>
 
-    <div id="settingsPanel">
+    <div id="settingsPanel" class="collapsed">
       <div class="inner">
-        <div class="field">
-          <span class="fieldLabel">Sleeper draft ID</span>
-          <div class="input2"><input id="draftId" placeholder="auto-detects from tab" /></div>
+        <div class="fieldRow">
+          <div class="field">
+            <span class="fieldLabel">Sleeper draft ID</span>
+            <div class="input2"><input id="draftId" placeholder="auto-detects from tab" /></div>
+          </div>
+          <div class="field" style="flex:0 0 84px">
+            <span class="fieldLabel">Your slot</span>
+            <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" data-tip="Your draft slot / roster number" /></div>
+          </div>
         </div>
-        <div class="field">
-          <span class="fieldLabel">Your slot</span>
-          <div class="input2"><input id="myRoster" type="number" min="1" placeholder="#" data-tip="Your draft slot / roster number" /></div>
+        <div class="fieldRow">
+          <button id="connectBtn" class="btn primary" style="flex:1">Sync</button>
+          <button id="stopBtn" class="btn danger" style="display:none;flex:1">Stop</button>
         </div>
-        <button id="connectBtn" class="btn primary">Sync</button>
-        <button id="stopBtn" class="btn danger" style="display:none">Stop</button>
         <!-- EXPERIMENTAL (queue/draft-write branch). Off by default — the
              board's normal experience (rows, flag button, everything else)
              renders identically whether this is on or off; the toggle below
@@ -510,9 +581,9 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
              when this window closes. The token field only appears once this
              is on — everything the feature adds is gated on BOTH being true
              (see sleeperWriteReady() in panel.js), not just this toggle. -->
-        <div class="field">
+        <div class="switchField">
           <span class="fieldLabel">Draft actions</span>
-          <button id="sleeperWriteToggle" class="chip" data-tip="Turn on queue/draft buttons on the board (experimental — see the info icon once enabled for how it works)">Off</button>
+          <button id="sleeperWriteToggle" class="switchTrack" role="switch" aria-checked="false" data-tip="Turn on queue/draft buttons on the board (experimental — see the info icon once enabled for how it works)"><span class="switchThumb"></span></button>
         </div>
         <div class="field" id="sleeperTokenField" style="display:none">
           <span class="fieldLabel">Sleeper token <button type="button" id="sleeperTokenInfo" class="infoBtn" aria-label="How to get your Sleeper token">i</button></span>
@@ -522,16 +593,15 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
              not a replacement for it (see K_SLEEPER_DBLCLICK_DRAFT in
              panel.js). Defaults on. Only shown once Draft actions is on —
              it's meaningless otherwise. -->
-        <div class="field" id="sleeperDblClickField" style="display:none">
+        <div class="switchField" id="sleeperDblClickField" style="display:none">
           <span class="fieldLabel">Double-click to draft</span>
-          <button id="sleeperDblClickToggle" class="chip active" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too).">On</button>
+          <button id="sleeperDblClickToggle" class="switchTrack on" role="switch" aria-checked="true" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too)."><span class="switchThumb"></span></button>
         </div>
         <!-- EXPERIMENTAL — lets someone confirm their tab/token setup works
              BEFORE a draft starts, when there's nothing safe to test a real
              queue/draft action against yet. See testSleeperConnection in
              panel.js — a read-only query, no side effects on Sleeper. -->
         <div class="field" id="sleeperTestField" style="display:none">
-          <span class="fieldLabel">&nbsp;</span>
           <div style="display:flex;align-items:center;gap:8px;height:32px">
             <button id="sleeperTestBtn" class="btn secondary" data-tip="Runs a real, harmless check against Sleeper — confirms the tab and token both actually work">Test</button>
             <span id="sleeperTestStatus" class="testStatus"></span>
@@ -544,6 +614,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
         <span id="cacheCountdown"></span>
       </div>
     </div>
+    <div id="statusPanel"></div>
 
     <div id="teamCounts"></div>
     <div id="sourceList"></div>
