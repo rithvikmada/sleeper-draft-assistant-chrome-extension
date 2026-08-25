@@ -62,6 +62,9 @@ const K_SLEEPER_IDS = "sleeperPlayerIds"; // { updatedAt, ids: { playerKey: slee
                                      // fetchSleeperPlayerIdMap below. Needed to queue/draft a player through
                                      // Sleeper's write API, which addresses players by Sleeper's own numeric
                                      // player_id, not this project's playerKey.
+const K_INJURIES = "playerInjuries"; // { updatedAt, injuries: { playerKey: {status,bodyPart,updatedAt} } } —
+                                     // read off the same projections response fetchSleeperPlayerIdMap already
+                                     // walks. See INJURY_META/injuryBadge below.
 
 // ---------- DOM helpers shared by both surfaces ----------
 // Identical in panel.js and rankings-manager.js before this — both are
@@ -1486,6 +1489,14 @@ async function saveStatsToStorage(year, players) {
 // confirmed via a direct query before wiring this in, not assumed). No new
 // fetch, no new host permission — this just captures a field that request
 // already returns and was previously discarded.
+//
+// Also captures injury_status/injury_body_part off the same nested `player`
+// object, for the same reason (same request, previously discarded field) —
+// see the injury-status feature's own comment above `INJURY_META` below.
+// Sleeper does NOT expose the underlying news/story text on this endpoint —
+// only status + body part, no reporting copy — so that's all this can ever
+// surface; don't go looking for an `injury_notes` field to display, it's not
+// reliably populated on the public projections response.
 async function fetchSleeperPlayerIdMap() {
   const year = new Date().getFullYear();
   const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
@@ -1494,12 +1505,20 @@ async function fetchSleeperPlayerIdMap() {
   const data = await res.json();
   const raw = Array.isArray(data) ? data : [];
   const ids = {};
+  const injuries = {};
   raw.forEach((p) => {
     if (!p.player || !p.player_id || !POSITIONS.includes(p.player.position)) return;
     const key = playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position);
     ids[key] = String(p.player_id);
+    if (p.player.injury_status) {
+      injuries[key] = {
+        status: p.player.injury_status,
+        bodyPart: p.player.injury_body_part || "",
+        updatedAt: p.player.injury_start_date || null,
+      };
+    }
   });
-  return ids;
+  return { ids, injuries };
 }
 
 async function saveSleeperIdMapToStorage(ids) {
@@ -1509,6 +1528,56 @@ async function saveSleeperIdMapToStorage(ids) {
 async function loadSleeperIdMap() {
   const v = await chrome.storage.local.get([K_SLEEPER_IDS]);
   return (v[K_SLEEPER_IDS] && v[K_SLEEPER_IDS].ids) || {};
+}
+
+async function saveInjuriesToStorage(injuries) {
+  await chrome.storage.local.set({ [K_INJURIES]: { updatedAt: Date.now(), injuries } });
+}
+
+async function loadInjuries() {
+  const v = await chrome.storage.local.get([K_INJURIES]);
+  return (v[K_INJURIES] && v[K_INJURIES].injuries) || {};
+}
+
+// Separate from loadInjuries() above (which every render site calls just for
+// the map) — only the status dropdown's freshness line needs the timestamp,
+// so this stays its own small read rather than changing loadInjuries()'s
+// return shape for every caller.
+async function loadInjuriesUpdatedAt() {
+  const v = await chrome.storage.local.get([K_INJURIES]);
+  return (v[K_INJURIES] && v[K_INJURIES].updatedAt) || null;
+}
+
+// ---------- injury status badge ----------
+// Sleeper's own injury_status strings, mapped to a short code + a severity
+// bucket that drives color. Anything not in this table (a status Sleeper
+// adds later, or a typo'd value) falls back to a 3-letter clip of the raw
+// string with the neutral "other" severity, rather than being dropped —
+// same "unrecognized label passes through, doesn't vanish" principle as
+// normalizeTierLabel() elsewhere in this file.
+const INJURY_META = {
+  Questionable: { code: "Q", sev: "q", label: "Questionable" },
+  Doubtful: { code: "D", sev: "d", label: "Doubtful" },
+  Out: { code: "O", sev: "o", label: "Out" },
+  IR: { code: "IR", sev: "ir", label: "Injured Reserve" },
+  PUP: { code: "PUP", sev: "other", label: "Physically Unable to Perform" },
+  NA: { code: "NA", sev: "other", label: "Not Active" },
+  Suspended: { code: "SUS", sev: "other", label: "Suspended" },
+  DNR: { code: "DNR", sev: "other", label: "Did Not Report" },
+  COV: { code: "COV", sev: "other", label: "COVID-19" },
+};
+
+// inj: { status, bodyPart, updatedAt } | undefined, from the K_INJURIES map.
+// opts.useTitle: rankings-manager.js has no data-tip hover-tooltip infra (see
+// panel.js's showTip/hideTip), so it renders a plain native title="" instead —
+// same fallback flagBadge's callers already split on per-surface.
+function injuryBadge(inj, opts) {
+  if (!inj || !inj.status) return "";
+  const meta = INJURY_META[inj.status] || { code: inj.status.slice(0, 3).toUpperCase(), sev: "other", label: inj.status };
+  const tipText = inj.bodyPart ? `${meta.label} — ${inj.bodyPart}` : meta.label;
+  const { useTitle = false } = opts || {};
+  const attr = useTitle ? `title="${esc(tipText)}"` : `data-tip="${esc(tipText)}"`;
+  return `<span class="injBadge t-${meta.sev}" ${attr}>${esc(meta.code)}</span>`;
 }
 
 // Silent auto-refresh, called on load by both surfaces (panel.js's board
@@ -1530,10 +1599,11 @@ async function autoRefreshAdpAndStats() {
     console.warn("[4th&Go] auto-refresh of stat columns failed", e);
   }
   try {
-    const ids = await fetchSleeperPlayerIdMap();
+    const { ids, injuries } = await fetchSleeperPlayerIdMap();
     await saveSleeperIdMapToStorage(ids);
+    await saveInjuriesToStorage(injuries);
   } catch (e) {
-    console.warn("[4th&Go] auto-refresh of Sleeper player IDs failed", e);
+    console.warn("[4th&Go] auto-refresh of Sleeper player IDs/injuries failed", e);
   }
 }
 

@@ -189,6 +189,21 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .badge2.t-neutral { background: rgba(255,255,255,.06); color: var(--text-secondary); border-color: var(--border-default); }
 .badge2.t-danger { background: var(--red-a12); color: var(--red-500); border-color: rgba(255,90,90,.28); }
 
+/* Injury status badge (Q/D/O/IR/etc) — same colored-pill language as .badge2
+   but tighter, so it sits inline next to a name without pushing row height.
+   Uses data-tip (see showTip/hideTip) for its hover tooltip, built in
+   shared.js's injuryBadge(). Selectors repeat `.injBadge` to outrank
+   `.quadCell .nm2 span` (BEER grid, panel.html ~line 487) — that rule's
+   descendant specificity would otherwise win over a single-class badge
+   selector and silently strip the color/font, since the BEER grid is the
+   one place this badge lands inside a bare `span` ancestor rule. */
+.injBadge.injBadge { display: inline-flex; align-items: center; justify-content: center; flex: none; height: 15px; min-width: 15px; padding: 0 4px; border-radius: var(--radius-xs); font: var(--type-label); font-size: 9px; letter-spacing: .02em; text-transform: uppercase; border: 1px solid; cursor: default; }
+.injBadge.injBadge.t-q { background: var(--chalk-a12); color: var(--chalk-500); border-color: var(--chalk-a24); }
+.injBadge.injBadge.t-d { background: var(--orange-a12); color: var(--orange-500); border-color: rgba(255,138,61,.28); }
+.injBadge.injBadge.t-o { background: var(--red-a12); color: var(--red-500); border-color: rgba(255,90,90,.28); }
+.injBadge.injBadge.t-ir { background: rgba(255,90,90,.22); color: var(--red-500); border-color: rgba(255,90,90,.5); }
+.injBadge.injBadge.t-other { background: var(--violet-a12); color: var(--violet-500); border-color: rgba(167,139,250,.28); }
+
 /* Position count + league-rank fused into one pill (backlog #13) — the count
    half keeps the exact same look as a plain badge2, the rank half is a thin
    strip underneath colored on a continuous green (1st) -> red (last) scale,
@@ -404,7 +419,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .avatarCircle.sm { width: 24px; height: 24px; font-size: 9px; border-width: 1.5px; }
 .avatarCircle.sm .avatarBadge { width: 11px; height: 11px; font-size: 5px; border-width: 1px; right: -2px; bottom: -2px; }
 .avatarBadge { position: absolute; right: -3px; bottom: -3px; width: 15px; height: 15px; border-radius: 999px; background: var(--ink-700) center/cover no-repeat; border: 1.5px solid var(--surface-raised); font-family: var(--font-mono); font-size: 6px; font-weight: 800; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.rosterName { font: var(--type-ui); font-size: 13px; color: var(--text-primary); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rosterNameRow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.rosterName { font: var(--type-ui); font-size: 13px; color: var(--text-primary); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .rosterMeta { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 .rosterPick { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; color: var(--text-primary); text-align: right; white-space: nowrap; }
 .rosterPick .rd { display: block; font-size: 9px; font-weight: 600; color: var(--text-muted); letter-spacing: .01em; margin-top: 1px; }

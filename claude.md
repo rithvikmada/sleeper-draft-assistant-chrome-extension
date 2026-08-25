@@ -1425,6 +1425,93 @@ any implementation cost was spent.
   the user) — revisit if a value-aware FLEX assignment is ever wanted
   instead.
 
+## Injury status badges (added 2026-08-25, own worktree/branch)
+Mocked up first as a published Artifact (six surfaces shown in one page: the
+badge/legend, tier board row, Best Picks card, BEER grid, Sleeper queue
+popover, Team/Roster popover) before any code was written, same process as
+the Team/Roster dropdown above — caught the CSS-specificity/tooltip-pattern
+questions before implementation cost was spent.
+
+- **Data source — one new fetch pass folded into an existing function, not a
+  new endpoint.** `fetchSleeperPlayerIdMap()` (`shared.js`) already walks
+  every player in the `/projections/nfl/{year}` response to build the
+  `sleeperIds` map (needed for the queue/draft-write feature); it now ALSO
+  reads `p.player.injury_status` / `injury_body_part` / `injury_start_date`
+  off the same nested object in the same loop and returns `{ ids, injuries }`
+  instead of just `ids`. No new host permission, no new HTTP request. Stored
+  under a new `K_INJURIES` key (`playerInjuries`) via
+  `saveInjuriesToStorage()`/`loadInjuries()`, refreshed by the same
+  `autoRefreshAdpAndStats()` silent background pass (`shared.js`) both
+  surfaces already call on load — manual and automatic paths can't drift
+  apart because it's the same function.
+- **The "actual news/reporting" idea from the original ask was deliberately
+  cut, not silently dropped.** Sleeper's public projections response has
+  `injury_status`/`injury_body_part`, but not the editorial story text — that's
+  licensed content Sleeper doesn't expose on this (or any other) endpoint this
+  extension can reach. The mockup showed a greyed-out "unavailable" placeholder
+  in that tooltip slot specifically so this was a visible, informed choice
+  rather than an unexplained gap — confirmed with the user before building,
+  who agreed to skip it. If a future session is tempted to look for an
+  `injury_notes` field: it's been checked, don't re-litigate.
+- **`injuryBadge(inj, opts)`** (`shared.js`) is the single render function for
+  every surface — a small colored `Q`/`D`/`O`/`IR`/etc. pill, following the
+  same "one function, called from everywhere" precedent as `flagBadge()` and
+  `avatarHtml()`. `INJURY_META` maps Sleeper's own status strings to a short
+  code + severity bucket (`q`=gold/Questionable, `d`=orange/Doubtful,
+  `o`=red/Out, `ir`=darker red/Injured Reserve, `other`=violet/everything
+  else — PUP, NA, Suspended, DNR, COVID). An unrecognized status string still
+  renders (3-letter clip of the raw value, `other` bucket) rather than
+  vanishing — same "don't silently drop an unrecognized label" principle
+  `normalizeTierLabel()` follows elsewhere in this file.
+- **Two tooltip mechanisms, one per surface, matching each surface's existing
+  infra — not a shared new one.** The board window has a themed hover
+  tooltip system (`data-tip` + `showTip`/`hideTip` in panel.js); the Rankings
+  Manager has no such infra and uses plain `title=""` everywhere (see
+  `flagBadge`'s own callers). `injuryBadge(inj, { useTitle: true })` switches
+  between the two — panel.js's five call sites (tier board row, Best Picks
+  card, BEER grid, Sleeper queue popover, Team/Roster popover) all use the
+  `data-tip` default; rankings-manager.js's row passes `useTitle: true`.
+- **A real CSS-specificity bug was caught and fixed before shipping, not
+  after a bug report.** `.quadCell .nm2 span` (the BEER grid's existing tier-
+  chip styling, panel.html) is a two-class-plus-element selector that would
+  have silently outranked a plain `.injBadge.t-q`-style selector on the BEER
+  grid specifically (the one place this badge lands inside a bare `span`
+  ancestor rule) — the badge would have rendered with the wrong color/font,
+  looking "broken" only in that one widget. Fixed by repeating `.injBadge`
+  in its own selectors (`.injBadge.injBadge.t-q`, etc.) to force a higher
+  specificity than any two-class-plus-element combinator elsewhere in the
+  file, verified with a throwaway stubbed-`chrome.storage` HTML harness
+  (same pattern as the Stage 2 audit's escaping-fix verification) before
+  removing it — screenshotted the three severity colors rendering correctly
+  side by side.
+- **`rankings-manager.js`/`.html` gets the badge too, lower ceremony than the
+  board.** Spliced into the existing name cell right after `flagBadge()`
+  (`renderTable()`, same row). Its own `.injBadge` CSS lives in `theme.css`
+  (the shared "turf" stylesheet `rankings-manager.html` still uses — see the
+  Design language section above for why panel.html no longer links it) using
+  that theme's own token names, plus two new tokens (`--orange`, `--violet`)
+  theme.css didn't previously need. No specificity conflict there — the
+  manager's row markup doesn't have an equivalent bare-`span` ancestor rule.
+- **Staleness surfaced in the status dropdown, same pattern as source
+  freshness.** `loadInjuriesUpdatedAt()` (`shared.js`) reads `K_INJURIES`'s
+  own `updatedAt`, separate from `loadInjuries()` (which every render site
+  calls just for the map) so that timestamp isn't threaded through every
+  badge lookup. `renderStatusPanel()` (panel.js) adds an "Injury status"
+  section below "Source freshness" showing "Sleeper injury data" + a
+  relative age, flagged stale past the same `SOURCE_STALE_MS` (24h) the
+  ranking/ADP sources already use — this isn't a user-imported source, so it
+  doesn't belong in that list, but "how old is what I'm looking at" is the
+  same question either way. Direct motivation: a Questionable tag fetched
+  Thursday can be stale by Sunday morning with nothing on screen saying so.
+- **Tests**: `injuryBadge`/`INJURY_META` added to `test.js`'s exported-names
+  list, with a new block covering: no-injury renders nothing, each severity
+  bucket maps correctly (including IR staying visually distinct from Out),
+  an unrecognized status still renders instead of vanishing, the
+  `useTitle`/`data-tip` attribute switch, and that a status string containing
+  a raw double-quote can't break out of the attribute (an escaping check,
+  not an XSS fix — see the Stage 2 audit's own escaping-fix note above for
+  why that distinction matters under MV3's CSP).
+
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source
 isolation (previously had a side effect of also disabling the source), a

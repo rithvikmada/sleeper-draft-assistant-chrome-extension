@@ -12,6 +12,7 @@ let sources = [];
 let draft = { picks: [], manualKeys: [], draftId: null, myRosterId: null };
 let adpSources = []; // multiple ADP sources can be enabled at once — see makeAdpSource in shared.js
 let flags = {}; // playerKey -> "favorite" | "avoid"
+let injuries = {}; // playerKey -> {status,bodyPart,updatedAt}, loaded from K_INJURIES — see injuryBadge() in shared.js
 let merges = {}; // variantKey → canonicalKey, unmatched player reconciliation
 let posFilter = "ALL";
 let showTaken = false; // independent toggle, layered on top of posFilter — not a 6th filter option
@@ -309,7 +310,7 @@ function renderTable(rows) {
     const rowFlagClass = flag === "favorite" ? " favRow" : flag === "avoid" ? " avoidRow" : "";
     return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pname="${esc(r.name)}" data-ppos="${esc(r.pos)}">
       <td class="l" style="color:var(--dim)">${i + 1}</td>
-      <td class="l nm" title="Right-click to find &amp; merge near-match orphans">${flagBadge(flag)}${esc(r.name)} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
+      <td class="l nm" title="Right-click to find &amp; merge near-match orphans">${flagBadge(flag)}${esc(r.name)} ${injuryBadge(injuries[r.key], { useTitle: true })} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
       <td><span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}</span></td>
       <td>${tier}</td>
       <td style="color:var(--text)">${r.consensus?.toFixed(1) ?? "—"}</td>
@@ -940,6 +941,10 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     projMap = await loadProjections();
     renderAll();
   }
+  if (changes[K_INJURIES]) {
+    injuries = await loadInjuries();
+    renderAll();
+  }
 });
 
 // ---------- seed built-in sources ----------
@@ -974,6 +979,7 @@ async function ensureBuiltinSources() {
   flags = await loadFlags();
   merges = await loadMerges();
   projMap = await loadProjections();
+  injuries = await loadInjuries();
   const v = await chrome.storage.local.get([K_ROSTER]);
   if (draft.myRosterId == null && v[K_ROSTER] != null) draft.myRosterId = Number(v[K_ROSTER]);
   renderAll();

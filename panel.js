@@ -209,6 +209,8 @@ let currentPickNo = null; // next pick about to happen (picks synced so far + 1)
 // WRITE actions" section for the actual mechanism (script injection into
 // your own open Sleeper tab, no token ever stored here).
 let sleeperIds = {}; // playerKey -> Sleeper's own numeric player_id, loaded from K_SLEEPER_IDS
+let injuries = {}; // playerKey -> {status,bodyPart,updatedAt}, loaded from K_INJURIES — see injuryBadge() in shared.js
+let injuriesUpdatedAt = null; // when K_INJURIES was last written — surfaced in the status dropdown, see renderStatusPanel
 
 // This draft's own roster shape, straight from Sleeper — GET /v1/draft/{id}
 // returns a `settings` object with real per-position slot counts (slots_qb,
@@ -323,11 +325,19 @@ function renderStatusPanel() {
         return `<div class="statusSrcRow"><span class="nm">${esc(s.name)}</span><span class="age${stale ? " stale" : ""}">${esc(timeAgoLabel(s.importedAt))}</span></div>`;
       }).join("")
     : `<div class="statusEmpty">No sources enabled.</div>`;
+  // Same staleness threshold/coloring as the ranking/ADP sources above —
+  // this is Sleeper's own injury_status data, not a user-imported source, so
+  // it doesn't belong in that list, but "how old is what I'm looking at"
+  // is the exact same question a mid-draft glance needs answered here too.
+  const injStale = injuriesUpdatedAt && (Date.now() - injuriesUpdatedAt) > SOURCE_STALE_MS;
+  const injRow = `<div class="statusSrcRow"><span class="nm">Sleeper injury data</span><span class="age${injStale ? " stale" : ""}">${esc(timeAgoLabel(injuriesUpdatedAt))}</span></div>`;
   $("statusPanel").innerHTML = `
     <div class="statusSectionLabel">Sleeper sync</div>
     ${syncLine}
     <div class="statusSectionLabel">Source freshness</div>
-    ${rows}`;
+    ${rows}
+    <div class="statusSectionLabel">Injury status</div>
+    ${injRow}`;
 }
 function openStatusPanel() {
   closeSettingsPanel();
@@ -476,6 +486,7 @@ function renderBest() {
       </div>
       <div class="nm2">
         <strong>${p ? esc(p.name) : "—"}</strong>
+        ${p ? injuryBadge(injuries[p.key]) : ""}
         ${p && p.tier ? `<span>T-${esc(p.tier)}</span>` : ""}
       </div>
       <span class="vbdVal">${val !== undefined ? `BEER ${val >= 0 ? "+" : ""}${val.toFixed(1)}` : ""}</span>
@@ -651,6 +662,7 @@ function renderBoard() {
         <span class="nmCell2">
           <span class="nmLine">
             <span class="nmText">${esc(r.name)}</span>
+            ${injuryBadge(injuries[r.key])}
             <span class="team2">${esc(r.team || "")}</span>
             ${takenTag}
           </span>
@@ -966,7 +978,7 @@ function renderRosterPopover() {
     return `<div class="rosterRow">
       ${slotChipHtml(slotLabel)}
       ${avatarHtml(pick.key, pick.name, pick.pos, team)}
-      <div><div class="rosterName">${esc(pick.name)}</div><div class="rosterMeta">${esc(pick.pos)}${team ? " · " + esc(team) : ""}</div></div>
+      <div><div class="rosterNameRow"><span class="rosterName">${esc(pick.name)}</span>${injuryBadge(injuries[pick.key])}</div><div class="rosterMeta">${esc(pick.pos)}${team ? " · " + esc(team) : ""}</div></div>
       <div class="rosterPick${dim}">${dp ? `${dp.label}${prHtml}` : "—"}</div>
     </div>`;
   }).join("");
@@ -1097,6 +1109,7 @@ function renderBestPicksV2(el, opts) {
         <div class="nameRow">
           ${ico("star", { size: 14, color: isFav ? "var(--accent)" : "var(--text-disabled)" })}
           <strong>${esc(r.name)}</strong>
+          ${injuryBadge(injuries[r.key])}
         </div>
         <div class="bestGrid2">
           <div class="cell"><span class="fieldLabel">${esc(rankLabel)}</span><span class="val">${displayRank != null ? displayRank.toFixed(1) : "—"}</span></div>
@@ -1272,6 +1285,11 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes[K_SLEEPER_IDS]) {
     sleeperIds = await loadSleeperIdMap();
     renderAll(); // queue/draft buttons only show once a player has a known Sleeper ID
+  }
+  if (changes[K_INJURIES]) {
+    injuries = await loadInjuries();
+    injuriesUpdatedAt = changes[K_INJURIES].newValue?.updatedAt || null;
+    renderAll();
   }
 });
 
@@ -1910,6 +1928,7 @@ function renderSleeperQueuePopover() {
       <span class="queueNum">${i + 1}</span>
       ${avatarHtml(key, name, pos, team, "sm")}
       <span class="queueName">${esc(name)}</span>
+      ${injuryBadge(injuries[key])}
       ${posBadgeHtml(pos, null, "sm")}
       <button class="queueDraftBtn" data-key="${esc(key)}" aria-label="Draft ${esc(name)} on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 15 })}</button>
       <button class="queueRemoveBtn" data-key="${esc(key)}" aria-label="Remove ${esc(name)} from queue" data-tip="Remove">${ico("circle-x", { size: 15 })}</button>
@@ -2415,6 +2434,8 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   playerStats = await loadPlayerStats();
   visibleStats = await loadStatPrefs();
   sleeperIds = await loadSleeperIdMap();
+  injuries = await loadInjuries();
+  injuriesUpdatedAt = await loadInjuriesUpdatedAt();
   const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT]);
   sleeperQueueKeys = qv[K_SLEEPER_QUEUE] || [];
   sleeperWriteEnabled = !!qv[K_SLEEPER_WRITE_ENABLED];

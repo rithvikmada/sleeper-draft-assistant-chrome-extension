@@ -68,6 +68,7 @@ const NAMES = [
   "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans",
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
   "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks", "buildTeamOverallRanks",
+  "injuryBadge", "INJURY_META",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -76,6 +77,7 @@ const {
   makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans,
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
   buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks, buildTeamOverallRanks,
+  injuryBadge, INJURY_META,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -459,6 +461,40 @@ const mk = (id, name, arr) =>
   eq(ranks[2], { rank: 2, of: 3, total: 35 }, "team 2's combined total (35) ranks 2nd overall");
   eq(ranks[3], { rank: 3, of: 3, total: 10 }, "team 3's combined total (10, one QB only) ranks 3rd overall");
   ok(ranks[4] === undefined, "a pick with no computed BEER value doesn't create a team entry off it alone");
+}
+
+// ============================================================
+// injuryBadge — Sleeper's own injury_status strings mapped to a severity
+// bucket that drives badge color everywhere it's shown (board, best picks,
+// BEER grid, queue, roster). Recognized statuses must keep their exact
+// severity; an unrecognized one must still render (fall through to "other"),
+// not silently disappear the way an unhandled tier label used to.
+// ============================================================
+
+{
+  ok(injuryBadge(undefined) === "", "no injury on file renders no badge");
+  ok(injuryBadge({ status: "" }) === "", "an empty status string renders no badge, same as no injury data");
+
+  const q = injuryBadge({ status: "Questionable", bodyPart: "Ankle" });
+  ok(q.includes("t-q"), "Questionable maps to the 'q' (gold) severity bucket");
+  ok(q.includes(">Q<"), "Questionable's short code is Q");
+  ok(q.includes("Ankle"), "body part is included in the tooltip text");
+
+  ok(injuryBadge({ status: "Doubtful" }).includes("t-d"), "Doubtful maps to the 'd' (orange) severity bucket");
+  ok(injuryBadge({ status: "Out" }).includes("t-o"), "Out maps to the 'o' (red) severity bucket");
+  ok(injuryBadge({ status: "IR" }).includes("t-ir"), "IR gets its own darker-red bucket, distinct from Out");
+  ok(injuryBadge({ status: "PUP" }).includes("t-other"), "PUP falls into the neutral 'other' bucket");
+
+  const unknown = injuryBadge({ status: "SomeNewStatus" });
+  ok(unknown.includes("t-other"), "an unrecognized status still renders (falls through to 'other'), not dropped");
+  ok(unknown.includes(">SOM<"), "an unrecognized status's code is a 3-letter clip of the raw string, uppercased");
+
+  const withTitle = injuryBadge({ status: "Out", bodyPart: "Knee" }, { useTitle: true });
+  ok(withTitle.includes('title="'), "useTitle renders a native title attribute for rankings-manager.js, which has no data-tip infra");
+  ok(!withTitle.includes("data-tip"), "useTitle does not also emit data-tip");
+
+  const dangerousName = injuryBadge({ status: 'Weird" onmouseover="x', bodyPart: "" });
+  ok(!dangerousName.includes('"x"'), "a raw double-quote in an unrecognized status can't break out of the data-tip attribute (escaped by esc())");
 }
 
 // ============================================================

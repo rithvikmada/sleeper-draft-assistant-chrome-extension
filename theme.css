@@ -29,6 +29,8 @@
   --green: #5FCF8A;
   --gold: #F5C242;
   --red: #C97A6E;
+  --orange: #D9924A;
+  --violet: #9B8AC4;
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -61,6 +63,16 @@ button.alt:hover { color: var(--text); border-color: var(--dim2); }
 /* Favorite/avoid marks next to a player's name (board rows, manager table). */
 .flagMark.fav { color: var(--gold); }
 .flagMark.avoid { color: var(--red); }
+
+/* Injury status badge (Q/D/O/IR/etc) — see injuryBadge() in shared.js. The
+   manager renders it with title="" (no data-tip hover infra here), so this
+   is just the pill's own styling, no tooltip CSS needed. */
+.injBadge { display: inline-flex; align-items: center; justify-content: center; height: 14px; min-width: 14px; padding: 0 4px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 9px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; border: 1px solid; cursor: default; }
+.injBadge.t-q { background: rgba(245,194,66,.14); color: var(--gold); border-color: rgba(245,194,66,.35); }
+.injBadge.t-d { background: rgba(217,146,74,.14); color: var(--orange); border-color: rgba(217,146,74,.35); }
+.injBadge.t-o { background: rgba(201,122,110,.16); color: var(--red); border-color: rgba(201,122,110,.4); }
+.injBadge.t-ir { background: rgba(201,122,110,.24); color: var(--red); border-color: rgba(201,122,110,.55); }
+.injBadge.t-other { background: rgba(155,138,196,.16); color: var(--violet); border-color: rgba(155,138,196,.35); }
 
 /* Toast notification show/error states — position, sizing and z-index are
    surface-specific (set in each page's own #toast rule). */
