@@ -860,7 +860,7 @@ function renderTeamCountsWidget(el, opts) {
   const mine = picks.filter((p) => p.byMe);
   const counts = POSITIONS.map((pos) => {
     const n = mine.filter((p) => p.pos === pos).length;
-    const c = POS_COLORS[pos];
+    const c = (POS_COLORS && POS_COLORS[pos]) || { text: "var(--dim2)", bg: "transparent", border: "var(--border-subtle)" };
     return `<span class="cnt" style="border-color:${c.border}">
       <span style="color:${c.text}">${pos}</span> <b>${n}</b></span>`;
   }).join("");
@@ -1160,7 +1160,7 @@ function statGroupLayout(order, visibleStats) {
 function renderStatHeaderGroups(order, visibleStats) {
   const { widths, offsets } = statGroupLayout(order, visibleStats);
   return STAT_GROUP_SEQUENCE.map((pos) => {
-    const color = pos === "BASIC" ? "var(--accent)" : POS_COLORS[pos].text;
+    const color = pos === "BASIC" ? "var(--accent)" : (POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : "var(--text-primary)");
     const defs = pos === "BASIC" ? STAT_META.BASIC : STAT_OPTION_DEFS[pos].filter((o) => (visibleStats[pos] || []).includes(o.id));
     const cells = defs.map((m) =>
       `<span class="statHeadCol" style="color:${color}" data-full="${esc(m.full)}">${esc(m.label)}</span>`

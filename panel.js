@@ -983,11 +983,11 @@ function renderStatPickerPanel() {
       const checked = (visibleStats[pos] || []).includes(def.id);
       return `<label class="statPickerOpt" title="${esc(def.full)}">
         <input type="checkbox" data-pos="${esc(pos)}" data-id="${esc(def.id)}" ${checked ? "checked" : ""} />
-        <span class="spoLabel" style="color:${POS_COLORS[pos].text}">${esc(def.label)}</span>
+        <span class="spoLabel" style="color:${POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : 'currentColor'}">${esc(def.label)}</span>
       </label>`;
     }).join("");
     return `<div class="statPickerGroup">
-      <div class="spgTitle" style="color:${POS_COLORS[pos].text}">${esc(pos)}</div>
+      <div class="spgTitle" style="color:${POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : 'currentColor'}">${esc(pos)}</div>
       ${opts}
     </div>`;
   }).join("");
