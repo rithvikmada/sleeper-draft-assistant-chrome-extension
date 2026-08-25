@@ -209,6 +209,29 @@ let currentPickNo = null; // next pick about to happen (picks synced so far + 1)
 // WRITE actions" section for the actual mechanism (script injection into
 // your own open Sleeper tab, no token ever stored here).
 let sleeperIds = {}; // playerKey -> Sleeper's own numeric player_id, loaded from K_SLEEPER_IDS
+
+// This draft's own roster shape, straight from Sleeper — GET /v1/draft/{id}
+// returns a `settings` object with real per-position slot counts (slots_qb,
+// slots_rb, slots_wr, slots_te, slots_flex, slots_bn, ...), the exact
+// template Sleeper itself pre-builds your roster board from once a draft
+// starts. Used ONLY to size the Team/Roster dropdown's slot list (see
+// buildMyRosterSlots) — a real league's bench depth varies (this session's
+// own league needed 15 total roster spots, not the previous flat 6-bench
+// guess), so pulling it from the actual draft beats a hardcoded constant.
+// Does not touch LEAGUE_SETTINGS/BEER's math at all — that's a separate,
+// deliberately-fixed representation of this league's shape for replacement-
+// level math, out of scope here. K/DST slot counts are ignored even if
+// present, matching this app's blanket "no K/DST" handling everywhere else
+// (poll() drops every K/DST pick) — showing perpetually-open K/DST slots
+// with no way to ever fill them would just be clutter.
+let draftSettings = null;
+let draftSettingsForId = null; // which draftId draftSettings was fetched for — refetch only on change, not every ~3s poll tick
+async function fetchDraftSettings(draftId) {
+  const res = await fetch(`https://api.sleeper.app/v1/draft/${draftId}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return (data && data.settings) || null;
+}
 const K_SLEEPER_QUEUE = "sleeperQueueKeys"; // this extension's own local mirror of "what should be queued" — playerKey[]
 let sleeperQueueKeys = []; // loaded from storage on init, kept in sync with the button state
 // Master on/off switch for the whole feature — persisted (unlike the token
@@ -780,12 +803,13 @@ function rankColor(rank, of) {
 // drag/draft/remove actions on any row, since this is roster review, not
 // queue editing.
 
-// No authoritative bench-size setting exists anywhere in this app (K_ROSTER
-// only stores a draft slot number, not roster shape) — this is a judgment-
-// call guess (8 starters: 1QB/2RB/2WR/1TE/2FLEX + 6 bench = 14 total), same
-// spirit as TEAM_TARGET_SLOTS/FLEX_SHARE above. Only affects how many empty
-// "Open" bench rows render past your actual bench picks — revisit if this
-// league's real bench size is confirmed to differ.
+// Fallback only — used before a draft's real settings have come back from
+// fetchDraftSettings (or if that fetch ever fails), same spirit as
+// TEAM_TARGET_SLOTS/FLEX_SHARE above. Once synced, the actual bench size
+// comes straight from Sleeper's own draft settings (slots_bn) instead —
+// see rosterSlotCount below. Real leagues vary (this one needed 7 bench
+// slots for a 15-man roster, not this guessed 6), which is exactly why it's
+// only a pre-sync placeholder now, not the source of truth.
 const ROSTER_BENCH_SLOTS = 6;
 
 // Builds the ordered lineup-slot list for "my" team: starters first (in
@@ -795,12 +819,30 @@ const ROSTER_BENCH_SLOTS = 6;
 // players at that slot, not by BEER value — simplest rule, and the one that
 // matches "one continuous list" reading as draft order within each slot
 // tier. Revisit if roster-value-aware FLEX assignment is wanted instead.
+// Real per-position slot count for this draft when Sleeper's settings have
+// come back (see fetchDraftSettings above); falls back to this league's
+// documented shape (LEAGUE_SETTINGS) / the ROSTER_BENCH_SLOTS guess before
+// that resolves, or if Sleeper's response is ever missing a field.
+function rosterSlotCount(settingsKey, fallback) {
+  const v = draftSettings && draftSettings[settingsKey];
+  return Number.isFinite(v) ? v : fallback;
+}
+
 function buildMyRosterSlots() {
+  const starters = {
+    QB: rosterSlotCount("slots_qb", LEAGUE_SETTINGS.starters.QB),
+    RB: rosterSlotCount("slots_rb", LEAGUE_SETTINGS.starters.RB),
+    WR: rosterSlotCount("slots_wr", LEAGUE_SETTINGS.starters.WR),
+    TE: rosterSlotCount("slots_te", LEAGUE_SETTINGS.starters.TE),
+  };
+  const flexSlots = rosterSlotCount("slots_flex", LEAGUE_SETTINGS.flexSlots);
+  const benchSlots = rosterSlotCount("slots_bn", ROSTER_BENCH_SLOTS);
+
   const mine = lastSharedPicks.filter((p) => p.byMe).slice().sort((a, b) => (a.pickNo || 0) - (b.pickNo || 0));
   const used = new Set();
   const slots = [];
   POSITIONS.forEach((pos) => {
-    const need = LEAGUE_SETTINGS.starters[pos] || 0;
+    const need = starters[pos] || 0;
     const atPos = mine.filter((p) => p.pos === pos && !used.has(p));
     for (let i = 0; i < need; i++) {
       const p = atPos[i];
@@ -809,14 +851,14 @@ function buildMyRosterSlots() {
     }
   });
   const flexEligible = mine.filter((p) => ["RB", "WR", "TE"].includes(p.pos) && !used.has(p));
-  for (let i = 0; i < LEAGUE_SETTINGS.flexSlots; i++) {
+  for (let i = 0; i < flexSlots; i++) {
     const p = flexEligible[i];
     if (p) used.add(p);
     slots.push({ slotLabel: "FLEX", pick: p || null });
   }
   const bench = mine.filter((p) => !used.has(p));
   bench.forEach((p) => slots.push({ slotLabel: "BN", pick: p }));
-  const openBench = Math.max(0, ROSTER_BENCH_SLOTS - bench.length);
+  const openBench = Math.max(0, benchSlots - bench.length);
   for (let i = 0; i < openBench; i++) slots.push({ slotLabel: "BN", pick: null });
   return slots;
 }
@@ -1236,6 +1278,18 @@ function fmtTime(d) {
 async function poll(draftId, { manual = false } = {}) {
   if (inFlight) return; // never stack requests
   inFlight = true;
+  // Fire-and-forget, once per draftId (not every poll tick) — a separate,
+  // cheap endpoint from the picks poll above, so it doesn't block or
+  // throttle that loop. Silent on failure, same pattern as every other
+  // auto-refresh in this app: the roster popover just keeps using whatever
+  // slot counts it already had (the ROSTER_BENCH_SLOTS guess, or a
+  // previous draft's settings) until this resolves.
+  if (draftSettingsForId !== draftId) {
+    draftSettingsForId = draftId;
+    fetchDraftSettings(draftId)
+      .then((s) => { if (s) { draftSettings = s; renderRosterBtn(); } })
+      .catch((e) => console.warn("[4th&Go] draft settings fetch failed:", e.message));
+  }
   if (manual) {
     $("refreshBtn").classList.add("spin");
     $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refreshing…";
