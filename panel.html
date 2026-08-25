@@ -336,7 +336,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .queueNum { width: 18px; text-align: right; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; flex: none; }
 .queueName { flex: 1; min-width: 0; font: var(--type-ui); font-size: 14px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queueDraftBtn, .queueRemoveBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
-.queueDraftBtn:hover { background: var(--chalk-a12); color: var(--accent); }
+.queueDraftBtn:hover { background: var(--green-a12); color: var(--green-500); }
 .queueRemoveBtn:hover { background: var(--red-a12); color: var(--red-500); }
 
 /* EXPERIMENTAL — matching mini queue/draft buttons on the Best Available
@@ -347,6 +347,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .bestActionBtn { width: 18px; height: 18px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
 .bestActionBtn:hover { background: var(--chalk-a12); color: var(--accent); }
 .bestActionBtn.on { color: var(--accent); }
+.bestActionBtn[data-action="draft"]:hover { background: var(--green-a12); color: var(--green-500); }
 .bestActions { display: flex; align-items: center; gap: 2px; }
 
 #teamCounts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -507,8 +508,9 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    .rowFlagBtn, plus a hover tint and an "on" state for the queue toggle. The
    spacer variant keeps row height/alignment identical for rows that don't
    have a matched Sleeper player_id (see sleeperBtns in panel.js). */
-.rowQueueBtn, .rowDraftBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; border-radius: 4px; transition: background-color var(--dur-fast) var(--ease-out); }
-.rowQueueBtn:hover, .rowDraftBtn:hover { background: var(--chalk-a12); }
+.rowQueueBtn, .rowDraftBtn { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 4px; transition: var(--transition-control); }
+.rowQueueBtn:hover { background: var(--chalk-a12); }
+.rowDraftBtn:hover { background: var(--green-a12); color: var(--green-500); }
 .rowFlagSpacer { width: 22px; height: 22px; flex: none; }
 .rk2 { width: 38px; text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); flex: none; }
 .nmCell2 { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; justify-content: center; }

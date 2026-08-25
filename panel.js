@@ -607,7 +607,7 @@ function renderBoard() {
         const queued = sleeperQueueKeys.includes(r.key);
         sleeperBtns = sleeperId && !gone
           ? `<button class="rowQueueBtn${queued ? " on" : ""}" data-key="${esc(r.key)}" aria-label="${queued ? "Remove from Sleeper queue" : "Add to Sleeper queue"}" data-tip="${queued ? "Queued on Sleeper — click to remove" : "Add to Sleeper draft queue"}">${ico("list-plus", { size: 16, color: queued ? "var(--accent)" : "var(--text-disabled)" })}</button>
-             <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 16, color: "var(--text-disabled)" })}</button>`
+             <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 16 })}</button>`
           : `<span class="rowFlagSpacer"></span><span class="rowFlagSpacer"></span>`;
       }
       return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" data-pos="${esc(r.pos)}" data-tip="Double-click to cross off / undo">
