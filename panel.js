@@ -38,6 +38,9 @@ const ICON_SVG = {
   "circle-check": `<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>`,
   "chevron-up": `<polyline points="18 15 12 9 6 15"/>`,
   "chevron-down": `<polyline points="6 9 12 15 18 9"/>`,
+  "sun": `<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>`,
+  "moon": `<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>`,
+  "activity": `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`,
 };
 function iconDataUri(name) {
   const inner = ICON_SVG[name] || "";
@@ -223,6 +226,92 @@ let sleeperDoubleClickDraft = true;
 function draftTipText() {
   return sleeperDoubleClickDraft ? "Double-click to draft now" : "Click to draft now";
 }
+
+// ---------- theme (light/dark) ----------
+// Dark is the original design import's only mode; light is a straight token
+// swap (see html[data-theme="light"] in panel.html) added on request. Applied
+// to <html>, not <body>, so it's in effect before anything renders. Persisted
+// so it survives closing/reopening the board window.
+const K_THEME = "boardTheme";
+let currentTheme = "dark";
+function applyTheme(theme) {
+  currentTheme = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", currentTheme);
+  const btn = $("themeToggleBtn");
+  if (btn) btn.innerHTML = ico(currentTheme === "light" ? "moon" : "sun", { size: 15 });
+}
+
+// ---------- floating dropdowns: settings + status ----------
+// Both #settingsPanel and #statusPanel anchor under their trigger button
+// instead of pushing the header open at full width (settings used to be an
+// inline drawer spanning the whole header) — positioned on open via
+// getBoundingClientRect, same pattern as the queue popover / flag menu.
+function positionFloatingPanel(panel, anchorBtn) {
+  const r = anchorBtn.getBoundingClientRect();
+  const w = panel.offsetWidth || 300;
+  panel.style.left = `${Math.max(4, Math.min(r.right - w, window.innerWidth - w - 6))}px`;
+  panel.style.top = `${r.bottom + 6}px`;
+}
+function openSettingsPanel() {
+  closeStatusPanel();
+  const panel = $("settingsPanel");
+  panel.classList.remove("collapsed");
+  panel.classList.add("open");
+  positionFloatingPanel(panel, $("settingsBtn"));
+  $("settingsBtn").classList.add("on");
+}
+function closeSettingsPanel() {
+  $("settingsPanel").classList.remove("open");
+  $("settingsBtn").classList.remove("on");
+}
+function isSettingsPanelOpen() { return $("settingsPanel").classList.contains("open"); }
+
+// Relative "how long ago" for a source's importedAt, used both here and could
+// be reused elsewhere — kept local since nowhere else needs it yet.
+function timeAgoLabel(ts) {
+  if (!ts) return "never imported";
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+// A source counts as "stale" past 24h — purely a glance cue in this dropdown,
+// doesn't affect anything else (the board's own STALE_AFTER_S is about the
+// live Sleeper poll, a completely different staleness signal).
+const SOURCE_STALE_MS = 24 * 60 * 60 * 1000;
+
+function renderStatusPanel() {
+  const statusEl = $("status");
+  const syncLine = `<div class="statusSyncLine"><span class="statusDot${statusEl.className.indexOf("live") !== -1 ? " live" : statusEl.className.indexOf("err") !== -1 ? " err" : ""}"></span>${esc(statusEl.textContent)}</div>`;
+  const allSrc = [...sources.filter((s) => s.enabled), ...adpSources.filter((s) => s.enabled)];
+  const rows = allSrc.length
+    ? allSrc.map((s) => {
+        const stale = s.importedAt && (Date.now() - s.importedAt) > SOURCE_STALE_MS;
+        return `<div class="statusSrcRow"><span class="nm">${esc(s.name)}</span><span class="age${stale ? " stale" : ""}">${esc(timeAgoLabel(s.importedAt))}</span></div>`;
+      }).join("")
+    : `<div class="statusEmpty">No sources enabled.</div>`;
+  $("statusPanel").innerHTML = `
+    <div class="statusSectionLabel">Sleeper sync</div>
+    ${syncLine}
+    <div class="statusSectionLabel">Source freshness</div>
+    ${rows}`;
+}
+function openStatusPanel() {
+  closeSettingsPanel();
+  renderStatusPanel();
+  const panel = $("statusPanel");
+  panel.classList.add("open");
+  positionFloatingPanel(panel, $("statusBtn"));
+}
+function closeStatusPanel() { $("statusPanel").classList.remove("open"); }
+function isStatusPanelOpen() { return $("statusPanel").classList.contains("open"); }
+document.addEventListener("click", (e) => {
+  if (isSettingsPanelOpen() && !e.target.closest("#settingsPanel") && !e.target.closest("#settingsBtn")) closeSettingsPanel();
+  if (isStatusPanelOpen() && !e.target.closest("#statusPanel") && !e.target.closest("#statusBtn")) closeStatusPanel();
+});
 
 // ---------- rendering ----------
 // Both the BEST grid and the tier board are built from the SAME blended
@@ -414,6 +503,19 @@ function computePosRanks(allRows) {
 let selectedStatPlayerKey = null;
 let selectedStatPos = null;
 
+// Filtering the board to a single position (QB/RB/WR/TE) is now itself a
+// default for the stat-group order, on top of the existing click-to-select
+// behavior — once every visible row IS that position, clicking to bring its
+// stat group forward would be a no-op most of the time anyway, so it should
+// just already be there. An explicit player selection still wins over the
+// filter (clicking a specific player is a stronger signal than "I filtered
+// the whole board"), and selecting the SAME position the filter already
+// implies is a harmless no-op via statGroupOrder's own dedupe.
+function effectiveStatPos() {
+  if (selectedStatPos) return selectedStatPos;
+  return POSITIONS.includes(posFilter) ? posFilter : null;
+}
+
 function renderBoard() {
   // A selected player who gets drafted (synced pick or manual crossout)
   // loses their selection automatically — the only other way to clear it is
@@ -426,7 +528,7 @@ function renderBoard() {
   }
   // Position and "show taken" are independent — TAKEN no longer replaces the
   // position filter, it layers drafted players (crossed out) on top of it.
-  const groupOrder = statGroupOrder(selectedStatPos);
+  const groupOrder = statGroupOrder(effectiveStatPos());
   const statBlockWidth = statGroupLayout(groupOrder, visibleStats).totalWidth;
   $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats);
   $("statHead").style.width = `${statBlockWidth}px`;
@@ -505,10 +607,10 @@ function renderBoard() {
         const queued = sleeperQueueKeys.includes(r.key);
         sleeperBtns = sleeperId && !gone
           ? `<button class="rowQueueBtn${queued ? " on" : ""}" data-key="${esc(r.key)}" aria-label="${queued ? "Remove from Sleeper queue" : "Add to Sleeper queue"}" data-tip="${queued ? "Queued on Sleeper — click to remove" : "Add to Sleeper draft queue"}">${ico("list-plus", { size: 16, color: queued ? "var(--accent)" : "var(--text-disabled)" })}</button>
-             <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 16, color: "var(--text-disabled)" })}</button>`
+             <button class="rowDraftBtn" data-key="${esc(r.key)}" aria-label="Draft on Sleeper" data-tip="${draftTipText()}">${ico("circle-check", { size: 16 })}</button>`
           : `<span class="rowFlagSpacer"></span><span class="rowFlagSpacer"></span>`;
       }
-      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" data-tip="Double-click to cross off / undo">
+      return `<div class="row2 ${gone ? "gone" : ""} ${mine ? "mine" : ""} ${selected ? "selected" : ""}" data-key="${esc(r.key)}" data-name="${esc(r.name)}" data-pos="${esc(r.pos)}" data-tip="Double-click to cross off / undo">
         <button class="rowFlagBtn" data-key="${esc(r.key)}" aria-label="Flag player">${ico(flagIcon, { size: 13, color: flagColor })}</button>
         ${sleeperBtns}
         <span class="rk2">${r.consensus != null ? r.consensus.toFixed(1) : "—"}</span>
@@ -583,7 +685,23 @@ function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = ne
       <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(r.rank).toUpperCase())}</span>
     </span>`;
   }).join("");
-  el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${badgeHtml("neutral", `Tot ${mine.length}`)}`;
+  // Overall team grade (backlog #13's rollup, added after the per-position
+  // ranks) — same fused pill, neutral tone since it's not any one position's
+  // color, built off buildTeamOverallRanks (shared.js: sums BEER value
+  // across every drafted player, any position — no weighting scheme needed
+  // since BEER values are already cross-position comparable).
+  const overallRanks = myTeamId != null ? buildTeamOverallRanks(picks, beerValues) : {};
+  const myOverall = myTeamId != null ? overallRanks[myTeamId] : null;
+  const totalPill = (myOverall && mine.length > 0)
+    ? (() => {
+        const { bg, fg } = rankColor(myOverall.rank, myOverall.of);
+        return `<span class="posRankPill t-neutral" title="Overall team value ranks ${esc(ordinal(myOverall.rank))} of ${myOverall.of} in the league by total BEER value">
+          <span class="prpTop t-neutral">Tot ${mine.length}</span>
+          <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(myOverall.rank).toUpperCase())}</span>
+        </span>`;
+      })()
+    : badgeHtml("neutral", `Tot ${mine.length}`);
+  el.innerHTML = `<span class="teamHint">My team (slot ${esc(myRosterId)})</span>${counts}${totalPill}`;
 }
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"], v = n % 100;
@@ -1056,9 +1174,6 @@ function startPolling(draftId) {
   chrome.storage.local.set({ savedDraftId: draftId });
   if (countdownTimer) clearInterval(countdownTimer);
   countdownTimer = setInterval(tickStatus, 1000);
-  // Setup only matters once — give the space back to the board now that we're live.
-  $("settingsPanel").classList.add("collapsed");
-  $("settingsBtn").classList.remove("on");
 }
 
 function stopPolling() {
@@ -1075,8 +1190,7 @@ function stopPolling() {
   $("stopBtn").style.display = "none";
   $("refreshRow").style.display = "none";
   setStatus("", "Sync stopped. Manual mode: double-click rows to cross players off.");
-  $("settingsPanel").classList.remove("collapsed");
-  $("settingsBtn").classList.add("on");
+  openSettingsPanel();
 }
 
 // ---------- events ----------
@@ -1775,7 +1889,7 @@ $("board").addEventListener("click", (e) => {
     selectedStatPlayerKey = key;
     selectedStatPos = key.split("|").pop();
   }
-  applyStatGroupOrder(statGroupOrder(selectedStatPos), visibleStats);
+  applyStatGroupOrder(statGroupOrder(effectiveStatPos()), visibleStats);
 });
 $("board").addEventListener("contextmenu", (e) => {
   const nameEl = e.target.closest(".nmText");
@@ -1787,9 +1901,18 @@ $("board").addEventListener("contextmenu", (e) => {
 });
 
 // ---------- settings drawer ----------
-$("settingsBtn").addEventListener("click", () => {
-  const collapsed = $("settingsPanel").classList.toggle("collapsed");
-  $("settingsBtn").classList.toggle("on", !collapsed);
+$("settingsBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (isSettingsPanelOpen()) closeSettingsPanel(); else openSettingsPanel();
+});
+$("statusBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (isStatusPanelOpen()) closeStatusPanel(); else openStatusPanel();
+});
+$("themeToggleBtn").addEventListener("click", () => {
+  const next = currentTheme === "light" ? "dark" : "light";
+  applyTheme(next);
+  chrome.storage.local.set({ [K_THEME]: next });
 });
 
 $("showAllBtn").addEventListener("click", () => {
@@ -1868,8 +1991,8 @@ $("playerSearch").addEventListener("input", () => {
 $("sleeperWriteToggle").addEventListener("click", () => {
   sleeperWriteEnabled = !sleeperWriteEnabled;
   chrome.storage.local.set({ [K_SLEEPER_WRITE_ENABLED]: sleeperWriteEnabled });
-  $("sleeperWriteToggle").textContent = sleeperWriteEnabled ? "On" : "Off";
-  $("sleeperWriteToggle").classList.toggle("active", sleeperWriteEnabled);
+  $("sleeperWriteToggle").classList.toggle("on", sleeperWriteEnabled);
+  $("sleeperWriteToggle").setAttribute("aria-checked", String(sleeperWriteEnabled));
   $("sleeperTokenField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperTestField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperDblClickField").style.display = sleeperWriteEnabled ? "" : "none";
@@ -1880,8 +2003,8 @@ $("sleeperWriteToggle").addEventListener("click", () => {
 $("sleeperDblClickToggle").addEventListener("click", () => {
   sleeperDoubleClickDraft = !sleeperDoubleClickDraft;
   chrome.storage.local.set({ [K_SLEEPER_DBLCLICK_DRAFT]: sleeperDoubleClickDraft });
-  $("sleeperDblClickToggle").textContent = sleeperDoubleClickDraft ? "On" : "Off";
-  $("sleeperDblClickToggle").classList.toggle("active", sleeperDoubleClickDraft);
+  $("sleeperDblClickToggle").classList.toggle("on", sleeperDoubleClickDraft);
+  $("sleeperDblClickToggle").setAttribute("aria-checked", String(sleeperDoubleClickDraft));
   renderAll(); // draft buttons' tooltip text (draftTipText()) depends on this
 });
 
@@ -1904,8 +2027,8 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   el.className = "infoPopover";
   el.innerHTML = `<b>Getting your Sleeper token</b>
     <ol>
-      <li>Open your Sleeper draft tab, then DevTools → Network</li>
-      <li>Filter by "graphql", then do anything on the page (reload, or click a player's star)</li>
+      <li>Open a Sleeper <b>mock draft</b> in its own browser tab (sleeper.com — NOT this extension's board window), then DevTools → Network</li>
+      <li>Filter by "graphql", then do anything on the mock draft page (reload, or click a player's star)</li>
       <li>Click any graphql request → Headers → find "authorization"</li>
       <li>Copy that value and paste it here</li>
     </ol>`;
@@ -1921,6 +2044,7 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
 // ---------- init: restore settings, then load the curated sources ----------
 (async function init() {
   $("settingsBtn").innerHTML = ico("settings", { size: 15 });
+  $("statusBtn").innerHTML = ico("activity", { size: 15 });
   $("openManager").innerHTML = ico("external-link", { size: 13 }) + "Manager";
   $("connectBtn").innerHTML = ico("unplug", { size: 13, color: "var(--on-accent)" }) + "Sync";
   $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refresh now";
@@ -1964,16 +2088,19 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   sleeperWriteEnabled = !!qv[K_SLEEPER_WRITE_ENABLED];
   sleeperSkipDraftConfirmDraftId = qv[K_SLEEPER_SKIP_CONFIRM] || null;
   sleeperDoubleClickDraft = qv[K_SLEEPER_DBLCLICK_DRAFT] !== false; // defaults true — only an explicit false turns it off
-  $("sleeperWriteToggle").textContent = sleeperWriteEnabled ? "On" : "Off";
-  $("sleeperWriteToggle").classList.toggle("active", sleeperWriteEnabled);
+  $("sleeperWriteToggle").classList.toggle("on", sleeperWriteEnabled);
+  $("sleeperWriteToggle").setAttribute("aria-checked", String(sleeperWriteEnabled));
   $("sleeperTokenField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperTestField").style.display = sleeperWriteEnabled ? "" : "none";
   $("sleeperDblClickField").style.display = sleeperWriteEnabled ? "" : "none";
-  $("sleeperDblClickToggle").textContent = sleeperDoubleClickDraft ? "On" : "Off";
-  $("sleeperDblClickToggle").classList.toggle("active", sleeperDoubleClickDraft);
+  $("sleeperDblClickToggle").classList.toggle("on", sleeperDoubleClickDraft);
+  $("sleeperDblClickToggle").setAttribute("aria-checked", String(sleeperDoubleClickDraft));
+
+  const tv = await chrome.storage.local.get([K_THEME]);
+  applyTheme(tv[K_THEME] || "dark");
 
   // Settings start open so first-run has the draft ID box visible.
-  $("settingsBtn").classList.add("on");
+  openSettingsPanel();
   renderAll();
 
   // Silent background refresh, same pattern as ADP — don't block first
