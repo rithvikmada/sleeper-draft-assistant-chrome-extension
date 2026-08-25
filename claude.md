@@ -1512,6 +1512,122 @@ questions before implementation cost was spent.
   not an XSS fix — see the Stage 2 audit's own escaping-fix note above for
   why that distinction matters under MV3's CSP).
 
+## Rage bait mode (added 2026-08-25)
+For fun only — no signal, no effect on rankings/consensus/ADP/BEER/anything
+else this tool computes. Sends a message into Sleeper's draft chat every
+random few picks, and lets the user send one on demand, purely to mess with
+leaguemates during a live draft.
+
+- **An auxiliary of Draft actions, not a standalone toggle** — the settings
+  block (`#rageBaitField`, `panel.html`) is hidden entirely until
+  `sleeperWriteEnabled` is true, same gating pattern as `#sleeperDblClickField`.
+  Turning Draft actions off also hides Rage bait mode's own controls; the
+  auto-fire path (`maybeFireRageBait` in `panel.js`) independently re-checks
+  `sleeperWriteReady()` at fire time too, so a stray timer state can't send
+  after the fact.
+- **Random trigger, not a fixed cadence** — `rageBaitNextAt` (module-level in
+  `panel.js`) is set to the current pick count plus a random 10-13-pick gap
+  (`rageBaitRandomGap()`), and only re-rolled after actually firing. Hooked
+  into `poll()`'s existing "did new picks land" branch (right where the
+  `Pick N: name` toast already fires) rather than a separate timer — no new
+  polling mechanism, same as BEER's live recompute reusing the existing
+  pick-sync plumbing. Deliberately NOT tied to ADP in any way — "maybe based
+  off ADP" was floated as an idea when this was scoped but dropped in favor
+  of a plain random gap, since this mode is explicitly not meant to carry
+  real signal; keep it that way unless asked otherwise. Range was widened
+  from an initial 3-7 to 10-13 picks on direct feedback (fires too often at
+  the tighter gap).
+- **Never fires immediately after the user's own pick** (direct requirement,
+  not a guess) — a rage bait message landing right after your own pick reads
+  as mocking yourself, not your leaguemates. `maybeFireRageBait(newPickTotal,
+  newestWasMine)` in `panel.js` takes a second argument — whether the newest
+  landed pick was the user's own (same `roster_id`/`draft_slot` vs
+  `myRosterId` check `poll()` already does to flag a pick "mine," computed
+  fresh at the toast call site) — and simply skips firing this cycle if so,
+  **without** re-rolling `rageBaitNextAt`. That means a same-team pick only
+  ever delays the fire to the very next new pick (whoever drafts next), never
+  further — it's a one-pick skip, not a reset of the whole random window.
+- **Message pool**: `DEFAULT_RAGE_BAIT_MESSAGES` (`shared.js`) is the built-in
+  list (12 messages, user-authored wording, several with emoji) — kept
+  intentionally light/needling, not actually mean, since these get sent under
+  the user's own Sleeper name/identity.
+- **Editor UI — moved out of Settings into a "Manage" popover (2026-08-25),
+  after a mockup pass.** The first shipped version put one input-per-message
+  directly inline in `#settingsPanel` (replacing an even earlier one-per-line
+  textarea, which had its own problem — see below) — direct feedback: a
+  dozen-plus messages made the whole Settings panel scroll uncomfortably
+  long. Three layout options were mocked up as a published Artifact (a
+  detached "Manage" popover, an inline wrapping chip well, and a collapsed
+  disclosure) before writing any code — the popover was picked because it's
+  the only one of the three that keeps full inline text editing (unlike the
+  chip well, which truncates long messages) while fully getting the list out
+  of Settings' own scroll height (unlike the disclosure, which still grows
+  the panel when open). Settings itself now shows just one collapsed row —
+  `#rageBaitMessagesField`'s `.manageRow`: a live count pill (`#rageBaitCount`)
+  plus a "Manage" button (`#rageBaitManageBtn`). Clicking it opens
+  `#rageBaitPopover` (`openRageBaitPopover()`/`closeRageBaitPopover()` in
+  `panel.js`) — a sibling of `#rosterPopover` reusing the exact same
+  `.queuePopover` base + flip-above/below-and-clamp positioning (not the
+  simpler fixed-dropdown positioning Settings/Status use), since the message
+  list can run long enough to need that same "flip upward near the bottom of
+  the window" handling the Roster/Queue popovers already have. Inside the
+  popover, the list itself is still the one-input-per-message-row editor
+  (`renderRageBaitMessagesList()`, `.rbMsgRow`/`.rbMsgInput`/`.rbMsgRemove`)
+  — that part didn't change, only where it lives. That per-row version
+  itself replaced an even earlier one-message-per-line `<textarea>`, which
+  looked broken in practice: a long message word-wraps onto a second visual
+  line inside the box, reading exactly like a second, separate message even
+  though it's really one line of text (a real report: "disturbance" wrapping
+  to its own line looked like the pool had split mid-sentence). Persisted to
+  `K_RAGEBAIT_MESSAGES` (`rageBaitMessages` in storage) — empty/unset falls
+  back to the defaults (`currentRageBaitMessages()`), and a ↺ reset button
+  (now in the popover header) restores them. No CSV parsing involved (unlike
+  ranking/ADP imports) — this is just discrete strings, not tabular data.
+- **Test button behavior is exact spec, not "pick any message":** the FIRST
+  test click ever in a window session always sends "Hello, everyone!"
+  (verifies the whole send pipeline with a known-good message before trusting
+  it with something silly); every click after that sends a random pick from
+  the current pool, same as a real auto-fire would. Tracked with a
+  session-only `rageBaitTested` boolean (not persisted — resetting on window
+  reopen is fine, there's no real state worth carrying across sessions here).
+  This is a REAL send (goes through the same `sendRageBaitMessage()` path as
+  auto-fire), not a local-only preview — same reasoning as the existing
+  Sleeper connection test button testing the real tab+token path rather than
+  a weaker stand-in.
+- **The chat-send GraphQL mutation is now CONFIRMED (2026-08-25), via
+  introspection rather than captured traffic.** The first shipped version
+  guessed `create_message(object_id, message)` — untested, since there was
+  no live draft-chat network traffic available to capture from while
+  building this (unlike `draft_pick_player`/`update_draft_queue`, which were
+  both built from real captured requests, see the big comment above
+  `findSleeperDraftTab` in `background.js`). That guess was live-rejected,
+  but the rejection error itself named real schema type names
+  (`RootMutationType`, `Message`, `Snowflake`) — enough to run a real
+  introspection query (`__type(name:"RootMutationType"){fields{...}}`) from
+  a Sleeper draft tab's own DevTools console and read off `create_message`'s
+  actual argument list directly, instead of guessing again. Real shape:
+  `create_message(text: String, parent_type: String!, parent_id: Snowflake!,
+  channel_id: Snowflake, attachment_*, ...)`, returning a `Message` with a
+  `text` field (not `message` — the return-shape half of the original guess
+  was also wrong). `parent_type: "draft"` + `parent_id: draftId` is what
+  threads a message onto a specific draft's chat — inferred from the same
+  parent_type/parent_id pattern `create_reaction`/`pin_message`/etc. use
+  elsewhere in the schema for "attach this to some parent object," not
+  independently confirmed by watching a real send yet. **If a real send
+  still fails**: capture actual draft-chat traffic the same way
+  `update_draft_queue` was originally confirmed — open a real Sleeper draft
+  chat tab, DevTools → Network → filter "graphql", send a message from
+  Sleeper's own UI, and diff the real request against `sleeperSendChatMessage()`
+  in `background.js`.
+- **UI**: settings block sits directly after the existing Sleeper Test field
+  in `#settingsPanel` (`panel.html`) — a switch (`#rageBaitToggle`, same
+  `.switchTrack` pattern as Double-click to draft), a messages textarea
+  (`.input2.textarea`, a new CSS variant added since no textarea existed in
+  `panel.html` before this — a fixed-height `.input2` doesn't fit a
+  multi-line control), and a Test button + status line mirroring
+  `#sleeperTestField`'s exact layout/status-class pattern
+  (`testStatus`/`.ok`/`.err`).
+
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source
 isolation (previously had a side effect of also disabling the source), a
