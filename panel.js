@@ -2201,53 +2201,54 @@ $("shortcutsModal").addEventListener("click", (e) => {
 });
 
 // ---------- feature 3: tier collapse toggle ----------
-let collapsedTiers = new Set();
+// Collapsing a tier only hides THAT tier's own rows — bug fixed 2026-08-25:
+// the original CSS used a general sibling selector
+// (".tierDiv.collapsed ~ .row2[data-tier-group]") which matches EVERY row
+// after the collapsed header, not just that tier's, so collapsing tier 1
+// visually swallowed tiers 2/3/4/etc too. That CSS rule is gone entirely —
+// visibility is set directly per-row here instead, scoped to the exact
+// tier via data-tier-group, which is the only thing that was ever correct.
 document.addEventListener("click", (e) => {
   const tierDiv = e.target.closest(".tierDiv");
-  if (tierDiv) {
-    e.preventDefault();
-    const tierNum = tierDiv.textContent.match(/Tier (\d+|\\?)/)?.[1];
-    if (tierNum) {
-      tierDiv.classList.toggle("collapsed");
-      if (tierDiv.classList.contains("collapsed")) {
-        collapsedTiers.add(tierNum);
-      } else {
-        collapsedTiers.delete(tierNum);
-      }
-      // toggle visibility of rows in this tier
-      const allRows = Array.from(document.querySelectorAll(".row2[data-tier-group]"));
-      allRows.forEach(row => {
-        if (row.dataset.tierGroup === tierNum) {
-          row.style.display = tierDiv.classList.contains("collapsed") ? "none" : "";
-        }
-      });
-    }
-  }
+  if (!tierDiv) return;
+  e.preventDefault();
+  const tierNum = tierDiv.dataset.tier;
+  if (tierNum == null) return;
+  const collapsed = tierDiv.classList.toggle("collapsed");
+  document.querySelectorAll(`.row2[data-tier-group="${CSS.escape(tierNum)}"]`).forEach((row) => {
+    row.style.display = collapsed ? "none" : "";
+  });
 });
 
 // ---------- feature 4: draft turn indicator ----------
+// Renders into the .turnBadge pill inline in .statusRow (not a standalone
+// block elsewhere in the header) — see panel.html for why: a separate block
+// wasn't aligned with the status line above it and read as too easy to
+// miss. "now" gets the pulsing accent treatment; "soon" (within 2 picks)
+// gets a static accent tint; anything further out stays neutral so it
+// doesn't compete for attention all draft long.
 function renderDraftTurnIndicator() {
+  const badge = $("draftTurnBadge");
   if (!currentDraftId || !myRosterId) {
-    $("draftTurnIndicator").innerHTML = "";
+    badge.style.display = "none";
     return;
   }
   const picks = lastSharedPicks || [];
-  const roundNum = Math.floor(picks.length / LEAGUE_SETTINGS.teams) + 1;
-  const picksThisRound = picks.length % LEAGUE_SETTINGS.teams;
+  const teams = LEAGUE_SETTINGS.teams;
+  const roundNum = Math.floor(picks.length / teams) + 1;
+  const picksThisRound = picks.length % teams;
   const mySlot = Number(myRosterId);
-  const isMyTurnNext = picksThisRound === mySlot - 1;
-  const picksUntilMine = isMyTurnNext ? 0 : (mySlot - picksThisRound - 1 + LEAGUE_SETTINGS.teams) % LEAGUE_SETTINGS.teams;
-  const timePerPick = 90; // rough estimate in seconds
-  const secsUntilMine = picksUntilMine * timePerPick;
-  const minsUntilMine = Math.ceil(secsUntilMine / 60);
-  
-  const text = isMyTurnNext 
-    ? `Your pick next (Round ${roundNum})`
-    : picksUntilMine === 0
+  const picksUntilMine = (mySlot - picksThisRound - 1 + teams) % teams;
+  const minsUntilMine = Math.ceil((picksUntilMine * 90) / 60); // rough 90s/pick estimate
+
+  const text = picksUntilMine === 0
     ? `Your turn! (Round ${roundNum})`
     : `Your turn in ${picksUntilMine} pick${picksUntilMine === 1 ? "" : "s"} (~${minsUntilMine}m)`;
-  
-  $("draftTurnIndicator").innerHTML = `<div style="font:var(--type-ui);font-size:var(--text-xs);color:var(--text-secondary);padding:0 14px;display:flex;align-items:center;height:24px;border-top:1px solid var(--border-subtle)">${esc(text)}</div>`;
+
+  badge.textContent = text;
+  badge.style.display = "";
+  badge.classList.toggle("now", picksUntilMine === 0);
+  badge.classList.toggle("soon", picksUntilMine > 0 && picksUntilMine <= 2);
 }
 
 // update on every render

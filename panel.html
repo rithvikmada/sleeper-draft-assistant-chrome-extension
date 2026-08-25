@@ -271,6 +271,19 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 #status.pulse { animation: pulse2 .5s ease; }
 @keyframes pulse2 { 0% { opacity: .35; } 100% { opacity: 1; } }
 
+/* Draft turn indicator (feature 4) — a real attention-grabbing pill, not a
+   thin caption line easy to miss. Lives inline in .statusRow (not a
+   separate block elsewhere in the header) so it's anchored to the same
+   left/right edges as the sync status it's related to, pushed to the right
+   with margin-left:auto so it doesn't fight the status text for space.
+   Neutral tone normally; switches to the accent tone (gold, pulsing) once
+   it's genuinely your turn — that's the moment worth grabbing the eye. */
+.turnBadge { flex: none; margin-left: auto; display: inline-flex; align-items: center; height: 22px; padding: 0 10px; border-radius: var(--radius-pill); font: var(--type-ui); font-weight: 700; font-size: var(--text-xs); white-space: nowrap; background: rgba(255,255,255,.06); color: var(--text-secondary); border: 1px solid var(--border-default); }
+.turnBadge.soon { background: var(--chalk-a12); color: var(--accent); border-color: var(--chalk-a24); }
+.turnBadge.now { background: var(--chalk-a24); color: var(--accent); border-color: var(--accent); animation: turnPulse 1.1s ease-in-out infinite; }
+@keyframes turnPulse { 0%, 100% { box-shadow: 0 0 0 0 var(--chalk-a24); } 50% { box-shadow: 0 0 0 5px transparent; } }
+@media (prefers-reduced-motion: reduce) { .turnBadge.now { animation: none; } }
+
 /* Settings is a floating dropdown now (2026-08-25), not an inline drawer
    that pushed the whole header open to the header's full width. Anchored
    under #settingsBtn on open (see openSettingsPanel in panel.js), fixed
@@ -497,7 +510,11 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .tierDiv.collapsed .toggle { transform: rotate(-90deg); }
 .tierDiv .num { color: var(--accent); }
 .tierDiv .line { flex: 1; height: 1px; background: var(--border-subtle); }
-.tierDiv.collapsed ~ .row2[data-tier-group] { display: none; }
+/* Row visibility on collapse is set directly per-row in JS (scoped to the
+   exact tier via data-tier-group), not via a sibling-selector rule here —
+   a general-sibling rule would match every row after this tier's header,
+   not just this tier's own rows (that was a real bug: collapsing tier 1
+   hid tiers 2/3/4 too). See the tierDiv click handler in panel.js. */
 
 /* shortcuts modal */
 #shortcutsModal { position: fixed; inset: 0; z-index: 70; background: var(--surface-scrim); display: none; align-items: center; justify-content: center; }
@@ -673,6 +690,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     <div class="statusRow">
       <span id="statusDot" class="statusDot"></span>
       <span id="status">Not connected. Open your Sleeper draft room in a tab, or paste the draft ID below. Sleeper caches picks ~15s on their end, so the board updates within ~15-20s of a real pick.</span>
+      <span id="draftTurnBadge" class="turnBadge" style="display:none"></span>
     </div>
 
     <div id="settingsPanel" class="collapsed">
@@ -734,7 +752,6 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       </div>
     </div>
     <div id="statusPanel"></div>
-    <div id="draftTurnIndicator"></div>
 
     <div id="teamCounts"></div>
     <div id="sourceList"></div>
@@ -773,11 +790,11 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
   <div id="sleeperQueuePopover" class="queuePopover" hidden></div>
   <div id="colHead">
     <span class="c-flag"></span>
-    <span class="c-rank sortCol" data-sort="rank" data-tip="Sort by rank">Rank<span class="sortArrow"></span></span>
+    <span class="c-rank sortCol" data-sort="rank" data-tip="Click to sort">Rank<span class="sortArrow"></span></span>
     <span class="c-name">Player</span>
     <span class="c-stat" id="statHead"><!-- filled by renderStatHeaderGroups() in panel.js, on every renderBoard() --></span>
-    <span class="c-val sortCol" data-sort="value" data-tip="Sort by ADP value">ADP Value<span class="sortArrow"></span></span>
-    <span class="c-pos sortCol" data-sort="pos" data-tip="Sort by position">Pos<span class="sortArrow"></span></span>
+    <span class="c-val sortCol" data-sort="value" data-tip="Click to sort">ADP Value<span class="sortArrow"></span></span>
+    <span class="c-pos sortCol" data-sort="pos" data-tip="Click to sort">Pos<span class="sortArrow"></span></span>
   </div>
   <div id="board"></div>
   <div id="toast"></div>
