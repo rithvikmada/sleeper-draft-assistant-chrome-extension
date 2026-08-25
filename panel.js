@@ -773,6 +773,178 @@ function rankColor(rank, of) {
   };
 }
 
+// ---------- Team/Roster dropdown ----------
+// Read-only "what does my whole team look like" popover — same floating-
+// panel mechanics as the Sleeper queue popover (openSleeperQueuePopover
+// above), but always visible (not gated behind Draft actions) and with no
+// drag/draft/remove actions on any row, since this is roster review, not
+// queue editing.
+
+// No authoritative bench-size setting exists anywhere in this app (K_ROSTER
+// only stores a draft slot number, not roster shape) — this is a judgment-
+// call guess (8 starters: 1QB/2RB/2WR/1TE/2FLEX + 6 bench = 14 total), same
+// spirit as TEAM_TARGET_SLOTS/FLEX_SHARE above. Only affects how many empty
+// "Open" bench rows render past your actual bench picks — revisit if this
+// league's real bench size is confirmed to differ.
+const ROSTER_BENCH_SLOTS = 6;
+
+// Builds the ordered lineup-slot list for "my" team: starters first (in
+// POSITIONS order — QB, RB, RB, WR, WR, TE), then FLEX, then bench — each
+// slot either holding a drafted pick or null (still open). Starters and
+// FLEX are filled by draft order (earliest pick_no first) among eligible
+// players at that slot, not by BEER value — simplest rule, and the one that
+// matches "one continuous list" reading as draft order within each slot
+// tier. Revisit if roster-value-aware FLEX assignment is wanted instead.
+function buildMyRosterSlots() {
+  const mine = lastSharedPicks.filter((p) => p.byMe).slice().sort((a, b) => (a.pickNo || 0) - (b.pickNo || 0));
+  const used = new Set();
+  const slots = [];
+  POSITIONS.forEach((pos) => {
+    const need = LEAGUE_SETTINGS.starters[pos] || 0;
+    const atPos = mine.filter((p) => p.pos === pos && !used.has(p));
+    for (let i = 0; i < need; i++) {
+      const p = atPos[i];
+      if (p) used.add(p);
+      slots.push({ slotLabel: pos, pick: p || null });
+    }
+  });
+  const flexEligible = mine.filter((p) => ["RB", "WR", "TE"].includes(p.pos) && !used.has(p));
+  for (let i = 0; i < LEAGUE_SETTINGS.flexSlots; i++) {
+    const p = flexEligible[i];
+    if (p) used.add(p);
+    slots.push({ slotLabel: "FLEX", pick: p || null });
+  }
+  const bench = mine.filter((p) => !used.has(p));
+  bench.forEach((p) => slots.push({ slotLabel: "BN", pick: p }));
+  const openBench = Math.max(0, ROSTER_BENCH_SLOTS - bench.length);
+  for (let i = 0; i < openBench; i++) slots.push({ slotLabel: "BN", pick: null });
+  return slots;
+}
+
+// pickNo is Sleeper's overall pick number — converted to round.pick for
+// display (e.g. pick 51 in a 10-team league -> "6.01"/"R6 P01") since that's
+// how a draft actually gets talked about, not the raw overall count.
+function formatDraftPick(pickNo) {
+  if (pickNo == null) return null;
+  const teams = LEAGUE_SETTINGS.teams;
+  const round = Math.floor((pickNo - 1) / teams) + 1;
+  const inRound = ((pickNo - 1) % teams) + 1;
+  return { round, inRound, label: `${round}.${String(inRound).padStart(2, "0")}`, sub: `R${round} P${String(inRound).padStart(2, "0")}` };
+}
+
+function initials(name) {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+}
+
+function renderRosterBtn() {
+  const n = lastSharedPicks.filter((p) => p.byMe).length;
+  $("rosterBtn").textContent = `Roster (${n}) ▾`;
+  if (!$("rosterPopover").hidden) renderRosterPopover();
+}
+
+// byKey lookup gives team abbreviation (not carried on the pick record
+// itself, see poll() — only name/pos/pickNo/byMe/rosterId are) from
+// whatever the current blended consensus rows already have.
+function renderRosterPopover() {
+  const panel = $("rosterPopover");
+  if (myRosterId == null) {
+    panel.innerHTML = `<div class="rosterEmptyMsg">Set your draft slot # in settings to track your own roster.</div>`;
+    return;
+  }
+  const allRows = buildConsensus(activeSources(sources, soloSource), merges);
+  const byKey = new Map(allRows.map((r) => [r.key, r]));
+  const mine = lastSharedPicks.filter((p) => p.byMe);
+  const myTeamId = mine.find((p) => p.rosterId != null)?.rosterId;
+  const { values: beerValues } = buildBeerValues(
+    buildConsensus(sources.filter((s) => s.enabled), merges),
+    projMap,
+    takenKeySet()
+  );
+  const ranks = myTeamId != null ? buildTeamPositionRanks(lastSharedPicks, beerValues) : {};
+  const myRanks = myTeamId != null ? ranks[myTeamId] : null;
+
+  const summaryHtml = POSITIONS.map((pos) => {
+    const t = posTint(pos);
+    const r = myRanks && myRanks[pos];
+    const n = mine.filter((p) => p.pos === pos).length;
+    const rankHtml = r && n > 0
+      ? (() => { const { bg, fg } = rankColor(r.rank, r.of); return `<span class="prpRank" style="background:${bg};color:${fg};border-radius:4px;padding:2px 6px;display:inline-block">${esc(ordinal(r.rank).toUpperCase())}</span>`; })()
+      : `<span class="prpRank" style="color:var(--text-disabled)">—</span>`;
+    return `<div class="sItem"><div class="sPos" style="color:${t.fg}">${esc(pos)}</div>${rankHtml}</div>`;
+  }).join("");
+
+  const slots = buildMyRosterSlots();
+  const slotChipHtml = (slotLabel) => (slotLabel === "BN" ? badgeHtml("neutral", "BN") : posBadgeHtml(slotLabel, null, "sm"));
+  const rowsHtml = slots.map(({ slotLabel, pick }) => {
+    if (!pick) {
+      return `<div class="rosterRow empty">
+        ${slotChipHtml(slotLabel)}
+        <span class="rosterAvatar dashed">—</span>
+        <div><div class="rosterName" style="color:var(--text-disabled)">Open</div></div>
+        <div class="rosterPick dim">—</div>
+      </div>`;
+    }
+    const row = byKey.get(pick.key);
+    const team = row && row.team ? row.team : "";
+    const t = posTint(pick.pos);
+    const dp = formatDraftPick(pick.pickNo);
+    const dim = slotLabel === "BN" ? " dim" : "";
+    return `<div class="rosterRow">
+      ${slotChipHtml(slotLabel)}
+      <span class="rosterAvatar" style="border-color:${t.fg}">${esc(initials(pick.name))}${team ? `<span class="rosterTeamBadge">${esc(team)}</span>` : ""}</span>
+      <div><div class="rosterName">${esc(pick.name)}</div><div class="rosterMeta">${esc(pick.pos)}${team ? " · " + esc(team) : ""}</div></div>
+      <div class="rosterPick${dim}">${dp ? `${dp.label}<span class="rd">${dp.sub}</span>` : "—"}</div>
+    </div>`;
+  }).join("");
+
+  panel.innerHTML = `
+    <div class="rosterHead"><span class="title">My Roster</span><span class="sub">slot ${esc(myRosterId)}</span></div>
+    <div class="rosterSummary">${summaryHtml}</div>
+    <div class="rosterList">${rowsHtml}</div>`;
+}
+
+function closeRosterPopover() {
+  $("rosterPopover").hidden = true;
+  document.removeEventListener("click", onRosterPopoverOutsideClick, true);
+}
+function onRosterPopoverOutsideClick(e) {
+  if (e.target.closest("#rosterPopover") || e.target.closest("#rosterBtn")) return;
+  closeRosterPopover();
+}
+// Same flip-above/below-and-clamp positioning as the Sleeper queue popover
+// (openSleeperQueuePopover above) — see its comment for why a flat
+// "always open below" breaks near the bottom of the window.
+function openRosterPopover() {
+  renderRosterPopover();
+  const panel = $("rosterPopover");
+  const btn = $("rosterBtn");
+  panel.hidden = false;
+  panel.style.top = "";
+  panel.style.bottom = "";
+  panel.style.maxHeight = "";
+  const r = btn.getBoundingClientRect();
+  const w = panel.offsetWidth;
+  panel.style.left = `${Math.max(4, Math.min(r.right - w, window.innerWidth - w - 4))}px`;
+  const margin = 8;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  if (spaceBelow >= spaceAbove) {
+    panel.style.top = `${r.bottom + 6}px`;
+    panel.style.maxHeight = `${Math.max(120, spaceBelow - 6)}px`;
+  } else {
+    panel.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    panel.style.maxHeight = `${Math.max(120, spaceAbove - 6)}px`;
+  }
+  setTimeout(() => document.addEventListener("click", onRosterPopoverOutsideClick, true), 0);
+}
+$("rosterBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!$("rosterPopover").hidden) { closeRosterPopover(); return; }
+  openRosterPopover();
+});
+
 // A persistent, always-visible list of every enabled source — the per-card
 // dots on the Best Picks cards below only show a source when it agrees with
 // that specific pick, so a source with no dot anywhere still needs a way to
@@ -921,6 +1093,7 @@ function renderAll() {
     renderBoard();
     renderRecommendations();
     renderSleeperQueueBtn();
+    renderRosterBtn();
     const total = Object.keys(taken).length + Object.keys(manualTaken).length;
     $("pickCounter").textContent = total ? `${total} off board` : "";
   } catch (e) {
