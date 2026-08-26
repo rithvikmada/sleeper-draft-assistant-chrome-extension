@@ -1714,6 +1714,51 @@ two related tools for this — use the right one:
   - Drop K/DST rows, same as every other ranking import (see CSV parser notes
     in the ADP section above) — this project's league has none.
 
+**Correction (2026-08-25): `ranking-source-normalizer-prompt.md` referenced
+above was never actually a tracked file in this repo** — it was described in
+this doc as existing but doesn't (confirmed by a filesystem check). The
+in-app tool built the same day (next section) is its real replacement, built
+from scratch rather than recovered.
+
+### In-app AI converter — "⬇ DOWNLOAD AI SKILL" / "⧉ COPY AI PROMPT" (added 2026-08-25)
+The Rankings Manager now generates both artifacts above directly in the UI,
+next to "+ ADD SOURCE" (`rankings-manager.js`'s `downloadConverterSkill()`/
+`copyConverterPrompt()`), instead of relying on a hand-maintained standalone
+file that (per the correction above) never actually existed in the repo:
+- **⬇ DOWNLOAD AI SKILL** — downloads a real Claude Code `SKILL.md` (YAML
+  frontmatter + instructions) for a user to drop into
+  `.claude/skills/rankings-csv-converter/SKILL.md` in any Claude Code project,
+  so Claude can do this conversion as a normal skill invocation.
+- **⧉ COPY AI PROMPT** — copies a standalone prompt (paste-into-any-chat
+  format: claude.ai, ChatGPT, etc., with a `[PASTE YOUR RANKINGS/ADP EXPORT
+  HERE]` placeholder at the end) to the clipboard, falling back to a `.md`
+  download if clipboard access fails in that context. For non-Claude-Code
+  users.
+- **Both share one body of rules, `CONVERTER_INSTRUCTIONS_MD` in
+  `shared.js`** — the skill and the prompt are just two different thin
+  wrappers (frontmatter vs. a chat preamble) around the identical
+  instructions, specifically so the two can't drift apart the way a
+  hand-maintained standalone file and an in-session process could.
+- **Deliberately has NO access to this repo's bundled name data
+  (`rankings.js`/`fp-rankings.js`), unlike the in-session process documented
+  above** — direct requirement: a fresh install of this extension ships with
+  zero ranking/ADP sources (only the live Sleeper ADP API), so a
+  cross-reference against this project's own bundled rankings would be
+  cross-referencing data a real end user's copy doesn't have and shouldn't
+  ship with. Both the skill and the prompt instead tell the AI to leave
+  abbreviated/ambiguous names exactly as given and list them in a "Needs
+  review" section of its output, for the user to resolve after import via
+  the Rankings Manager's existing right-click "merge near matches" feature
+  (see Rankings Manager architecture above) — same fix path, just applied by
+  the end user afterward instead of by Claude during the conversion itself.
+- **Output format matches `parseRankings()` exactly**: `Rank,Name,Team,
+  Position,Tier` header, K/DST rows dropped, embedded team/bye stripped from
+  the name cell, Tier column omitted entirely (not left blank) when the
+  source has no tier data, and explicit handling for position-only sources
+  (own within-position rank as `Rank`, plus an instruction to check that
+  import checkbox) and multi-analyst tables (one analyst's own column only,
+  never a pre-blended average).
+
 ## Testing
 **`test.js` is a real, committed regression suite now (added in the
 Stage 2 audit, 2026-08-23)** — `node test.js`, 56 checks, no dependencies,
