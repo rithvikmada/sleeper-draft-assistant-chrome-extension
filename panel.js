@@ -1059,6 +1059,74 @@ function initPopoutMode() {
     $("sleeperQueuePopover").hidden = false;
   }
 }
+
+// ---------- Popped-out queue's Sleeper-write relay (added 2026-08-25) ----------
+// Draft/queue actions from the popped-out Queue window were silently
+// failing ("Turn on Draft actions and paste your Sleeper token first.")
+// even with write mode on and a token pasted — because they WERE, just in
+// the MAIN window. The Sleeper token is deliberately session-memory only,
+// living in the #sleeperToken input's value and never written to
+// chrome.storage (see sleeperToken() below) — a real security choice, not
+// an oversight, so a popout window's own copy of that field is always
+// empty. currentDraftId/currentPickNo are similarly main-window-only: they
+// only get set by startPolling(), and only the main window ever polls (see
+// claude.md's "Window architecture" — one window polls, by design). Rather
+// than duplicate the token/poll into every popout (defeating the point of
+// keeping it out of storage, and doubling Sleeper requests), a popout
+// relays the actual privileged call to the main window via
+// chrome.runtime.sendMessage, which the main window executes with ITS OWN
+// token/draftId/pickNo and reports back. draftOnSleeper/applySleeperQueueChange
+// below call this only when popoutView is set; the main window's own calls
+// are unchanged (still direct, no relay round-trip added to the common
+// case).
+async function execViaMainWindow(relayType, payload) {
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "popoutSleeperRelay", relayType, payload });
+  } catch (e) {
+    throw new Error("No response from the main board window — is it still open?");
+  }
+  if (!res) throw new Error("No response from the main board window — is it still open?");
+  if (!res.ok) throw new Error(res.error || "Unknown error");
+  return res.data;
+}
+// Registered ONLY in the main window (popoutView null) — a popout window
+// has nothing to relay TO itself. Executes with this window's own live
+// sleeperWriteReady()/currentDraftId/currentPickNo/sleeperToken(), exactly
+// the same checks and calls draftOnSleeper/applySleeperQueueChange already
+// make locally when not popped out.
+if (!popoutView) {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (!msg || msg.type !== "popoutSleeperRelay") return;
+    (async () => {
+      try {
+        if (!sleeperWriteReady()) throw new Error("Turn on Draft actions and paste your Sleeper token first.");
+        if (!currentDraftId) throw new Error("Sync a draft first.");
+        if (msg.relayType === "draftPlayer") {
+          if (currentPickNo == null) throw new Error("Sync a draft first.");
+          const res = await chrome.runtime.sendMessage({
+            type: "sleeperDraftPlayer",
+            payload: { draftId: currentDraftId, playerId: msg.payload.playerId, pickNo: currentPickNo, token: sleeperToken() },
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+          sendResponse({ ok: true, data: res.data });
+        } else if (msg.relayType === "updateQueue") {
+          const res = await chrome.runtime.sendMessage({
+            type: "sleeperUpdateDraftQueue",
+            payload: { draftId: currentDraftId, playerIds: msg.payload.playerIds, token: sleeperToken() },
+          });
+          if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+          sendResponse({ ok: true, data: res.data });
+        } else {
+          sendResponse({ ok: false, error: "Unknown relay action." });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true; // keep the message channel open for the async sendResponse above
+  });
+}
 document.addEventListener("click", (e) => {
   const openBtn = e.target.closest("[data-popout-open]");
   if (openBtn) {
@@ -2023,8 +2091,14 @@ $("sleeperTestBtn").addEventListener("click", async () => {
 // below are thin callers rather than three separate copies of this
 // optimistic-update/revert-on-failure dance.
 async function applySleeperQueueChange(newKeys, successMsg) {
-  if (!sleeperWriteReady()) { toast("Turn on Draft actions and paste your Sleeper token first.", true); return; }
-  if (!currentDraftId) { toast("Sync a draft first.", true); return; }
+  // A popout window can't check its own sleeperWriteReady()/currentDraftId —
+  // both are meaningless there (see the relay comment above) — so those
+  // checks happen in the MAIN window's relay handler instead when popped
+  // out; only guard locally in the normal (non-popout) case.
+  if (!popoutView) {
+    if (!sleeperWriteReady()) { toast("Turn on Draft actions and paste your Sleeper token first.", true); return; }
+    if (!currentDraftId) { toast("Sync a draft first.", true); return; }
+  }
   const prev = sleeperQueueKeys;
   sleeperQueueKeys = newKeys;
   saveSleeperQueueKeys();
@@ -2032,13 +2106,17 @@ async function applySleeperQueueChange(newKeys, successMsg) {
   const playerIds = sleeperQueueKeys.map((k) => sleeperIds[k]).filter(Boolean);
   try {
     const t0 = performance.now(); // see draftOnSleeper's identical timing note
-    const res = await chrome.runtime.sendMessage({
-      type: "sleeperUpdateDraftQueue",
-      payload: { draftId: currentDraftId, playerIds, token: sleeperToken() },
-    });
+    if (popoutView) {
+      await execViaMainWindow("updateQueue", { playerIds });
+    } else {
+      const res = await chrome.runtime.sendMessage({
+        type: "sleeperUpdateDraftQueue",
+        payload: { draftId: currentDraftId, playerIds, token: sleeperToken() },
+      });
+      if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+    }
     const ms = Math.round(performance.now() - t0);
     console.debug(`[4th&Go] update_draft_queue round-trip: ${ms}ms`);
-    if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
     toast(`${successMsg} (${ms}ms)`);
   } catch (e) {
     sleeperQueueKeys = prev; // revert the optimistic update
@@ -2333,10 +2411,15 @@ function confirmDraftOnSleeper(name) {
 }
 
 async function draftOnSleeper(key, name) {
-  if (!sleeperWriteReady()) { toast("Turn on Draft actions and paste your Sleeper token first.", true); return; }
-  if (!currentDraftId || currentPickNo == null) { toast("Sync a draft first.", true); return; }
   const playerId = sleeperIds[key];
   if (!playerId) { toast("No Sleeper player ID matched for this player.", true); return; }
+  // Same "these checks are meaningless in a popout window" reasoning as
+  // applySleeperQueueChange above — the main window's relay handler makes
+  // the equivalent checks with its own live state when popped out.
+  if (!popoutView) {
+    if (!sleeperWriteReady()) { toast("Turn on Draft actions and paste your Sleeper token first.", true); return; }
+    if (!currentDraftId || currentPickNo == null) { toast("Sync a draft first.", true); return; }
+  }
   // Irreversible in a real league draft — the one write action here that
   // gets a confirm gate (skippable via the modal's checkbox above). Queueing
   // doesn't need one (freely reversible, low-stakes); this does.
@@ -2350,13 +2433,17 @@ async function draftOnSleeper(key, name) {
     // is outside anything this extension does. Logged, not just toasted, so
     // it's easy to eyeball a pattern across several picks.
     const t0 = performance.now();
-    const res = await chrome.runtime.sendMessage({
-      type: "sleeperDraftPlayer",
-      payload: { draftId: currentDraftId, playerId, pickNo: currentPickNo, token: sleeperToken() },
-    });
+    if (popoutView) {
+      await execViaMainWindow("draftPlayer", { playerId });
+    } else {
+      const res = await chrome.runtime.sendMessage({
+        type: "sleeperDraftPlayer",
+        payload: { draftId: currentDraftId, playerId, pickNo: currentPickNo, token: sleeperToken() },
+      });
+      if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
+    }
     const ms = Math.round(performance.now() - t0);
     console.debug(`[4th&Go] draft_pick_player round-trip: ${ms}ms`);
-    if (!res || !res.ok) throw new Error((res && res.error) || "Unknown error");
     toast(`Drafted ${name} on Sleeper. (${ms}ms)`);
     // The actual pick shows up as "Yours" once the next poll syncs — no
     // local taken[] write here, so this can't drift from what Sleeper's
