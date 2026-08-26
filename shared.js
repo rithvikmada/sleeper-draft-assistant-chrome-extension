@@ -840,11 +840,33 @@ function buildConsensus(sources, merges = {}) {
       }
     });
   });
-  // Position-only sources: only ever recorded into posOnlyTiers, keyed by
-  // source id, for display — never into ranks/tierVotes/depthVotes above.
-  // A player who only appears in a position-only source (never in any
-  // combined source) still gets an entry so their tier reference shows up
-  // somewhere, but they'll have no rank/blended tier of their own.
+  // Position-only sources: recorded into posOnlyTiers/posOnlyRanks (display-
+  // only, as before) AND — new — a normalized within-position depth vote
+  // pushed into the same e.depthVotes array blendSources' tiers feed (see
+  // assignBlendedTiers below), so the source's positional opinion actually
+  // participates in blended tier boundaries instead of sitting inert in a
+  // reference column. Deliberately still never touches e.ranks/tierVotes —
+  // a positional rank ("WR12") mixed directly into the cross-position rank
+  // median would corrupt it for every other source at once (the original
+  // reason position-only sources were excluded); depth is different because
+  // it's already normalized to a 0..1 "how deep in this ranking" scale the
+  // same way a full source's tier depth is, so it can blend on equal terms
+  // without ever touching raw cross-position rank ordering.
+  // Caveat, not fully solved: a position's 0..1 depth scale isn't perfectly
+  // equivalent across positions (e.g. "top half of a 40-deep WR guide" isn't
+  // exactly the same value tier as "top half of a 13-deep QB guide" — QBs
+  // are shallower at replacement level). This is a pragmatic approximation,
+  // same spirit as the tier-depth blending it reuses — not a rigorous
+  // position-value model. Revisit if it visibly skews blended tiers for a
+  // shallow position like QB/TE.
+  const maxRankByPos = new Map();
+  posOnlySources.forEach((src) => {
+    const perPos = {};
+    src.players.forEach((p) => {
+      if (p.pos && isFinite(p.rank)) perPos[p.pos] = Math.max(perPos[p.pos] || 0, p.rank);
+    });
+    maxRankByPos.set(src.id, perPos);
+  });
   posOnlySources.forEach((src) => {
     src.players.forEach((p) => {
       if (!p.pos) return;
@@ -856,22 +878,34 @@ function buildConsensus(sources, merges = {}) {
       // Within-position rank (e.g. this source's "WR2") — needed so Best
       // Picks can tell which player is this source's TOP recommendation
       // within a position, not just its tier band. See renderBestPicksWidget.
-      if (isFinite(p.rank)) e.posOnlyRanks[src.id] = p.rank;
+      if (isFinite(p.rank)) {
+        e.posOnlyRanks[src.id] = p.rank;
+        const maxRank = maxRankByPos.get(src.id)[p.pos];
+        if (maxRank > 0) e.depthVotes.push((p.rank - 1) / maxRank);
+      }
     });
   });
+  // Whether tiers get depth-blended (assignBlendedTiers) vs. taken as-is from
+  // a single source's own label (modeTier) now depends on how many sources
+  // are voting on DEPTH at all, not just blendSources — a position-only
+  // source's normalized depth vote (above) counts too, so e.g. one full
+  // source + one position-only source still blends instead of just passing
+  // the full source's raw tier through untouched.
+  const totalVotingSources = blendSources.length + posOnlySources.length;
   const out = [...map.values()].map((e) => {
     const vals = Object.values(e.ranks).filter((v) => isFinite(v));
     return {
       key: e.key, name: e.name, team: e.team, pos: e.pos, ranks: e.ranks, posOnlyTiers: e.posOnlyTiers, posOnlyRanks: e.posOnlyRanks,
-      // With exactly one active blending source, its own tier label is
-      // meaningful as-is. With 2+, filled in below — see assignBlendedTiers.
-      tier: blendSources.length <= 1 ? modeTier(e.tierVotes) : "",
+      // With exactly one voting source total (no position-only depth
+      // contribution either), its own tier label is meaningful as-is. With
+      // 2+, filled in below — see assignBlendedTiers.
+      tier: totalVotingSources <= 1 ? modeTier(e.tierVotes) : "",
       depth: e.depthVotes.length ? median(e.depthVotes) : null,
       consensus: median(vals), sourceCount: vals.length,
     };
   });
   out.sort((a, b) => (a.consensus ?? 1e9) - (b.consensus ?? 1e9));
-  if (blendSources.length > 1) assignBlendedTiers(out);
+  if (totalVotingSources > 1) assignBlendedTiers(out);
   return out;
 }
 

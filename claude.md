@@ -584,6 +584,42 @@ Settled after using the extension in a real draft.
      real consensus/tier per row, and isolating it inside a multi-source Best
      Picks call now correctly surfaces its own WR ranking instead of going
      blank.
+  **Position-only sources now contribute to blended TIERS (not rank) —
+  (2026-08-25).** The rule above (never touches `ranks`/`tierVotes`) still
+  holds for raw cross-position rank — that part was correct and stays
+  untouched, since mixing a positional rank into the cross-position median
+  really would corrupt it for every other source. But leaving a position-only
+  source's opinion completely inert (reference-column-only) meant uploading
+  one had literally zero effect on the actual blended board anyone drafts
+  off — direct user feedback that this undersold the value of a multi-source
+  upload. Fixed narrowly: each position-only source's within-position rank
+  is normalized to a 0..1 depth (`(rank-1)/maxRankAtThatPosition`, same
+  `maxRankByPos` computed per source per position) and pushed into the SAME
+  `e.depthVotes` array a full source's tier depth already feeds — reusing
+  the existing, already-trusted depth-blending machinery
+  (`assignBlendedTiers`) rather than inventing a second blending path. This
+  is deliberately NOT the reverted source-vote-boundary approach (exact
+  tier-pair matching, which failed in production) — it's the same
+  equal-width depth-bucketing that's been running successfully since that
+  revert, just now fed by one more kind of source.
+  `totalVotingSources` (`blendSources.length + posOnlySources.length`)
+  replaces the old `blendSources.length` check for whether tiers get
+  depth-blended (`assignBlendedTiers`) vs. passed through as-is
+  (`modeTier`) — so e.g. one full source + one position-only source now
+  blends instead of just parroting the full source's raw tier untouched.
+  Verified with a hand-checked Node simulation (5 synthetic RBs, a full
+  source and a position-only source ranking them in opposite order): raw
+  `consensus` rank stayed byte-identical to the full-source-only case (no
+  cross-position corruption), while blended tiers visibly shifted in
+  response to the disagreement, matching the depth math worked out by hand.
+  **Known caveat, not fully solved**: a position's 0..1 depth scale isn't
+  perfectly equivalent across positions — "top half of a 40-deep WR guide"
+  and "top half of a 13-deep QB guide" aren't obviously the same value tier,
+  since QBs are shallower at replacement level (see the BEER/VBD section's
+  own man-games depths: QB13 vs WR37). This is a pragmatic approximation in
+  the same spirit as the tier-depth blending it reuses, not a rigorous
+  cross-position value model — revisit if it visibly skews blended tiers for
+  a shallow position.
 
 ## Rankings Creator (added 2026-08-25, branch/worktree `claude/custom-rankings-creator-e1b1bd`)
 A drag-and-drop custom rankings builder — a new "RANKINGS CREATOR" tab
