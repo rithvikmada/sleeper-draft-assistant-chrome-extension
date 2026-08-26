@@ -1,17 +1,26 @@
 {
   "manifest_version": 3,
   "name": "4th&Go — Sleeper Draft Board",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Your tiered rankings, auto-synced to a live Sleeper draft. Players get crossed off as picks come in.",
   "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["https://api.sleeper.app/*", "https://sleeper.com/*"],
+  "host_permissions": ["https://api.sleeper.app/*", "https://sleeper.com/*", "https://api.gumroad.com/*", "https://api.web3forms.com/*"],
   "action": {
-    "default_title": "Open draft board"
+    "default_title": "Open draft board",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
   },
   "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
     "128": "icon128.png"
   }
 }

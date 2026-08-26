@@ -239,6 +239,126 @@ async function saveScoringFormatOverride(val) {
   await chrome.storage.local.set({ [K_SCORING_FORMAT_OVERRIDE]: SCORING_FORMATS.includes(val) ? val : null });
 }
 
+// ---------- license key gating (added 2026-08-26, Gumroad-verified pass) ----------
+// All-or-nothing paid unlock, no freemium tiers — a deliberate scope call, see
+// claude.md's licensing section. Keys are issued and delivered automatically
+// by Gumroad (its built-in "generate a license key per sale" feature — no
+// manual key list to maintain, no re-shipping the extension per batch), and
+// checked against Gumroad's free public verify endpoint. This is NOT
+// tamper-proof (devtools can still flip cachedLicenseValid) — acceptable at
+// this scale (~50 buyers); see claude.md for a real server-validated upgrade
+// path if that's ever worth revisiting.
+//
+// SETUP REQUIRED before this works for real: create the product on Gumroad
+// with "Generate a unique license key per sale" enabled, then set
+// GUMROAD_PRODUCT_PERMALINK below to that product's permalink (the short slug
+// in its Gumroad URL, e.g. "abcde" from gumroad.com/l/abcde). Until that's
+// set, only the DEV_TEST_KEYS below validate, so local testing doesn't
+// require a live Gumroad product.
+const GUMROAD_PRODUCT_PERMALINK = "fourthandgo"; // rithmada.gumroad.com/l/fourthandgo
+const GUMROAD_VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify";
+
+const K_LICENSE_KEY = "licenseKey"; // string — the raw key the user entered, persisted so it survives reload
+const K_LICENSE_VERIFIED_AT = "licenseVerifiedAt"; // epoch ms of the last successful Gumroad verification for this key
+const LICENSE_REVERIFY_MS = 7 * 24 * 60 * 60 * 1000; // re-check with Gumroad at most weekly when online; trust the cache otherwise (so a real draft with no wifi still works)
+
+// Local-only bypass so this can be tested end-to-end before a Gumroad
+// product exists / before shipping real keys. Remove or leave — these never
+// touch Gumroad's API, they're recognized purely client-side.
+const DEV_TEST_KEYS = new Set([
+  "BETA-0001-TEST-KEY1",
+  "BETA-0002-TEST-KEY2",
+  "BETA-0003-TEST-KEY3",
+]);
+
+function normalizeLicenseKey(raw) {
+  return String(raw || "").toUpperCase().trim();
+}
+
+// Hits Gumroad's public license-verify endpoint. increment_uses_count=false
+// so re-checking on every extension load doesn't chew through Gumroad's own
+// per-key use-count tracking — this call is purely "is this key valid",
+// not "record an activation."
+async function verifyLicenseKeyRemote(key) {
+  if (DEV_TEST_KEYS.has(key)) return { valid: true };
+  if (!GUMROAD_PRODUCT_PERMALINK) {
+    return { valid: false, error: "License verification isn't configured yet (no Gumroad product linked). Use a dev test key, or contact the developer." };
+  }
+  try {
+    const body = new URLSearchParams({
+      product_permalink: GUMROAD_PRODUCT_PERMALINK,
+      license_key: key,
+      increment_uses_count: "false",
+    });
+    const resp = await fetch(GUMROAD_VERIFY_URL, { method: "POST", body });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      return { valid: false, error: "That key isn't recognized by Gumroad. Double-check it, or send feedback if you think this is wrong." };
+    }
+    // A refunded/disputed sale still comes back success:true but flagged —
+    // treat either as invalid so a refund actually revokes access.
+    if (data.purchase && (data.purchase.refunded || data.purchase.disputed || data.purchase.chargebacked)) {
+      return { valid: false, error: "This license is no longer active (refunded or disputed). Contact the developer if that's unexpected." };
+    }
+    return { valid: true };
+  } catch (e) {
+    return { valid: false, error: "Couldn't reach the license server — check your connection and try again.", offline: true };
+  }
+}
+
+async function loadLicenseKey() {
+  const v = await chrome.storage.local.get(K_LICENSE_KEY);
+  return v[K_LICENSE_KEY] || "";
+}
+
+// Activation flow: called from the lock screen with whatever the user typed.
+// Always hits the network (or the dev-key bypass) — this is the one-time
+// "prove this key is real" check. Once it passes, the result is cached
+// locally (see refreshLicenseCache) so later app opens don't require
+// connectivity.
+async function saveLicenseKey(raw) {
+  const key = normalizeLicenseKey(raw);
+  if (!key) return { valid: false, error: "Enter a license key." };
+  const result = await verifyLicenseKeyRemote(key);
+  if (!result.valid) return result;
+  await chrome.storage.local.set({ [K_LICENSE_KEY]: key, [K_LICENSE_VERIFIED_AT]: Date.now() });
+  return { valid: true };
+}
+
+async function clearLicenseKey() {
+  await chrome.storage.local.remove([K_LICENSE_KEY, K_LICENSE_VERIFIED_AT]);
+}
+
+// Cached synchronously after the async load in each surface's init() so hot
+// paths can check licensing without awaiting storage on every call — same
+// pattern as sleeperWriteEnabled etc. On a normal (online) load past
+// LICENSE_REVERIFY_MS, silently re-checks with Gumroad in the background
+// (so a refunded key eventually gets caught) without blocking startup on it;
+// if that re-check fails for a network reason (not a real rejection), the
+// cached "valid" state is left alone so drafting offline still works.
+let cachedLicenseValid = false;
+async function refreshLicenseCache() {
+  const key = await loadLicenseKey();
+  if (!key) { cachedLicenseValid = false; return false; }
+  const stored = await chrome.storage.local.get(K_LICENSE_VERIFIED_AT);
+  const verifiedAt = stored[K_LICENSE_VERIFIED_AT] || 0;
+  if (Date.now() - verifiedAt < LICENSE_REVERIFY_MS) {
+    cachedLicenseValid = true; // trust the cache, no network needed
+    return true;
+  }
+  const result = await verifyLicenseKeyRemote(key);
+  if (result.valid) {
+    cachedLicenseValid = true;
+    await chrome.storage.local.set({ [K_LICENSE_VERIFIED_AT]: Date.now() });
+  } else if (result.offline) {
+    cachedLicenseValid = true; // couldn't reach Gumroad — don't lock someone out over a bad connection
+  } else {
+    cachedLicenseValid = false; // an actual rejection (revoked/refunded) — lock it back
+  }
+  return cachedLicenseValid;
+}
+function isLicensed() { return cachedLicenseValid; }
+
 // ---------- position/avatar helpers shared by the board window and the
 // Rankings Creator (Rankings Manager) ----------
 // Distinct object from POS_COLORS above (which the manager's older-style

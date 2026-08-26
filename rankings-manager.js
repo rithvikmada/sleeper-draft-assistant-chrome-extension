@@ -1856,7 +1856,38 @@ async function ensureBuiltinSources() {
 }
 
 // ---------- init ----------
+// ---------- Full-app license lock (added 2026-08-26) ----------
+// Twin of panel.js's lock — same isLicensed()/saveLicenseKey() from
+// shared.js, checked before this surface does anything else either.
+document.getElementById("lockActivateBtn").addEventListener("click", async () => {
+  const status = document.getElementById("lockLicenseStatus");
+  const btn = document.getElementById("lockActivateBtn");
+  const raw = document.getElementById("lockLicenseInput").value;
+  status.className = "testStatus";
+  status.textContent = "Verifying with Gumroad...";
+  btn.disabled = true;
+  const result = await saveLicenseKey(raw);
+  btn.disabled = false;
+  if (!result.valid) {
+    status.className = "testStatus err";
+    status.textContent = result.error;
+    return;
+  }
+  status.className = "testStatus ok";
+  status.textContent = "License valid — loading...";
+  location.reload();
+});
+document.getElementById("lockLicenseInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("lockActivateBtn").click();
+});
+
 (async function init() {
+  await refreshLicenseCache();
+  if (!isLicensed()) {
+    document.getElementById("licenseLock").hidden = false;
+    return; // nothing else in this surface runs until a valid key is entered
+  }
+
   sources = await loadSources();
   await ensureBuiltinSources();
   draft = await loadDraftState();
