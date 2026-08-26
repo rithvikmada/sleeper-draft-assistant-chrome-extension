@@ -213,17 +213,28 @@ async function execSleeperGraphQL(draftId, operationName, query, token) {
   return out.data;
 }
 
-// player_id/draft_id are always digit-strings straight from Sleeper's own
-// data (never free-typed by the user) — validated here anyway before they
-// get spliced into a GraphQL query string, since these are inlined args, not
+// draft_id/pick_no are always digit-strings straight from Sleeper's own data
+// (never free-typed by the user) — validated here anyway before they get
+// spliced into a GraphQL query string, since these are inlined args, not
 // bound variables.
 function assertDigits(v, label) {
   if (!/^\d+$/.test(String(v))) throw new Error(`Invalid ${label}.`);
 }
 
+// player_id is usually a digit-string too, EXCEPT for a defense (K/DST
+// support): Sleeper models a team defense's "player_id" as its own team-code
+// pseudo-id (e.g. "LAR", "SF" — confirmed via a direct query, see
+// fetchSleeperPlayerIdMap in shared.js), not a numeric id. assertDigits alone
+// would reject every real defense pick/queue action with "Invalid player
+// ID" — this accepts either shape instead, still refusing anything that
+// isn't one of the two real shapes Sleeper's own data ever produces.
+function assertPlayerId(v, label) {
+  if (!/^\d+$/.test(String(v)) && !/^[A-Z]{2,4}$/.test(String(v))) throw new Error(`Invalid ${label}.`);
+}
+
 async function sleeperDraftPlayer({ draftId, playerId, pickNo, token }) {
   assertDigits(draftId, "draft ID");
-  assertDigits(playerId, "player ID");
+  assertPlayerId(playerId, "player ID");
   assertDigits(pickNo, "pick number");
   const query = `mutation draft_pick_player {
         draft_pick_player(sport: "nfl", player_id: "${playerId}", draft_id: "${draftId}", pick_no: ${pickNo}) {
@@ -241,7 +252,7 @@ async function sleeperDraftPlayer({ draftId, playerId, pickNo, token }) {
 
 async function sleeperUpdateDraftQueue({ draftId, playerIds, token }) {
   assertDigits(draftId, "draft ID");
-  playerIds.forEach((id) => assertDigits(id, "player ID"));
+  playerIds.forEach((id) => assertPlayerId(id, "player ID"));
   const idList = playerIds.map((id) => `"${id}"`).join(", ");
   // No "sport" argument here, unlike draft_pick_player — confirmed live
   // against Sleeper's real GraphQL server, which rejected the first attempt

@@ -32,9 +32,15 @@
   --pos-qb:#F4527A; --pos-rb:#35D07F; --pos-wr:#22D3EE; --pos-te:#FF8A3D; --pos-flex:#FFD84D;
   --pos-qb-tint:rgba(244,82,122,.14); --pos-rb-tint:rgba(53,208,127,.14);
   --pos-wr-tint:rgba(34,211,238,.14); --pos-te-tint:rgba(255,138,61,.14);
+  /* K/DEF (K/DST support, added 2026-08-26) — K reuses the violet already in
+     the signal palette above; DEF gets a new steel-blue since nothing
+     existing fit (this app's other hues are all already spoken for). */
+  --pos-k:#A78BFA; --pos-def:#6E8CAE;
+  --pos-k-tint:rgba(167,139,250,.14); --pos-def-tint:rgba(110,140,174,.14);
   /* Legacy POS_COLORS palette (shared.js) — see rankings-manager.html's copy
      of this comment for why it's a separate var set from --pos-qb/etc. */
   --legacy-pos-qb:#F5C242; --legacy-pos-rb:#5FCF8A; --legacy-pos-wr:#5FA8E8; --legacy-pos-te:#E88AC9;
+  --legacy-pos-k:#A78BFA; --legacy-pos-def:#6E8CAE;
 
   --surface-app:var(--ink-900); --surface-panel:var(--ink-850); --surface-raised:var(--ink-800);
   --surface-row-hover:rgba(255,255,255,.04); --surface-sunken:var(--ink-950);
@@ -126,8 +132,10 @@ html[data-theme="light"] {
      completely unaffected — this block only exists under
      html[data-theme="light"]. */
   --pos-qb:#C4265B; --pos-rb:#16794A; --pos-wr:#0B7285; --pos-te:#C25400; --pos-flex:#B08A00;
+  --pos-k:#6A4FD1; --pos-def:#2B5F82;
   --cyan-500:#0B7285; --green-500:#16794A; --red-500:#C22F2F; --orange-500:#C25400; --violet-500:#6A4FD1;
   --legacy-pos-qb:#8F6D00; --legacy-pos-rb:#16794A; --legacy-pos-wr:#1D5FA0; --legacy-pos-te:#A83E86;
+  --legacy-pos-k:#6A4FD1; --legacy-pos-def:#2B5F82;
 
   --on-accent:#1A1400;
 
@@ -204,6 +212,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .input2:focus-within { border-color: var(--border-accent); box-shadow: var(--ring-focus); }
 .input2 input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text-primary); font: var(--type-ui); font-size: var(--text-sm); }
 .input2 input::placeholder { color: var(--text-disabled); }
+.input2 select { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text-primary); font: var(--type-ui); font-size: var(--text-sm); appearance: none; -webkit-appearance: none; cursor: pointer; }
+.input2 select option { background: var(--surface-raised); color: var(--text-primary); }
 .input2.sm { height: 28px; }
 
 .fieldLabel { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
@@ -219,6 +229,11 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .badge2.t-warning { background: var(--orange-a12); color: var(--orange-500); border-color: rgba(255,138,61,.28); }
 .badge2.t-neutral { background: rgba(255,255,255,.06); color: var(--text-secondary); border-color: var(--border-default); }
 .badge2.t-danger { background: var(--red-a12); color: var(--red-500); border-color: rgba(255,90,90,.28); }
+/* K/DEF tones (K/DST support) — tied to the --pos-k/--pos-def tokens, same
+   pattern as every other position color in this app, rather than reusing an
+   existing signal color that already means something else (e.g. red = error). */
+.badge2.t-k { background: var(--pos-k-tint); color: var(--pos-k); border-color: var(--pos-k); }
+.badge2.t-def { background: var(--pos-def-tint); color: var(--pos-def); border-color: var(--pos-def); }
 
 /* Injury status badge (Q/D/O/IR/etc) — same colored-pill language as .badge2
    but tighter, so it sits inline next to a name without pushing row height.
@@ -245,12 +260,16 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
 .posRankPill.t-info { border-color: rgba(34,211,238,.28); }
 .posRankPill.t-warning { border-color: rgba(255,138,61,.28); }
 .posRankPill.t-neutral { border-color: var(--border-default); }
+.posRankPill.t-k { border-color: var(--pos-k); }
+.posRankPill.t-def { border-color: var(--pos-def); }
 .posRankPill .prpTop { display: flex; align-items: center; justify-content: center; height: 18px; padding: 0 6px; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .posRankPill .prpTop.t-accent { background: var(--chalk-a12); color: var(--chalk-500); }
 .posRankPill .prpTop.t-positive { background: var(--green-a12); color: var(--green-500); }
 .posRankPill .prpTop.t-info { background: var(--cyan-a12); color: var(--cyan-500); }
 .posRankPill .prpTop.t-warning { background: var(--orange-a12); color: var(--orange-500); }
 .posRankPill .prpTop.t-neutral { background: rgba(255,255,255,.06); color: var(--text-secondary); }
+.posRankPill .prpTop.t-k { background: var(--pos-k-tint); color: var(--pos-k); }
+.posRankPill .prpTop.t-def { background: var(--pos-def-tint); color: var(--pos-def); }
 .posRankPill .prpRank { display: flex; align-items: center; justify-content: center; height: 11px; font-size: 8px; font-weight: 700; letter-spacing: .03em; }
 
 .posBadge2 {
@@ -498,6 +517,11 @@ body[data-popout] .queuePopover {
    full-size avatar, just scaled down (see avatarHtml() in panel.js). */
 .avatarCircle.sm { width: 24px; height: 24px; font-size: 9px; border-width: 1.5px; }
 .avatarCircle.sm .avatarBadge { width: 11px; height: 11px; font-size: 5px; border-width: 1px; right: -2px; bottom: -2px; }
+/* Larger variant for the Best Picks Right Now cards specifically — more
+   room there than the tighter BEER grid cards (which stay the default
+   size), so the headshot can afford to be the visual anchor of the card. */
+.avatarCircle.lg { width: 40px; height: 40px; font-size: 13px; border-width: 2px; }
+.avatarCircle.lg .avatarBadge { width: 18px; height: 18px; font-size: 7px; border-width: 2px; right: -3px; bottom: -3px; }
 .avatarBadge { position: absolute; right: -3px; bottom: -3px; width: 15px; height: 15px; border-radius: 999px; background: var(--ink-700) center/cover no-repeat; border: 1.5px solid var(--surface-raised); font-family: var(--font-mono); font-size: 6px; font-weight: 800; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .rosterNameRow { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .rosterName { font: var(--type-ui); font-size: 13px; color: var(--text-primary); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -566,9 +590,14 @@ body[data-popout] .queuePopover {
 @media (max-width: 480px) { #best { grid-template-columns: 1fr 1fr; } }
 .quadCell { border-radius: var(--radius-card); padding: 8px 10px; border: 1px solid; display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
 .quadCell .lbl { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-.quadCell .nm2 { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.quadCell .nm2 { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .quadCell .nm2 strong { font: var(--type-ui); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.quadCell .nm2 span { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); flex: none; }
+/* :not(.avatarCircle) — added with the headshot avatar below. Without it,
+   this rule's descendant specificity (two classes + element) beats
+   .avatarCircle.sm's (two classes), silently overriding the avatar's own
+   font-size/color — the exact same class of bug already documented/fixed
+   once for .injBadge elsewhere in this file. */
+.quadCell .nm2 span:not(.avatarCircle) { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); flex: none; }
 .quadCell .vbdVal { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-secondary); }
 /* "On tap" card — walked back from an animated shimmer ring to a flat,
    static, low-key treatment (2026-08-25): the shimmer was pulling the eye
@@ -847,6 +876,41 @@ body[data-popout] .queuePopover {
           <button id="connectBtn" class="btn primary" style="flex:1">Sync</button>
           <button id="stopBtn" class="btn danger" style="display:none;flex:1">Stop</button>
         </div>
+        <!-- K/DST support (added 2026-08-26). Defaults ON — most leagues
+             draft a kicker and a defense; this project's own league is the
+             exception (see claude.md's K/DST support section), so this is
+             an explicit off-switch for it rather than the other way around.
+             Turning it off restores the board's original QB/RB/WR/TE-only
+             behavior exactly (position filters, board rows, roster/queue,
+             pick sync — everything gated on includeKdst in panel.js). -->
+        <div class="switchField">
+          <span class="fieldLabel">Include K/DST</span>
+          <button id="includeKdstToggle" class="switchTrack on" role="switch" aria-checked="true" data-tip="Rank, track, and draft kickers and defenses. Turn off if your league doesn't use them."><span class="switchThumb"></span></button>
+        </div>
+        <div class="switchField" id="includeKdstBestPicksField">
+          <span class="fieldLabel">K/DST in Best Picks</span>
+          <button id="includeKdstBestPicksToggle" class="switchTrack" role="switch" aria-checked="false" data-tip="Best Picks Right Now never recommends a kicker/defense by default — real draft strategy says don't reach for one. Turn on to let them be considered there too."><span class="switchThumb"></span></button>
+        </div>
+        <!-- Scoring format (added 2026-08-26) — every projected-points/ADP
+             number in this app (BEER, PROJ/P-WK, ADP columns) reads Sleeper's
+             PPR fields unless told otherwise. This should sync automatically
+             from the synced draft's own scoring_type the moment you Sync
+             (see applySyncedScoringFormat in shared.js) — this control is
+             a manual BACKUP for the rare case that sync is wrong or a draft
+             doesn't expose it, not the primary path. "Auto" (empty value)
+             means "trust whatever synced." -->
+        <div class="field">
+          <span class="fieldLabel">Scoring format <button type="button" id="scoringFormatInfo" class="infoBtn" aria-label="About scoring format sync">i</button></span>
+          <div class="input2">
+            <select id="scoringFormatSelect">
+              <option value="">Auto (from synced draft)</option>
+              <option value="ppr">Force: PPR</option>
+              <option value="half_ppr">Force: Half-PPR</option>
+              <option value="std">Force: Standard</option>
+            </select>
+            <span aria-hidden="true" style="color:var(--text-disabled);flex:none;font-size:10px">▾</span>
+          </div>
+        </div>
         <!-- EXPERIMENTAL (queue/draft-write branch). Off by default — the
              board's normal experience (rows, flag button, everything else)
              renders identically whether this is on or off; the toggle below
@@ -961,6 +1025,8 @@ body[data-popout] .queuePopover {
         <button class="pf seg" data-pos="RB">RB</button>
         <button class="pf seg" data-pos="WR">WR</button>
         <button class="pf seg" data-pos="TE">TE</button>
+        <button class="pf seg" data-pos="K" data-kdst>K</button>
+        <button class="pf seg" data-pos="DEF" data-kdst>DEF</button>
       </div>
       <button class="chip" id="takenToggle" data-tip="Also show drafted players, crossed out, at the current position filter">Show taken</button>
       <div id="playerSearchWrap" class="input2"><input type="text" id="playerSearch" placeholder="Search name or team…" /></div>

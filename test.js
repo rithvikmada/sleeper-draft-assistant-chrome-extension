@@ -69,6 +69,10 @@ const NAMES = [
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
   "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks", "buildTeamOverallRanks",
   "injuryBadge", "INJURY_META",
+  "POSITIONS", "CORE_POSITIONS", "BEER_POSITIONS", "buildPositionRankValueMap",
+  "applySyncedLeagueSettings", "computeReplacementRanks", "activePositions",
+  "SCORING_FORMATS", "applySyncedScoringFormat", "setScoringFormatOverride",
+  "scoringPtsField", "scoringAdpField",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -78,6 +82,10 @@ const {
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
   buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks, buildTeamOverallRanks,
   injuryBadge, INJURY_META,
+  SCORING_FORMATS, applySyncedScoringFormat, setScoringFormatOverride,
+  scoringPtsField, scoringAdpField,
+  POSITIONS, CORE_POSITIONS, BEER_POSITIONS, buildPositionRankValueMap,
+  applySyncedLeagueSettings, computeReplacementRanks, activePositions,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -140,11 +148,19 @@ const mk = (id, name, arr) =>
   eq(validateParsedSource(parseRankings(positionOnly).players, []).level, "ok",
     "a position-only guide (real shape, not garbage) is not refused");
 
-  // Positional tiers (WR1 -> WR) and K/DST rows — this league has none.
-  const posTiers = "Name,Team,Position,Rank\nSome Guy,KC,WR1,1\nSome Kicker,KC,K,2";
+  // Positional tiers (WR1 -> WR) are stripped, and K/DEF rows are kept (K/DST
+  // support, added 2026-08-26 — K/DEF are valid positions now, not dropped).
+  const posTiers = "Name,Team,Position,Rank\nSome Guy,KC,WR1,1\nSome Kicker,KC,K,2\nSome Defense,SF,DEF,3";
   const pt = parseRankings(posTiers);
-  eq(pt.players.length, 1, "K/DST rows are dropped; positional tier suffix (WR1) is stripped to WR");
+  eq(pt.players.length, 3, "positional tier suffix (WR1) is stripped to WR; K/DEF rows are kept, not dropped");
   eq(pt.players[0].pos, "WR", "WR1 normalized to WR");
+  eq(pt.players[1].pos, "K", "K is a valid position, not dropped");
+  eq(pt.players[2].pos, "DEF", "DEF is a valid position, not dropped");
+
+  // A genuinely unrecognized position (not K/DEF, not QB/RB/WR/TE) is still dropped.
+  const badPos = "Name,Team,Position,Rank\nSome Guy,KC,WR,1\nMystery Guy,KC,ZZ,2";
+  const bp = parseRankings(badPos);
+  eq(bp.players.length, 1, "an unrecognized position row is still dropped");
 }
 
 // ============================================================
@@ -395,6 +411,107 @@ const mk = (id, name, arr) =>
   const rows = [{ key: "x|QB", pos: "QB", name: "No Projection Guy" }];
   const { values } = buildBeerValues(rows, {}, new Set());
   eq(values.has("x|QB"), false, "a player missing from the projections map is excluded from values, not defaulted to 0");
+}
+
+// ============================================================
+// K/DST support (added 2026-08-26) — POSITIONS structurally includes K/DEF,
+// DEF is permanently excluded from BEER (no man-games replacement model for
+// a team entity), K participates normally, and league shape can sync from a
+// real draft's own settings instead of staying hardcoded to this project's
+// own league. See claude.md's "K/DST support" section for the full writeup.
+// ============================================================
+
+{
+  eq(POSITIONS, ["QB","RB","WR","TE","K","DEF"], "POSITIONS structurally includes K/DEF");
+  eq(CORE_POSITIONS, ["QB","RB","WR","TE"], "CORE_POSITIONS is still just the original four");
+  eq(BEER_POSITIONS, ["QB","RB","WR","TE","K"], "BEER_POSITIONS is CORE_POSITIONS plus K — DEF never joins it");
+  eq(activePositions(true), POSITIONS, "activePositions(true) is the full six");
+  eq(activePositions(false), CORE_POSITIONS, "activePositions(false) is the original four, same as K/DST being off entirely");
+}
+
+{
+  // DEF never gets a BEER value at all; K gets a real one, same as any other
+  // BEER_POSITIONS entry.
+  const projMap2 = { "josh allen|QB": 300, "some kicker|K": 140, "some defense|DEF": 110 };
+  const rows2 = [
+    { key: "josh allen|QB", pos: "QB" },
+    { key: "some kicker|K", pos: "K" },
+    { key: "some defense|DEF", pos: "DEF" },
+  ];
+  const beer2 = buildBeerValues(rows2, projMap2, new Set());
+  ok(beer2.values.has("some kicker|K"), "K gets a real BEER value, like any other BEER_POSITIONS entry");
+  ok(!beer2.values.has("some defense|DEF"), "DEF never gets a BEER value — no man-games replacement model for a team entity");
+
+  // buildPositionRankValueMap substitutes DEF's raw projected points in place
+  // of its (nonexistent) BEER value, for the per-position league-rank badge
+  // ONLY — K/QB's real BEER values pass through untouched.
+  const posMap = buildPositionRankValueMap(rows2, beer2.values, projMap2);
+  eq(posMap.get("some defense|DEF"), 110, "DEF's league-rank value substitutes its raw projected points");
+  eq(posMap.get("some kicker|K"), beer2.values.get("some kicker|K"), "K's league-rank value is its real BEER value, untouched by the substitution");
+  eq(posMap.get("josh allen|QB"), beer2.values.get("josh allen|QB"), "QB's league-rank value is likewise untouched");
+}
+
+{
+  // League-shape sync (applySyncedLeagueSettings) — a real draft's own
+  // settings should override this project's own hardcoded 10-team shape,
+  // and REPLACEMENT_RANK should be recomputed off the new shape, not just
+  // LEAGUE_SETTINGS itself.
+  const defaultRanks = computeReplacementRanks();
+  applySyncedLeagueSettings({ teams: 12, slots_qb: 1, slots_rb: 2, slots_wr: 3, slots_te: 1, slots_flex: 1, slots_k: 1 });
+  const syncedSettings = vm.runInContext("LEAGUE_SETTINGS", sandbox);
+  const syncedRanks = vm.runInContext("REPLACEMENT_RANK", sandbox);
+  eq(syncedSettings.teams, 12, "applySyncedLeagueSettings overwrites teams from the synced draft");
+  eq(syncedSettings.starters.WR, 3, "applySyncedLeagueSettings overwrites starters.WR from slots_wr");
+  ok(syncedRanks.WR !== defaultRanks.WR, "REPLACEMENT_RANK is recomputed off the new league shape, not left stale");
+  ok(syncedRanks.DEF === undefined, "REPLACEMENT_RANK still never has a DEF entry after a sync");
+
+  // A field a draft's settings response doesn't provide (or provides as a
+  // non-finite value) falls back to whatever LEAGUE_SETTINGS already had,
+  // rather than corrupting it with an unusable value.
+  applySyncedLeagueSettings({ teams: "not a number", slots_qb: 1 });
+  const partialSettings = vm.runInContext("LEAGUE_SETTINGS", sandbox);
+  eq(partialSettings.teams, 12, "a non-finite synced field is ignored, keeping whatever was already there");
+  eq(partialSettings.starters.QB, 1, "a provided finite field still applies alongside an ignored one");
+
+  // Restore the default shape so this test's mutation doesn't leak into any
+  // other test that might read the sandbox's live LEAGUE_SETTINGS/
+  // REPLACEMENT_RANK later.
+  applySyncedLeagueSettings({ teams: 10, slots_qb: 1, slots_rb: 2, slots_wr: 2, slots_te: 1, slots_flex: 2, slots_k: 1 });
+}
+
+// ============================================================
+// Scoring format sync (added 2026-08-26) — every points/ADP fetch defaulted
+// to Sleeper's PPR fields unconditionally; confirmed live against a real
+// user draft whose own scoring_type is "std" that this was silently wrong
+// for anyone not playing full PPR. See claude.md's "Scoring format" section.
+// ============================================================
+{
+  eq(SCORING_FORMATS, ["ppr", "half_ppr", "std"], "the three scoring formats this app understands");
+  eq(scoringPtsField(), "pts_ppr", "defaults to PPR before anything syncs");
+  eq(scoringAdpField(), "adp_ppr", "same default for the ADP field");
+
+  applySyncedScoringFormat("std");
+  eq(scoringPtsField(), "pts_std", "a synced Standard-scoring draft switches the active points field");
+  eq(scoringAdpField(), "adp_std", "and the ADP field along with it");
+
+  // An unrecognized/missing scoring_type (a custom-scoring league, or a
+  // draft object that doesn't expose it) leaves whatever was already synced
+  // rather than silently reverting to PPR.
+  applySyncedScoringFormat(undefined);
+  eq(scoringPtsField(), "pts_std", "an unrecognized sync value doesn't overwrite the last real one");
+  applySyncedScoringFormat("nonsense");
+  eq(scoringPtsField(), "pts_std", "same for a garbage string");
+
+  // The manual override is explicitly a BACKUP, not the primary path — it
+  // wins over whatever synced until set back to "Auto" (null/empty).
+  setScoringFormatOverride("half_ppr");
+  eq(scoringPtsField(), "pts_half_ppr", "a manual override wins over the synced format");
+  applySyncedScoringFormat("ppr"); // a new draft syncs PPR while the override is still active
+  eq(scoringPtsField(), "pts_half_ppr", "the override keeps winning even after a new sync comes in");
+  setScoringFormatOverride(null);
+  eq(scoringPtsField(), "pts_ppr", "clearing the override (back to Auto) falls back to whatever's synced");
+  setScoringFormatOverride("garbage");
+  eq(scoringPtsField(), "pts_ppr", "an invalid override value is treated as Auto, not a crash");
 }
 
 // ============================================================

@@ -31,6 +31,8 @@
   --pos-qb:#F4527A; --pos-rb:#35D07F; --pos-wr:#22D3EE; --pos-te:#FF8A3D; --pos-flex:#FFD84D;
   --pos-qb-tint:rgba(244,82,122,.14); --pos-rb-tint:rgba(53,208,127,.14);
   --pos-wr-tint:rgba(34,211,238,.14); --pos-te-tint:rgba(255,138,61,.14);
+  --pos-k:#A78BFA; --pos-def:#6E8CAE;
+  --pos-k-tint:rgba(167,139,250,.14); --pos-def-tint:rgba(110,140,174,.14);
   /* Legacy POS_COLORS palette (shared.js) — an older gold/green/blue/pink
      scheme that predates the --pos-qb/rb/wr/te redesign above, still used
      for the stat-column headers/picker and the Best Picks position chip.
@@ -38,6 +40,7 @@
      light theme can override just these for text contrast without affecting
      --pos-qb/etc or this page, which stays dark-only and unaffected. */
   --legacy-pos-qb:#F5C242; --legacy-pos-rb:#5FCF8A; --legacy-pos-wr:#5FA8E8; --legacy-pos-te:#E88AC9;
+  --legacy-pos-k:#A78BFA; --legacy-pos-def:#6E8CAE;
   --surface-app:var(--ink-900); --surface-panel:var(--ink-850); --surface-raised:var(--ink-800);
   --surface-row-hover:rgba(255,255,255,.04); --surface-sunken:var(--ink-950);
   --surface-scrim:rgba(7,9,8,.72); --surface-input:var(--ink-800);
@@ -218,6 +221,7 @@ td.nm { font-family: var(--font-body); font-weight: 600; color: var(--text-prima
 tr { border-left: 3px solid transparent; transition: background-color var(--dur-fast) var(--ease-out); }
 tr[data-pos="QB"] { border-left-color: var(--pos-qb); } tr[data-pos="RB"] { border-left-color: var(--pos-rb); }
 tr[data-pos="WR"] { border-left-color: var(--pos-wr); } tr[data-pos="TE"] { border-left-color: var(--pos-te); }
+tr[data-pos="K"] { border-left-color: var(--pos-k); } tr[data-pos="DEF"] { border-left-color: var(--pos-def); }
 tr.gone { opacity: .32; text-decoration: line-through; }
 tr.mine { background: var(--accent-tint); }
 tr.mine td.nm { color: var(--accent); }
@@ -390,6 +394,8 @@ tr.avoidRow { background: var(--red-a12); }
   .crPosTab.active[data-pos="RB"] { background: var(--pos-rb); color: var(--ink-950); }
   .crPosTab.active[data-pos="WR"] { background: var(--pos-wr); color: var(--ink-950); }
   .crPosTab.active[data-pos="TE"] { background: var(--pos-te); color: var(--ink-950); }
+  .crPosTab.active[data-pos="K"] { background: var(--pos-k); color: var(--ink-950); }
+  .crPosTab.active[data-pos="DEF"] { background: var(--pos-def); color: var(--ink-950); }
 
   /* The actual data-grid card — same border/radius/background as the
      Sources tab's .tableWrap, so the two tabs read as one visual system. */
@@ -590,6 +596,8 @@ tr.avoidRow { background: var(--red-a12); }
           <button class="pf" data-pos="RB">RB</button>
           <button class="pf" data-pos="WR">WR</button>
           <button class="pf" data-pos="TE">TE</button>
+          <button class="pf" data-pos="K" data-kdst>K</button>
+          <button class="pf" data-pos="DEF" data-kdst>DEF</button>
         </div>
         <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ Show taken</button>
         <input type="text" id="playerSearch" placeholder="Search name or team…" />
@@ -641,6 +649,8 @@ tr.avoidRow { background: var(--red-a12); }
           <button class="crPosTab" data-pos="RB">RB</button>
           <button class="crPosTab" data-pos="WR">WR</button>
           <button class="crPosTab" data-pos="TE">TE</button>
+          <button class="crPosTab" data-pos="K" data-kdst>K</button>
+          <button class="crPosTab" data-pos="DEF" data-kdst>DEF</button>
         </div>
         <input type="text" id="crSearch" class="searchBox" placeholder="Search all players…" />
       </div>
@@ -665,7 +675,7 @@ tr.avoidRow { background: var(--red-a12); }
           </div>
         </div>
       </div>
-      <div class="crNote">Drag a player from the left rail to place them, drag within the list to reorder/re-tier. Hover the gap between two players and click the dashed pill to add a tier break; click a tier pill's ✕ to merge it into the tier above. Switch ALL/QB/RB/WR/TE above to rank within one position — it's the same combined list, just filtered, so your positional and overall rankings always stay in sync. "Save to draft board" writes this as a normal ranking source — it'll show up in the board window immediately, same as any imported CSV.</div>
+      <div class="crNote">Drag a player from the left rail to place them, drag within the list to reorder/re-tier. Hover the gap between two players and click the dashed pill to add a tier break; click a tier pill's ✕ to merge it into the tier above. Switch ALL/QB/RB/WR/TE/K/DEF above to rank within one position — it's the same combined list, just filtered, so your positional and overall rankings always stay in sync. "Save to draft board" writes this as a normal ranking source — it'll show up in the board window immediately, same as any imported CSV.</div>
       </div>
     </div>
   </div>
