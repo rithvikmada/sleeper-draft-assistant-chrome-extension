@@ -75,7 +75,29 @@ chrome.windows.onBoundsChanged.addListener(async (win) => {
 chrome.windows.onRemoved.addListener(async (closedId) => {
   const { [K_WINDOW_ID]: windowId } = await chrome.storage.session.get([K_WINDOW_ID]);
   if (closedId === windowId) await chrome.storage.session.remove([K_WINDOW_ID]);
+  await clearClosedPopoutWindow(closedId);
 });
+
+// Queue/Roster pop-out windows (added 2026-08-25) — each is just panel.html
+// again (?popout=roster|queue, see panel.js), opened/tracked from THAT page
+// via chrome.windows.create/chrome.storage.session directly (same
+// unprivileged windows-API access panel.js already uses for "open the
+// Rankings Manager"), not through background.js. This service worker's only
+// job for them is the one thing a page itself can't reliably do on its own
+// close — clean up its window id from chrome.storage.session so the main
+// board window's storage.onChanged listener knows to bring the Roster/Queue
+// button back. Same K_WINDOW_ID pattern as the main board window above,
+// just keyed per-view instead of a single id.
+const K_POPOUT_WINDOWS = "popoutWindowIds"; // chrome.storage.session — { roster: windowId, queue: windowId }
+async function clearClosedPopoutWindow(closedId) {
+  const { [K_POPOUT_WINDOWS]: ids } = await chrome.storage.session.get([K_POPOUT_WINDOWS]);
+  if (!ids) return;
+  let changed = false;
+  for (const view of Object.keys(ids)) {
+    if (ids[view] === closedId) { delete ids[view]; changed = true; }
+  }
+  if (changed) await chrome.storage.session.set({ [K_POPOUT_WINDOWS]: ids });
+}
 
 // When the active tab is a Sleeper draft page, stash the draft ID so the
 // panel can auto-fill it. Draft URLs look like:
