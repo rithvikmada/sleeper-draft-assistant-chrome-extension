@@ -2550,13 +2550,17 @@ function isAbbreviatedFirstName(name) {
 }
 function findPossibleDuplicates(sources, merges = {}) {
   const enabled = usableSources(sources).filter((s) => s.enabled);
-  const byPos = {}; // pos -> Map<key, {key,name,pos}>, one entry per distinct post-merge identity
+  const byPos = {}; // pos -> Map<key, {key,name,pos,teams:Set}>, one entry per distinct post-merge identity
   enabled.forEach((src) => {
     src.players.forEach((p) => {
       if (!p.pos) return;
       const key = applyMerge(playerKey(p.name, p.pos), merges);
       if (!byPos[p.pos]) byPos[p.pos] = new Map();
-      if (!byPos[p.pos].has(key)) byPos[p.pos].set(key, { key, name: p.name, pos: p.pos });
+      if (!byPos[p.pos].has(key)) byPos[p.pos].set(key, { key, name: p.name, pos: p.pos, teams: new Set() });
+      // Collect every team seen for this identity across ALL enabled sources
+      // (not just the first) — this is what lets team-based disambiguation
+      // below work regardless of how many/which sources happen to be enabled.
+      if (p.team) byPos[p.pos].get(key).teams.add(String(p.team).toUpperCase().trim());
     });
   });
 
@@ -2571,13 +2575,31 @@ function findPossibleDuplicates(sources, merges = {}) {
       const lastA = normA.split(" ").slice(-1)[0];
       const firstA = normA.charAt(0);
       const aAbbrev = isAbbreviatedFirstName(a.name);
-      const matches = entries.filter((b) => {
+      let matches = entries.filter((b) => {
         if (b.key === a.key) return false;
         if (norm(b.name).charAt(0) !== firstA || !norm(b.name).endsWith(" " + lastA)) return false;
         // Require exactly one side to be a bare initial — two full names
         // sharing a last name + initial are a coincidence, not a duplicate.
         return aAbbrev !== isAbbreviatedFirstName(b.name);
       });
+      // Fixed 2026-08-27, same day — with MANY sources enabled, a common
+      // last name + initial (e.g. "J. Gibbs") can coincidentally match more
+      // than one real full name (Jahmyr AND Jaylen Gibbs), which correctly
+      // fails the "exactly one candidate" ambiguity check — but that same
+      // ambiguity check was also silently swallowing genuinely real
+      // duplicates the moment a board had enough sources/players enabled for
+      // any coincidental third name to exist, which is why toggling sources
+      // on/off changed how many pairs showed up: fewer sources enabled meant
+      // a smaller, less ambiguous pool, so real dupes started passing again.
+      // Team is real disambiguating signal that doesn't shrink or grow with
+      // how many sources are enabled — if exactly one of several same-name
+      // candidates shares a known team with `a`, that's the real match,
+      // full stop, regardless of how many other same-last-name people exist
+      // elsewhere in the league.
+      if (matches.length > 1 && a.teams.size) {
+        const teamMatches = matches.filter((b) => [...b.teams].some((t) => a.teams.has(t)));
+        if (teamMatches.length === 1) matches = teamMatches;
+      }
       if (matches.length === 1) candidateOf.set(a.key, matches[0].key);
     });
     const seen = new Set();

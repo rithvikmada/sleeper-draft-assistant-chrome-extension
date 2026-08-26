@@ -355,6 +355,25 @@ const mk = (id, name, arr) =>
   const srcI = mk("i", "I", [{ name: "David Johnson", team: "FA", pos: "WR", tier: "", rank: 200 }]);
   eq(findPossibleDuplicates([srcH, srcI], {}).length, 0,
     "two different full-named players sharing last name + initial are not flagged as duplicates");
+
+  // Real bug found live: with more sources enabled, a common last name +
+  // initial like "J. Gibbs" can coincidentally match multiple full names,
+  // which correctly stays ambiguous (see srcE/F/G above) — but that same
+  // ambiguity was ALSO swallowing genuinely real duplicates whenever a third
+  // coincidental name existed anywhere in the enabled sources, which is why
+  // toggling sources changed how many pairs showed up. Team should break the
+  // tie: if exactly one of the candidates shares a known team with the
+  // abbreviated entry, that's the real match even with a same-initial
+  // decoy present elsewhere.
+  const srcJ = mk("j", "J", [{ name: "J. Gibbs", team: "DET", pos: "RB", tier: "", rank: 1 }]);
+  const srcK = mk("k", "K", [{ name: "Jahmyr Gibbs", team: "DET", pos: "RB", tier: "", rank: 1 }]);
+  const srcL = mk("l", "L", [{ name: "Jaylen Gibbs", team: "NYG", pos: "RB", tier: "", rank: 250 }]);
+  const teamDupes = findPossibleDuplicates([srcJ, srcK, srcL], {});
+  eq(teamDupes.length, 1, "team disambiguates J. Gibbs (DET) from the same-initial NYG decoy");
+  ok(
+    (teamDupes[0].nameA === "Jahmyr Gibbs" || teamDupes[0].nameB === "Jahmyr Gibbs"),
+    "the real DET match (Jahmyr Gibbs) is the one reported, not the NYG decoy"
+  );
 }
 
 // ============================================================
