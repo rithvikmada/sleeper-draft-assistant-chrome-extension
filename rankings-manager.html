@@ -260,6 +260,11 @@ tr.avoidRow { background: var(--red-a12); }
 .banner .tag { font: 800 9.5px/1 var(--font-mono); letter-spacing: 0.08em; color: var(--red-500); background: rgba(255,90,90,.14); padding: 5px 8px; border-radius: 5px; flex: none; }
 .banner .txt { font: 600 12px/1.4 var(--font-body); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .banner .caret { color: var(--text-disabled); font-size: 11px; flex: none; }
+/* Neutral variant for the Merged Players banner — this is an informational
+   "here's what you've done" list, not a warning like Unmatched Players, so
+   it shouldn't borrow that red tint. */
+.banner.neutral { background: rgba(255,255,255,.05); border-color: var(--line2); }
+.banner.neutral .tag { color: var(--text-secondary); background: rgba(255,255,255,.08); }
 .bannerBody { padding: 14px 16px 4px; font-size: 11.5px; }
 
 /* ---- modal ---- */
@@ -610,6 +615,25 @@ tr.avoidRow { background: var(--red-a12); }
           <span class="caret" id="orphansToggle">▾</span>
         </div>
         <div id="orphansList" class="bannerBody" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Merged players (added 2026-08-27) — there was no way to see or undo a
+         merge once made (via the MERGE button above, or the right-click
+         "merge near matches" menu on the table below) short of editing
+         chrome.storage by hand. Same collapsible banner pattern as Unmatched
+         above, for the same reason: a rare safety net, not something that
+         needs to eat screen space by default. -->
+    <div class="pageSection">
+      <div id="mergedSection" style="display:none">
+        <div id="mergedHeader" class="banner neutral">
+          <div class="l">
+            <span class="tag">Merged</span>
+            <span class="txt" id="mergedCount"></span>
+          </div>
+          <span class="caret" id="mergedToggle">▸</span>
+        </div>
+        <div id="mergedList" class="bannerBody" style="display:none"></div>
       </div>
     </div>
 

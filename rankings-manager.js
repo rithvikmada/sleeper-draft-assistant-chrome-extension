@@ -517,6 +517,51 @@ $("orphansHeader").addEventListener("click", () => {
   renderOrphans();
 });
 
+// ---------- merged players (added 2026-08-27) ----------
+// Both merge paths above (the orphans list's MERGE button, and the
+// right-click "merge near matches" menu on the table) had no way to UNDO a
+// merge once made — a real gap found live: a user merged the wrong two
+// players by name and had no way back short of editing chrome.storage by
+// hand. K_MERGES is just a flat { variantKey: canonicalKey } map, so
+// undoing one is simply deleting that one entry — this section is the UI
+// for it. Same collapsible banner pattern as Unmatched Players above, and
+// for the same reason (a rare safety net, not something to eat screen space
+// by default) — defaults collapsed, unlike Unmatched which defaults open;
+// merges are something you make deliberately and rarely need to revisit.
+let mergedCollapsed = true;
+function renderMerged() {
+  const entries = Object.entries(merges);
+  if (!entries.length) { $("mergedSection").style.display = "none"; return; }
+  $("mergedSection").style.display = "block";
+  $("mergedCount").textContent = `${entries.length} player${entries.length === 1 ? "" : "s"}`;
+  $("mergedList").innerHTML = entries.map(([variantKey, canonicalKey]) => {
+    const [variantName, variantPos] = variantKey.split("|");
+    const [canonicalName] = canonicalKey.split("|");
+    return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <span style="flex:1">${esc(variantName)} ${esc(variantPos)} <span style="color:var(--dim)">→</span> ${esc(canonicalName)}</span>
+      <button data-unmerge="${esc(variantKey)}" class="mergeBtn" style="padding:3px 8px;font-size:10px">UNDO</button>
+    </div>`;
+  }).join("");
+  $("mergedList").style.display = mergedCollapsed ? "none" : "block";
+  $("mergedToggle").textContent = mergedCollapsed ? "▸" : "▾";
+  document.querySelectorAll("[data-unmerge]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.unmerge;
+      const [name] = key.split("|");
+      const next = { ...merges };
+      delete next[key];
+      merges = next;
+      echo.write(K_MERGES, () => saveMerges(merges)).catch(reportSaveFailure("merges"));
+      toast(`Undid the merge for "${name}" — it'll show up as its own player (or an unmatched orphan again) once re-rendered.`);
+      renderAll();
+    });
+  });
+}
+$("mergedHeader").addEventListener("click", () => {
+  mergedCollapsed = !mergedCollapsed;
+  renderMerged();
+});
+
 // ---------- merge modal ----------
 // Replaced a native prompt() asking users to type "Name|POS" freehand — an
 // easy format to get slightly wrong (extra space, missing pipe) with a
@@ -674,6 +719,7 @@ function renderAll() {
     renderSourceBar();
     renderTable(rows);
     renderOrphans();
+    renderMerged();
   } catch (e) {
     // Same reasoning as panel.js's renderAll: fail legibly and leave a way
     // out, rather than showing an empty page on every load.
