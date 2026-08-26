@@ -585,6 +585,492 @@ Settled after using the extension in a real draft.
      Picks call now correctly surfaces its own WR ranking instead of going
      blank.
 
+## Rankings Creator (added 2026-08-25, branch/worktree `claude/custom-rankings-creator-e1b1bd`)
+A drag-and-drop custom rankings builder — a new "RANKINGS CREATOR" tab
+inside `rankings-manager.html`, alongside the existing "SOURCES" tab
+(`#tabSourcesBtn`/`#tabCreatorBtn`, `switchTab()` in `rankings-manager.js`).
+This was the Rankings Manager's original intended purpose (per the user,
+scoping this build): not just importing/comparing other people's rankings,
+but building your own from scratch, tiering players by hand, and drafting
+off that. Mocked up first as a published Artifact (three directions: tier
+lanes, ranked-list-with-tier-bands, and a manager-shell redesign preview) —
+direction B (ranked list + tier bands) was picked, then refined through
+direct feedback before any of this landed: drop the per-source rank tags,
+add headshots/team logos, add the board's own stat-group columns, and
+default to no base (every Sleeper-known player, ADP order) rather than
+forcing an existing source.
+
+**Design system — Chivo/JetBrains Mono/ink-chalk tokens, scoped to
+`#creatorTab` only.** The rest of `rankings-manager.html` (the Sources tab)
+still runs the old "turf" theme (`theme.css`) — full-page unification was
+explicitly named as a separate, larger follow-up when this was scoped, not
+something to fold into the Creator build. `#creatorTab`'s `<style>` block in
+`rankings-manager.html` redeclares the board's `--ink-*`/`--chalk-*`/
+`--pos-*`/`--font-*` custom properties as local values under that selector
+(CSS custom properties are inheritable, so anything inside `#creatorTab`
+picks them up) rather than touching `:root` — this is why the Creator tab
+looks like the board window while the Sources tab next to it doesn't.
+
+**Data model — `K_CUSTOM_BOARDS` (`customRankingBoards`), array of board
+objects, in `shared.js`.** A board is *not* a ranking source; it only
+becomes one when explicitly saved (see below). Shape:
+`{ id, name, updatedAt, baseId, players: {key:{name,team,pos}}, order:
+[key,...], breaks: [key,...] }`. `order` is every placed/ranked player, in
+rank order; unplaced = every key in `players` not in `order`. **Tier
+boundaries are keyed by player identity, not list index**
+(`breaks: [key,...]` — a key's presence means "a new tier starts right
+before this player") — deliberately, so dragging a player around doesn't
+invalidate a boundary anchored to a now-meaningless numeric position the
+way an index-based scheme would. `boardTierAtIndex()`/`boardToSourcePlayers()`
+(shared.js) derive the actual tier number for any position by counting
+`breaks` hits up to that point.
+
+**Base — "no base" is a first-class option, not a fallback.** `baseId` is
+either `"adp"` (every QB/RB/WR/TE Sleeper's projections endpoint knows,
+sorted by live ADP — reuses `fetchSleeperAdpPlayers()`, the exact same call
+the board's Sleeper Live ADP column already makes, no new fetch/permission)
+or any existing ranking source's id (built-in or imported) — `buildBoardFromBase()`
+in `rankings-manager.js`. ADP-only players carry no team from that endpoint,
+so team gets backfilled from whatever imported sources already have it on
+file (`teamLookupFromSources()`, same `playerKey()` join every other cross-
+source lookup in this app uses) — best-effort; an unmatched player just
+shows no team badge, same fallback `avatarHtml()` already handles. Picking
+an existing source as base seeds `order` from that source's own rank and
+`breaks` from its own tier changes, so starting from FantasyPros ECR (say)
+gives you FantasyPros' own tiers as an editable starting point rather than a
+blank slate. **A source can contain a genuine duplicate player** (found
+during testing: `rankings.js` has two "Eli Stowers" TE rows) —
+`buildBoardFromBase()` skips a key already claimed rather than double-
+pushing it into `order`, which previously produced a confusing negative
+"unplaced" count.
+
+**Drag and drop — native HTML5 DnD (`draggable="true"` + drag events), not
+a physics/spring library.** This is a data-manipulation list (reordering
+ranked rows, placing from a pool), not a touch gesture surface, so the
+Apple-fluid-interface/spring guidance that applies to the board's gesture UI
+wasn't the right fit here — plain dragstart/dragover/drop with a CSS
+box-shadow drop-indicator (`.dropBefore`/`.dropAfter`) is enough. Dragging
+from the left rail (`#crPool`, unplaced players, searchable) into the list
+places a player; dragging within the list reorders; dragging a list row back
+onto the rail removes it. Because tier breaks are identity-keyed (above), a
+reorder never needs to touch `breaks` unless the dragged player itself owns
+one — which correctly travels with them.
+
+**Tier UI**: a labeled divider (`.crTierLabel`, small pill with a
+`TIER_COLORS`-matched dot) renders before the first player of every tier,
+including tier 1. Between any two adjacent players that AREN'T a tier
+boundary, a hover-revealed gap (`.crAddBreakGap`) shows a dashed "+ tier
+break" button. A tier pill's own "✕" merges that tier into the one above
+(removes its break key). **Deliberately not a solid yellow/gold fill** — the
+mockup's Direction B used a bright chalk-yellow pill for the tier label,
+called out in review as too loud; shipped as a neutral `--surface-input`
+chip with a small colored dot instead, so it reads as a label, not an alert.
+
+**Stat columns reuse the board's own stat-group system verbatim** —
+`renderStatGroups`/`renderStatHeaderGroups`/`statGroupOrder`/`statGroupLayout`
+(all in `shared.js`, unmodified) render each row's BASIC + position-specific
+stat block, fed by the same `K_STATS`/`K_STAT_PREFS` data and picker
+preferences the board window uses (so the same 6-per-position stat options,
+same user-selected visible set — there's no second, Creator-specific stat
+picker). Clicking a row brings its position's stat group forward
+(`crEffectiveStatPos()`), same "select a player" affordance as the board.
+
+**Headshots/team logos**: `avatarHtml()` (moved from `panel.js` into
+`shared.js` as part of this build, since both surfaces need it now — takes
+an explicit `idsMap` param instead of reading a module-level global, since
+each surface keeps its own copy) renders the same Sleeper-CDN headshot/team-
+badge markup the board's Roster/Queue popovers use. `rankings-manager.html`
+needed its own copy of the `.avatarCircle`/`.avatarBadge` CSS (copied from
+`panel.html`) since the Sources tab doesn't otherwise link that stylesheet.
+
+**Saving — "Save to draft board" converts a board into a normal ranking
+source, on demand, and only then.** `boardToSourcePlayers()` (shared.js)
+walks `order`/`breaks` into the exact `{name,team,pos,rank,tier}` shape
+every other source's `players` array already uses; `saveBoardToSource()`
+(rankings-manager.js) writes it via the same `makeSource()`/`saveSources()`
+path as any import, under a fixed id (`custom_<boardId>`) so re-saving the
+same board updates that source in place instead of duplicating it. This was
+a deliberate constraint carried over from the mockup review: no new storage
+schema, no new consensus-blending path — a saved custom board is
+indistinguishable from an imported CSV once it lands in `K_SOURCES`, so it
+shows up in the board window immediately with zero changes to `buildConsensus`
+or anything downstream of it.
+
+**Bugs found and fixed during testing (loaded `rankings-manager.html`
+against a stubbed `chrome.storage` over `python3 -m http.server`, same
+harness pattern as the Stage 2 audit's escaping fixes — see Testing
+below):**
+- Switching from the Creator tab back to the Sources tab didn't re-render
+  it, so a just-saved board silently didn't appear until some unrelated
+  storage event happened to trigger a redraw. `switchTab()` now calls
+  `renderAll()` (the Sources tab's own render function) whenever switching
+  back to "sources", not just on the storage-change path.
+- **The tier-merge "✕" used `data-merge` as its attribute name, which
+  collides with the orphans section's existing "MERGE" buttons** (Unmatched
+  Player reconciliation, same file) — a global `document.querySelectorAll(
+  "[data-merge]")` at module load time (wiring the orphans buttons) would
+  have also bound its click handler to the Creator's tier-merge buttons,
+  since both live in the same document even though the Sources tab is
+  `display:none` while the Creator tab is showing. Clicking "merge tier"
+  would have correctly removed the tier break AND incorrectly popped open
+  the unrelated "Merge player" modal. Renamed to `data-tiermerge` — caught
+  by testing the merge control directly against the real page, not by
+  inspection; worth remembering that a generic-sounding `data-*` attribute
+  name needs a document-wide grep against the file it's added to, not just
+  the immediate function it's used in.
+
+**Full-page redesign — same session, same day, direct follow-up.** The
+first pass above scoped the board's design tokens to `#creatorTab` only,
+leaving the rest of `rankings-manager.html` (the Sources tab: header,
+source chips, filters, table, modals) on the old "turf" theme
+(`theme.css`) — called out at the time as a deliberate, separate,
+explicitly-deferred piece of work (backlog #2). Direct feedback after
+seeing it live: the page read as "broken"/"elementary" next to the board
+window's redesign, and the Creator's stat columns were unusably cut off
+with no way to reach them. Both fixed in the same pass:
+- **The old turf theme is gone from this page.** `rankings-manager.html`'s
+  `:root` now declares the exact same token set `panel.html` does (ink/
+  chalk palette, Chivo/JetBrains Mono, spacing/radius/shadow scale) —
+  copied directly from `panel.html`'s `:root`, not reinvented. **The old
+  theme.css variable NAMES (`--bg`/`--panel`/`--line`/`--line2`/`--text`/
+  `--dim`/`--dim2`/`--green`/`--gold`/`--red`) are kept and redeclared as
+  aliases onto the new tokens** (e.g. `--green: var(--chalk-500)`) rather
+  than rewriting every rule that referenced them — `theme.css` is still
+  linked (a handful of rules there, like base `.pf`/`.fav`/`.avoid`
+  colors, aren't overridden below), and this page's own `<style>` block
+  comes after it in the cascade, so the alias redeclaration silently
+  recolors every old rule (both the ones already in this file and
+  whatever's still in `theme.css`) without hunting down each one
+  individually. Every component this page actually renders — header,
+  `.chip` source pills, `.pf` filter buttons, the player table (`th`/`td`,
+  `.posChip`, `.tierChip`, `tr[data-pos]` left color bar), all four modals
+  (`.sheet`), `.nearMergeMenu`, `#toast` — was still rewritten with real
+  board-matching rules (radius/shadow/spacing/type scale), not just
+  recolored; the alias trick only means those rewrites didn't also have to
+  chase down every remaining `var(--dim)`/`var(--green)` reference by hand.
+- **Player rows now show the same headshot/team-logo avatar the board and
+  the Creator use** (`avatarHtml()`, shared.js) in the main comparison
+  table's name cell (`.avatarNameRow`), and each `<tr>` carries the same
+  `data-pos` left-border color accent (`tr[data-pos="RB"]` etc.) the
+  board's `.row2[data-pos]` rows have — the single biggest "this looks like
+  the same app" cue, since it's visible on every single row.
+  `sleeperIds` is now loaded before the FIRST `renderAll()` in `init()`
+  (previously loaded later, only for the Creator tab), so headshots show
+  immediately rather than waiting for an unrelated re-render.
+- **Creator's cut-off stat columns — the direct bug report — fixed with a
+  real horizontal scroll, not by hiding columns.** Previously `.crRow` was
+  a flex row with `.crRowMain` at `flex:1`, so on a viewport narrower than
+  the full 5-group stat block, the browser just silently shrank/clipped
+  content instead of scrolling to it — there was no way to see the cut-off
+  columns at all. Fixed by giving `.crRowMain` a fixed basis
+  (`flex:0 0 210px`) instead of `flex:1` and `.crRow`/`.crStatHeadRow` a
+  real `width:max-content;min-width:100%`, so total row width is now
+  deterministic and can genuinely overflow. The header row
+  (`.crStatHeadRow`) and the player rows (`#crList`) are wrapped in one
+  shared `.crTableScroll` (`overflow-x:auto`) so they scroll together as a
+  single unit — verified directly (`scrollWidth`/`clientWidth` in a
+  loaded page, then scrolling and confirming the position chip/remove
+  button at the far right become reachable) rather than assumed from the
+  CSS alone.
+- **Combined + positional rankings "at once" (direct request)** — a
+  `.crPosTabs` row (ALL/QB/RB/WR/TE, `creatorPosFilter` in
+  `rankings-manager.js`) above the ranked list. **Deliberately a VIEW
+  filter on the one existing `order`/`breaks`, not a second parallel
+  per-position data structure** — filtering to RB shows only RB rows, at
+  their existing positions in the combined order; dragging within that
+  filtered view reorders them in the real combined `order` too (verified:
+  dragging a filtered-in RB above another RB moved it in the unfiltered
+  ALL view as well, correctly leapfrogging the non-RB players that were
+  between them). This was a deliberate design call over maintaining a
+  separate per-position list: two lists for the same players can disagree
+  with each other, and reconciling that disagreement (which one is "true"
+  when you resume the other view) is a real design problem with no clean
+  answer — one list with a filtered view can't drift, by construction,
+  which is exactly "your positional and overall rankings always stay in
+  sync" as asked for. Tier numbers shown while filtered are each row's real
+  global tier (still computed over the FULL order) — informational, since a
+  hidden player of another position may have started a tier in between two
+  visible rows. **Tier editing (add-break / merge) is only offered when
+  unfiltered** — "the gap between these two visible RBs" isn't the same
+  thing as "adjacent in the real list" once other positions are hidden, so
+  offering an edit control there would silently do something other than
+  what someone watching only RBs would expect; view the tier structure
+  filtered, edit it unfiltered.
+
+**Second refinement pass, same day — de-boxed the Creator, killed the
+stray focus outline.** Direct feedback after seeing the first redesign
+live: the Creator tab's toolbar/rail/list were wrapped in one card
+(`#creatorTab` with its own border/radius/shadow/background), which read as
+a separate embedded widget bolted onto the page rather than a real part of
+it — "it still seems that the actual module... is built inside of a div."
+Fixed by removing that outer card entirely: the toolbar and position tabs
+now sit flush on the page background, with plain `h2` section labels
+("CUSTOM BOARD", "RANKED PLAYERS") matching the Sources tab's own
+"RANKING SOURCES"/"ALL PLAYERS" headers. Only the actual data grid (the
+rail + ranked list) keeps a card treatment — via a new `.crGrid` class using
+the exact same border/radius/background as the Sources tab's `.tableWrap` —
+so the two tabs share one "this is a data grid" visual language instead of
+the Creator inventing a second, different "this is a whole embedded app"
+one. Also fixed a real visual bug caught in the same pass: Chrome's default
+focus ring (a hard blue rectangle) was showing on tab/button clicks with no
+custom styling to soften it — added a global `outline:none` +
+`:focus-visible`-only chalk-colored ring (matching the board's own
+`--focus-ring` token) across every button/pill/input on the page, so
+keyboard focus still gets a visible ring but a plain mouse click doesn't
+light up in an off-palette blue anymore.
+
+**Third pass — mockup-first, then implemented to match exactly.** The
+second pass's de-boxing fix still didn't land ("this is still not good");
+rather than iterate blind in code again, built a full-fidelity static HTML
+mockup (real tokens, real sample content, functional tab/position-filter
+switching, no wiring to real data) and published it as an Artifact per
+[[feedback-ui-mockup-first]]'s standing rule — confirmed approved
+("this is what I want") before touching `rankings-manager.html`/`.js`
+again. Implementation then matched the mockup as closely as the existing
+JS event-wiring contract allowed:
+- **Header** rebuilt as a real brand lockup (gradient mark + "4th&Go" +
+  "Rankings Manager" sub-label) with a status pill (`.syncPill`, green when
+  synced / neutral gray via a `.off` class when not — `renderSyncLine()` in
+  `rankings-manager.js` toggles it) instead of the old plain-text two-line
+  header.
+- **Toolbars reorganized into labeled groups with dividers** — both the
+  Sources chip row (chips, then a `.toolRow` of fetch/add actions pushed
+  right via `margin-left:auto`) and the Creator's toolbar (`.toolGroup`
+  divs: Board / Base / Placed count / Save, each separated by a
+  `border-right`) — replacing both surfaces' single run-on row of
+  same-weight controls.
+  **`.chipAdd`** (dashed pill, "+ Add source"/"+ Add ADP source") replaces
+  plain buttons for adding a source, visually distinct from the toggle
+  chips next to it.
+- **Segmented pill control** (`.segmented`, reused verbatim from the
+  board's own component) now wraps BOTH the Sources tab's ALL/QB/RB/WR/TE
+  filter (`.pf`) and the Creator's position tabs (`.crPosTab`) — same
+  visual language, position-colored fill when active, instead of a row of
+  individually-bordered buttons.
+  **`#takenToggle` stayed a standalone bordered pill outside the segmented
+  group** — it's an independent toggle layered on top of the position
+  filter (see "TAKEN is an independent toggle, not a filter value" earlier
+  in this file), not a 6th position option, so grouping it inside the same
+  segmented control would have implied it was mutually exclusive with
+  ALL/QB/RB/WR/TE, which it isn't.
+- **Source chips gained a two-letter initial** in their swatch
+  (`sourceInitials()`, rankings-manager.js — "Fantasy Flock Rankings" →
+  "FF") when the source has no uploaded icon, matching the mockup's chip
+  treatment; an uploaded icon still renders as the actual image, unchanged.
+- **Tier dividers stripped down to a slim rule** — the boxed
+  `.crTierLabel` chip (still present in the SECOND pass) is gone; now just
+  a colored dot + "TIER n" text sitting directly on the divider line, no
+  background/border box, matching the mockup's `.tierChipRule`.
+- **Unmatched-players section rebuilt as `.banner`** — a single-line
+  red-tinted row (a `.tag` pill + a one-line summary) that expands on click
+  instead of the old ad hoc inline-styled block with a separate header/list
+  pairing.
+- Every functional behavior (drag-and-drop reorder/place/remove, tier
+  add-break/merge, position-filter view-on-combined-order, source
+  enable/solo/edit/delete, Save to draft board) was verified UNCHANGED
+  after the markup rewrite — same element ids, same event-listener
+  contracts, only the CSS classes and wrapping structure around them
+  changed. Verified live (drag-reorder + tier-merge + position-filter in
+  sequence, checked against the underlying `customBoards` state, not just
+  visually) rather than assumed from the markup diff alone.
+
+**Fourth pass — full-bleed width, a real drag performance bug, one-click
+reorder.** Three issues from actually using it:
+- **Page was capped at `max-width:1360px`, wasting the right half of any
+  normal monitor.** `.wrap` now runs full width (`width:100%`) with
+  viewport-scaled side padding (`clamp(20px, 3vw, 56px)`) instead of a
+  fixed gutter, so it doesn't feel cramped on a laptop or absurd on an
+  ultrawide.
+- **Drag-and-drop reorder was genuinely broken, not just "feels slow" —
+  a real O(n) performance bug.** `clearDropIndicators()` ran
+  `document.querySelectorAll(".crRow.dropBefore, .crRow.dropAfter")`
+  against the WHOLE unfiltered list on every single `dragover` event, and
+  `dragover` fires continuously (dozens of times a second) for the entire
+  duration of a drag gesture. Against the real 355-player unfiltered list,
+  that's up to 355-element DOM queries firing dozens of times a second —
+  exactly what a user described as "grab a player and it just bugs out and
+  gets stuck for like twenty seconds." Fixed by tracking the single
+  currently-indicated row in a module-level variable (`crDropTargetEl`)
+  instead of re-querying the document — clearing/setting the indicator is
+  now O(1) regardless of list size. Verified with a direct timing test (40
+  simulated `dragover` events across a 355-row unfiltered list): ~2ms per
+  event, well under a frame budget, vs. an unmeasured but clearly
+  frame-blocking cost before.
+- **One-click ▲▼ move buttons added per row** (`.crMoveBtns`/`.crMoveBtn`,
+  `moveAdjacent()` in rankings-manager.js) — the same affordance the
+  board's Sleeper-queue popover already has (`queueMoveBtn` in panel.js),
+  requested directly as an easier alternative to dragging for a small
+  nudge. Moves relative to the CURRENTLY VISIBLE neighbor (respecting
+  whatever position filter is active), matching how dragging within a
+  filtered view already behaves — not the raw global neighbor, which could
+  be an invisible different-position player. `dropOnList` and
+  `moveAdjacent` share one core (`moveKeyTo()`) so drag-and-drop and the
+  buttons can't drift into computing "move this player here" two different
+  ways.
+- **The Creator's ranked-list grid had a hardcoded `max-height:640px` with
+  its own inner scrollbar** — on any window taller than ~640px worth of
+  rows, that left a dead strip of empty page below the whole section (the
+  literal complaint: "there's still a lot of room on the bottom of the
+  screen"). The Sources tab's own (longer, 651-player) table never had this
+  problem because it was never given an inner scroll box in the first
+  place — it just grows and the page scrolls. Removed the cap
+  (`.crTableScroll`) to match that same pattern; `.crRail` also dropped its
+  own hardcoded cap so it stretches to match the grid row's real height
+  (CSS grid's default `align-items:stretch`) rather than a second,
+  independent guess at a "reasonable" height.
+
+**Fifth pass — replaced native HTML5 drag-and-drop with a real pointer-
+driven drag, per direct Apple/Emil design-eng review.** The O(1)
+`clearDropIndicators` fix in the fourth pass made `dragover` cheap, but
+drag still didn't feel "sticky"/"addictive" — read against the
+`apple-design`/`emil-design-eng` skills, the actual problem was the
+mechanism itself, not a remaining performance bug: **native HTML5
+drag-and-drop cannot give true 1:1 pointer tracking.** The browser owns the
+drag image and its position, `dragover` delivery is throttled/coalesced
+rather than firing in lockstep with the pointer, and there's an inherent
+frame-or-more of latency between cursor and ghost — exactly what Apple's
+"direct manipulation" principle (Designing Fluid Interfaces, WWDC 2018)
+says breaks the feeling of directness. Fixed by replacing `draggable="true"`
++ dragstart/dragover/drop entirely with **Pointer Events**:
+- **In-list reorder** (`armListDrag`/`beginListDrag`/`onListDragMove`/
+  `endListDrag`, rankings-manager.js): the dragged row's `transform:
+  translateY()` is set directly from `pointermove`'s `clientY` every event,
+  with `.crRow` carrying NO css transition on transform — zero added
+  latency between cursor and row, which is the actual "sticky" feeling.
+  Other rows between the drag's start and current position get a live
+  "make room" shift (`.shifting`, a 180ms eased transition) — a
+  system-driven consequence of the gesture, not something the user is
+  directly moving, so easing THERE is correct per the same principle (a
+  real stack of cards settling, not the card you're holding).
+- **The whole row is the drag handle now, not just the tiny ⋮⋮ grip** — a
+  real mouse drag in testing missed the grip by a few pixels and just
+  started a native text selection instead, a real usability bug on top of
+  the responsiveness one. Making the whole row draggable needed a
+  **movement-threshold "arming" step** (`armListDrag`, `DRAG_ARM_THRESHOLD
+  = 4`px) to disambiguate from click-to-select (same row-click already
+  toggles a player's stat-group focus) — exactly the hysteresis pattern
+  Apple's own gesture-design guidance calls for ("require a small movement
+  threshold before committing to a gesture"). Below the threshold on
+  release, it's a click; above it, it becomes a real drag that continues
+  smoothly from the ORIGINAL pointerdown position, not wherever the
+  threshold happened to be crossed, so there's no visible jump at the
+  moment it engages.
+- **Pool→list placement** (`startPoolDrag`/`onPoolDragMove`/`endPoolDrag`)
+  uses the same pointer-1:1 approach with a floating cloned-node ghost
+  (`.crDragGhost`, `position:fixed`, follows the cursor exactly) instead of
+  the browser's native drag-image snapshot, then hit-tests
+  `document.elementFromPoint()` on release to find the drop target.
+- **Dragging a placed row back onto the rail removes it** — checked inline
+  during `onListDragMove`/`endListDrag` (`.closest(".crRail")`) rather than
+  needing a separate drop handler on `#crPool` the way native drag/drop
+  required (native dragover/drop only fire on whatever element is actually
+  under the cursor; pointer events let one drag session just ask "where is
+  the pointer now" directly).
+- `dropOnList`/`clearDropIndicators`/`crDragKey`/`crDragFrom`/
+  `crDropTargetEl` (all from the native-drag implementation) are gone
+  entirely — `moveKeyTo()` is now the one shared "put this key before/after
+  that key" primitive used by both drag paths AND the ▲▼ move buttons, so
+  there's a single source of truth for what "reorder" means rather than
+  three parallel implementations.
+- Verified against real synthetic mouse gestures (`left_click_drag` on the
+  actual row body, not just simulated event dispatch) in a loaded browser:
+  reorder lands exactly where dragged with no duplicate/missing keys,
+  click-to-select still works with no accidental text selection, and both
+  drag-to-remove (row→rail) and drag-to-place (rail→row) work — not just
+  inspected in source.
+
+**Sixth pass — a real header/row alignment bug, position tag placement, and
+a board-wide search.** Three more direct reports after using the drag fix:
+- **Stat column headers drifted out of alignment with their columns on
+  resize — a real structural CSS bug, not a rounding issue.** `.crStatBlock`
+  and `.crRowMain` widths already matched exactly between the header row
+  and player rows; the divergence was in the ROW CONTAINERS' own starting
+  x-position. `.crListWrap` (wrapping the player rows) carried
+  `padding:0 16px 40px`, but `.crStatHeadRow` (the sticky header) is a
+  SIBLING of `.crListWrap`, not a child of it — so that 16px horizontal
+  inset applied to the rows and not to the header, throwing every column
+  16px out of step. Fixed by moving the horizontal padding up to
+  `.crTableScroll` (the shared ancestor both the header and `.crListWrap`
+  sit inside), so it applies identically to both instead of asymmetrically
+  to one. Caught a second latent bug fixing this one: `.crStatHeadRow` also
+  had `position:sticky; left:0`, which — unnoticed until the horizontal
+  padding was actually being exercised — would have pinned the header to
+  the scroll container's left edge on horizontal scroll instead of
+  scrolling WITH the columns, desyncing labels from data the moment anyone
+  scrolled sideways. Removed; `top:0` alone is correct (vertical sticky
+  only, matching the Sources tab's own `th`). Verified with
+  `getBoundingClientRect()` on matching header/row cells at three different
+  window widths (1050px/1500px/1900px) — sub-pixel diff (<1px, glyph
+  rounding) at all three, not just eyeballed at one size.
+- **Position tag moved from the row's far right edge to right after the
+  team abbreviation** (inside `.crRowMain`, immediately following
+  `.crRowName`) — direct request, and it also reads better: position is
+  player identity, which belongs next to the name, not stranded past 15
+  stat columns where it's easy to lose track of during horizontal scroll.
+- **Search is board-wide now, not pool-only — the direct bug report.** The
+  user removed a player, then couldn't find them again because typing in
+  the search box only ever filtered the LEFT rail (unplaced pool); the
+  ranked list itself had no search at all, so a still-placed player you
+  were trying to relocate (the actually common case, not just fresh
+  removals) was unfindable by search, full stop. `creatorSearch` now also
+  filters `renderCreatorList()` (same substring match already used for the
+  pool), and the search box itself moved out of the rail's `.railHead` into
+  a shared `.filterRow` above the position tabs — grouped with the
+  ALL/QB/RB/WR/TE segmented control the same way the Sources tab already
+  pairs its own filters with its own search box (`.filterRow`/`.searchBox`
+  factored out of `#filters`/`#playerSearch` specifically so both surfaces
+  share one real component instead of two near-identical ones drifting
+  apart). Search combines with the position filter exactly like the
+  position filter already combined with tier-boundary display — tier
+  numbers still show while searching (computed over the full unfiltered
+  order), but add-break/merge controls are hidden while searching for the
+  same reason they're hidden while position-filtered: adjacency in a
+  narrowed view isn't real list adjacency, so offering to edit it there
+  would silently do something other than what's expected.
+
+**Seventh pass — stat-group-follows-position-filter, plus four
+CTO-review suggestions the user picked to build.** The stat-group fix
+mirrors the board's own `effectiveStatPos()` exactly: `crEffectiveStatPos()`
+now falls back to `creatorPosFilter` (not just the selected-player case) so
+filtering to RB brings RB's stat group to the second slot, right after
+BASIC — previously the Creator's position filter had no effect on stat
+column order at all, unlike the board's own position buttons. The four
+follow-ons, all built together since none touch overlapping code:
+- **Board dropdown sorted by `updatedAt`, with a relative-time suffix**
+  (`sortedBoards()`/`formatRelativeTime()`) — "New Board — 2h ago" instead
+  of a plain insertion-order list with no dates anywhere. The "pick a
+  default board" fallbacks (on delete, and on first load if the previously
+  active board no longer exists) now go through `sortedBoards()[0]` too, so
+  the most-recently-edited board opens by default rather than whichever
+  happened to be created first.
+- **Duplicate board** (`duplicateActiveBoard()`) — a full deep-clone
+  (`JSON.parse(JSON.stringify(board.players))` plus array copies for
+  `order`/`breaks`) under a new id, named "`<name> (copy)`". The
+  straightforward answer to "try a variant without losing the original,"
+  which previously meant rebuilding from a base again and redoing every
+  manual edit by hand.
+- **One-step undo for "Reset from base"** — the single most destructive
+  button in the Creator (wipes every manual placement/tier edit with only a
+  confirm dialog in the way). `crUndoSnapshot` holds a deep-cloned
+  pre-reset `{players, order, breaks, baseId}` in memory (deliberately NOT
+  persisted — this is real insurance on one specific action, not a general
+  undo history), surfaced via a dismissible `#crUndoBar` that auto-hides
+  after `CR_UNDO_TIMEOUT_MS` (12s). Verified end-to-end: merge a tier,
+  reset (which wipes it), click Undo, confirm the merge is back — not just
+  that a snapshot object exists.
+- **Favorite/avoid flags now show in the Creator** (`flagBadge(flags[key])`
+  in both `renderCreatorPool()` and `renderCreatorList()`) — a ★/⊘ set from
+  the Sources tab previously didn't appear anywhere in the Creator, so
+  signal you'd already invested in living in one tool was invisible in the
+  other. Reuses the exact same `flagBadge()`/`K_FLAGS` shared.js already
+  had for the Sources table; the storage listener for `K_FLAGS` now also
+  triggers `renderCreator()` when the Creator tab is active, so a flag set
+  from Sources updates the Creator live without a tab switch.
+- **Small polish pass alongside these**: the board `<select>` widened
+  180px→230px after the relative-time suffix made "Board Name — just now"
+  clip inside the old width — caught by actually reading the rendered
+  `<option>` text in a loaded page, not assumed from the CSS.
+
 ## Design language (redesigned 2026-08-24)
 Imported from a Claude Design system ("4th&Go Draft Board Redesign" project):
 dark ink/chalk theme with field-green undertones, deliberately not a generic

@@ -3,197 +3,666 @@
 <head>
 <meta charset="utf-8">
 <title>4th&amp;Go — Rankings Manager</title>
+<!-- This page now runs the board window's own design system (redesigned
+     2026-08-24 in panel.html), not the older "turf" theme theme.css still
+     defines — see claude.md's "Rankings Manager full redesign" note. The
+     token block below is the same one panel.html declares; component
+     styles (buttons, chips, table rows, modals) are written fresh against
+     those tokens rather than reskinning theme.css's old class names in
+     place, since the two themes disagree on nearly everything (color,
+     type, radius, spacing). theme.css is still linked underneath for the
+     handful of very old rules (.mergeCandidate, .nearMergeMenu, .iconRow)
+     this rewrite doesn't touch — everything it DOES touch is overridden
+     below, later in the cascade. -->
 <link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 <style>
-  /* :root tokens, *, body's base rules, button/.pf/.flagMark/#toast base
-     rules now live in theme.css (shared with panel.html). Only this page's
-     surface-specific sizing stays here. */
-  body { padding: 0 0 60px; } /* the manager scrolls a long table — needs room at the bottom the board doesn't */
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+:root {
+  --ink-950:#070908; --ink-900:#0A0C0B; --ink-850:#0F1211; --ink-800:#141816; --ink-750:#191E1B;
+  --ink-700:#1C211E; --ink-600:#262C28; --ink-500:#343B36; --ink-400:#4B534E; --ink-300:#6E7873;
+  --ink-200:#9AA5A0; --ink-100:#C9D2CD; --ink-050:#EDF1EF; --white:#FFFFFF;
+  --chalk-700:#8C6E00; --chalk-600:#E6BE2E; --chalk-500:#FFD84D; --chalk-400:#FFE580; --chalk-300:#FFF0B8;
+  --chalk-a12:rgba(255,216,77,.12); --chalk-a24:rgba(255,216,77,.24); --chalk-a40:rgba(255,216,77,.40);
+  --cyan-500:#22D3EE; --cyan-a12:rgba(34,211,238,.12);
+  --green-500:#35D07F; --green-a12:rgba(53,208,127,.12);
+  --red-500:#FF5A5A; --red-a12:rgba(255,90,90,.12);
+  --orange-500:#FF8A3D; --orange-a12:rgba(255,138,61,.12);
+  --violet-500:#A78BFA; --violet-a12:rgba(167,139,250,.12);
+  --pos-qb:#F4527A; --pos-rb:#35D07F; --pos-wr:#22D3EE; --pos-te:#FF8A3D; --pos-flex:#FFD84D;
+  --pos-qb-tint:rgba(244,82,122,.14); --pos-rb-tint:rgba(53,208,127,.14);
+  --pos-wr-tint:rgba(34,211,238,.14); --pos-te-tint:rgba(255,138,61,.14);
+  --surface-app:var(--ink-900); --surface-panel:var(--ink-850); --surface-raised:var(--ink-800);
+  --surface-row-hover:rgba(255,255,255,.04); --surface-sunken:var(--ink-950);
+  --surface-scrim:rgba(7,9,8,.72); --surface-input:var(--ink-800);
+  --text-primary:var(--ink-050); --text-secondary:var(--ink-200); --text-muted:var(--ink-300);
+  --text-disabled:var(--ink-400); --text-accent:var(--chalk-500);
+  --border-subtle:rgba(255,255,255,.06); --border-default:rgba(255,255,255,.10);
+  --border-strong:rgba(255,255,255,.18); --border-accent:var(--chalk-a40);
+  --accent:var(--chalk-500); --accent-hover:var(--chalk-400); --accent-press:var(--chalk-600);
+  --accent-tint:var(--chalk-a12); --on-accent:var(--ink-950); --focus-ring:var(--chalk-a40);
+  --font-display:"Chivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-body:"Chivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --text-2xs:11px; --text-xs:12px; --text-sm:13px; --text-base:14px; --text-md:16px; --text-lg:18px; --text-xl:22px;
+  --tracking-label:0.08em;
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --radius-xs:3px; --radius-sm:5px; --radius-md:7px; --radius-lg:10px; --radius-xl:14px; --radius-pill:999px;
+  --edge-top:inset 0 1px 0 rgba(255,255,255,.06);
+  --shadow-menu:0 16px 40px -12px rgba(0,0,0,.78),0 0 0 1px rgba(255,255,255,.08);
+  --dur-fast:140ms; --dur-base:220ms; --ease-out:cubic-bezier(.2,.8,.24,1);
+  /* ---- legacy theme.css variable NAMES, remapped to the tokens above ----
+     theme.css and every old rule in this file (chip/pf/table/sheet/etc.)
+     still reference --bg/--panel/--line/--text/--green/--gold/--red by
+     name. Redeclaring them here (this :root comes after theme.css's own in
+     the cascade, so it wins) recolors every one of those rules onto the
+     board's palette without having to touch each rule individually. */
+  --bg: var(--ink-900); --panel: var(--ink-850); --line: var(--border-subtle); --line2: var(--border-default);
+  --text: var(--text-primary); --dim: var(--text-muted); --dim2: var(--text-secondary);
+  --green: var(--chalk-500); --gold: var(--chalk-500); --red: var(--red-500);
+}
+* { box-sizing: border-box; }
+body { background: var(--surface-app); color: var(--text-primary); font-family: var(--font-body); font-size: var(--text-sm); padding: 0 0 60px; }
+button, input, select, textarea { font-family: var(--font-body); }
+/* Full-bleed — this is a real full-tab surface with room to spare (unlike
+   the board window, which stays narrower on purpose), and the Rankings
+   Creator's data grid specifically wants every pixel it can get since its
+   stat columns already need horizontal scroll on a merely-wide screen. A
+   capped max-width here was just wasting the right half of a normal
+   monitor. Side padding scales with viewport instead of a fixed px gutter,
+   so it doesn't look cramped on a laptop or absurdly wide on an ultrawide. */
+.wrap { width: 100%; margin: 0 auto; padding: 0 clamp(20px, 3vw, 56px); }
+.shadow-card { box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 12px 28px -16px rgba(0,0,0,.6); }
 
-  header {
-    background: linear-gradient(180deg, #14170F, #0F1109);
-    border-bottom: 2px solid var(--line2); padding: 16px 0; margin-bottom: 20px;
-  }
-  .brand { font-family: ui-monospace, monospace; font-weight: 800; font-size: 20px; color: var(--green); letter-spacing: -0.4px; }
-  .sub { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; letter-spacing: 1.4px; margin-top: 2px; }
-  .head-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+header {
+  background: linear-gradient(180deg, var(--ink-850), var(--surface-app) 140%);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.headTop { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 0 0; }
+.brandLockup { display: flex; align-items: center; gap: 12px; }
+.brandMark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(155deg, var(--chalk-500), var(--chalk-600)); display: flex; align-items: center; justify-content: center; font: 800 16px/1 var(--font-display); color: var(--ink-950); flex: none; }
+.brandText h1 { font: 800 19px/1 var(--font-display); letter-spacing: -0.01em; margin: 0; color: var(--text-primary); }
+.brandText h1 span { color: var(--accent); }
+.brandText p { font: 600 10px/1 var(--font-mono); letter-spacing: 0.09em; color: var(--text-muted); margin: 5px 0 0; text-transform: uppercase; }
+.syncPill { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 13px; border-radius: var(--radius-pill); background: rgba(53,208,127,.10); border: 1px solid rgba(53,208,127,.28); font: 600 11.5px/1 var(--font-mono); color: var(--green-500); white-space: nowrap; }
+.syncPill.off { background: var(--surface-input); border-color: var(--border-default); color: var(--text-muted); }
+.syncPill .dot { width: 6px; height: 6px; border-radius: 99px; background: var(--green-500); box-shadow: 0 0 0 3px rgba(53,208,127,.18); flex: none; }
+.syncPill.off .dot { background: var(--text-disabled); box-shadow: none; }
+.headMeta { display: flex; align-items: center; gap: 22px; }
+.headMetaCol { text-align: right; white-space: nowrap; }
+.headMetaCol .k { font: 600 9.5px/1 var(--font-mono); letter-spacing: 0.08em; color: var(--text-disabled); text-transform: uppercase; }
+.headMetaCol .v { font: 600 12.5px/1.3 var(--font-mono); color: var(--text-secondary); margin-top: 4px; }
+.sub { font-size: var(--text-2xs); color: var(--text-muted); font-family: var(--font-mono); letter-spacing: 0.06em; margin-top: 3px; }
 
-  button { padding: 7px 12px; } /* the manager's buttons run a little larger than the board's — base rule in theme.css */
+h2 { font: 700 11px/1 var(--font-body); letter-spacing: var(--tracking-label); text-transform: uppercase;
+     color: var(--text-muted); margin: 0 0 13px; }
+.sectionHead { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 13px; gap: 16px; }
+.sectionHead h2 { margin: 0; }
+.sectionHead .hint { font: 500 11.5px/1.4 var(--font-body); color: var(--text-disabled); }
+.pageSection { margin-bottom: 30px; }
+main.wrap { padding-top: 26px; padding-bottom: 64px; }
 
-  h2 { font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: 1.4px;
-       color: var(--dim2); font-weight: 700; margin: 26px 0 10px; text-transform: uppercase; }
+button {
+  background: var(--surface-input); color: var(--text-primary); border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm); font: 600 var(--text-xs)/1 var(--font-body); padding: 8px 13px; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+button:hover { border-color: var(--border-strong); }
+button:active { transform: scale(0.97); }
+/* Chrome's default focus ring is a hard blue rectangle that clashes with
+   every other accent in this app — replaced with the same soft chalk ring
+   the board window uses, and only shown for keyboard focus (:focus-visible)
+   so a plain mouse click doesn't light every button up. */
+button, .pf, .topTabBtn, .chip, .crPosTab, .crBtn, #playerSearch, #crSearch, .crName, input, select, textarea {
+  outline: none;
+}
+button:focus-visible, .pf:focus-visible, .topTabBtn:focus-visible, .chip:focus-visible,
+.crPosTab:focus-visible, .crBtn:focus-visible {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+button.alt { background: transparent; color: var(--text-secondary); }
+button.alt:hover { color: var(--text-primary); border-color: var(--border-strong); }
+#saveSrcBtn, #editSaveBtn { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 700; }
+#saveSrcBtn:hover, #editSaveBtn:hover { background: var(--accent-hover); }
+#confirmAction { background: var(--red-500); color: var(--ink-950); border-color: var(--red-500); font-weight: 700; }
+#confirmAction:hover { background: #ff7373; }
 
-  /* ---- source chips ---- */
-  #sourceBar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
-    border: 1px solid var(--line2); border-radius: 999px; background: var(--panel);
-    font-family: ui-monospace, monospace; font-size: 10.5px; cursor: pointer;
-  }
-  .chip .sw { width: 9px; height: 9px; border-radius: 2px; }
-  .chip.disabled { opacity: .4; }
-  .chip.solo { outline: 1px solid var(--gold); }
-  .chip .x { color: var(--dim); padding-left: 2px; }
-  .chip .x:hover { color: var(--red); }
+/* ---- top-level tab bar (Sources / Rankings Creator) ---- */
+.topTabs { display: flex; gap: 4px; padding: 18px 0 0; }
+.topTabBtn {
+  background: transparent; color: var(--text-muted); border: none; border-bottom: 2px solid transparent;
+  padding: 11px 4px; margin-right: 28px; font: 700 12.5px/1 var(--font-body); letter-spacing: 0.01em;
+  cursor: pointer; border-radius: 0;
+}
+.topTabBtn:hover { color: var(--text-secondary); }
+.topTabBtn.active { color: var(--text-primary); border-bottom-color: var(--accent); }
 
-  /* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) ---- */
-  .vbig { display: inline-flex; align-items: center; gap: 8px; font-family: ui-monospace, monospace; justify-content: flex-end; width: 100%; }
-  .vbig-num { font-size: 10px; font-weight: 800; width: 26px; text-align: right; flex: none; }
-  .vbig-track { position: relative; width: 84px; height: 14px; background: #1E2118; border-radius: 3px; overflow: hidden; flex: none; }
-  .vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line2); }
-  .vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
-  .vbig-empty { color: var(--dim); font-size: 10px; }
+/* ---- source chips ---- */
+#sourceBar { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+.toolRow { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 9px; height: 38px; padding: 0 8px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-pill); background: var(--surface-panel);
+  font: 600 12.5px/1 var(--font-body); cursor: pointer; color: var(--text-secondary);
+  transition: border-color var(--dur-fast) var(--ease-out); box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 8px 18px -14px rgba(0,0,0,.6);
+}
+.chip:hover { border-color: var(--border-strong); }
+.chip .sw { width: 22px; height: 18px; border-radius: 5px; flex: none; display: flex; align-items: center; justify-content: center; font: 800 8px/1 var(--font-mono); color: var(--ink-950); }
+.chip .sw img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.chip.disabled { opacity: .42; }
+.chip.solo { border-color: var(--accent); background: var(--accent-tint); color: var(--text-primary); }
+.chip .x { color: var(--text-disabled); padding-left: 2px; }
+.chip .x:hover { color: var(--red-500); }
+.chip > span:not(.sw):not(.x):not(.edit-src) { color: var(--text-primary); font-weight: 600; }
+.chip .ct { font: 600 10.5px/1 var(--font-mono); color: var(--text-disabled); }
+.chip .edit-src:hover { color: var(--text-primary) !important; }
+.chipAdd {
+  display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 15px;
+  border-radius: var(--radius-pill); border: 1px dashed var(--border-strong); color: var(--text-muted);
+  font: 600 11.5px/1 var(--font-body); cursor: pointer; background: transparent;
+}
+.chipAdd:hover { color: var(--text-primary); border-color: var(--accent); }
 
-  /* ---- filters ---- */
-  #filters { display: flex; gap: 5px; flex-wrap: wrap; }
-  #playerSearch {
-    flex: 1; min-width: 140px; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
-    color: var(--text); padding: 5px 9px; font-size: 11px; font-family: ui-monospace, monospace;
-  }
-  #playerSearch:focus { outline: 1px solid var(--green); }
-  #playerSearch::placeholder { color: var(--dim); }
-  .pf { background: transparent; border: 1px solid var(--line2); color: var(--dim2); padding: 5px 11px; font-size: 10px; cursor: pointer; transition: color .15s, border-color .15s; } /* :hover/.active states in theme.css */
+/* ---- value/reach bar (Sleeper ADP vs. baseline ADP source) ---- */
+.vbig { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); justify-content: flex-end; width: 100%; }
+.vbig-num { font-size: var(--text-2xs); font-weight: 700; width: 26px; text-align: right; flex: none; }
+.vbig-track { position: relative; width: 84px; height: 12px; background: var(--ink-700); border-radius: var(--radius-xs); overflow: hidden; flex: none; }
+.vbig-track::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--border-default); }
+.vbig-fill { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-xs); }
+.vbig-empty { color: var(--text-disabled); font-size: var(--text-2xs); }
 
-  /* ---- table ---- */
-  .tableWrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
-  th {
-    background: #10130C; font-family: ui-monospace, monospace; font-size: 9.5px;
-    letter-spacing: .8px; color: var(--dim2); text-align: right; padding: 8px 10px;
-    border-bottom: 1px solid var(--line2); white-space: nowrap; position: sticky; top: 0;
-  }
-  th.l, td.l { text-align: left; }
-  td { padding: 6px 10px; border-bottom: 1px solid #1A1D14; text-align: right; font-family: ui-monospace, monospace; white-space: nowrap; }
-  td.nm { font-family: -apple-system, "Segoe UI", Inter, sans-serif; font-weight: 600; }
-  tr.gone { opacity: .28; text-decoration: line-through; }
-  tr.mine td.nm { color: var(--green); }
-  tr:hover { background: #12150D; }
-  .posChip { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; border: 1px solid; font-family: ui-monospace, monospace; }
-  .tierChip { font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 3px; color: #0B0D08; font-family: ui-monospace, monospace; }
-  .xbtn { cursor: pointer; color: var(--dim); }
-  .xbtn:hover { color: var(--gold); }
-  .flagBtn { cursor: pointer; color: var(--dim); padding: 0 2px; }
-  .flagBtn.fav.on { color: var(--gold); }
-  .flagBtn.avoid.on { color: var(--red); }
-  .flagBtn:not(.on):hover { color: var(--dim2); }
-  .flagMark { margin-right: 4px; } /* .fav/.avoid colors in theme.css */
-  tr.favRow { background: rgba(245,194,66,.05); }
-  tr.avoidRow { background: rgba(201,122,110,.05); }
+/* ---- filters ---- */
+/* .filterRow/.searchBox are the reusable versions of what #filters/
+   #playerSearch originally were — factored out so the Rankings Creator's
+   own position-filter + search row (added later) looks identical instead
+   of reinventing a second "row of filter controls" style. */
+#filters, .filterRow { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+#playerSearch, .searchBox {
+  flex: 1; min-width: 220px; height: 36px; background: var(--surface-input); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  color: var(--text-primary); padding: 0 13px; font-size: 12.5px; font-family: var(--font-body);
+}
+#playerSearch:focus, .searchBox:focus { outline: none; border-color: var(--border-accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+#playerSearch::placeholder, .searchBox::placeholder { color: var(--text-disabled); }
+/* Segmented pill group — ALL/QB/RB/WR/TE (Sources) and the Creator's own
+   position tabs share this exact look, matching the board's own segmented
+   control component instead of a row of individually-bordered buttons. */
+.segmented { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.pf {
+  background: transparent; border: none; color: var(--text-muted); border-radius: var(--radius-sm);
+  height: 30px; padding: 0 13px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+.pf:hover:not(.active) { color: var(--text-secondary); }
+.pf.active { background: var(--accent); color: var(--on-accent); }
+#takenToggle.pf { border: 1px solid var(--border-default); height: 36px; padding: 0 13px; background: transparent; }
+#takenToggle.pf:hover { color: var(--text-secondary); border-color: var(--border-strong); }
+#takenToggle.pf.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
-  /* ---- modal ---- */
-  #modal, #confirmModal, #editModal, #mergeModal {
-    position: fixed; inset: 0; background: rgba(0,0,0,.72); display: none;
-    align-items: center; justify-content: center; z-index: 100; padding: 20px;
-  }
-  #modal.open, #confirmModal.open, #editModal.open, #mergeModal.open { display: flex; }
-  #mergeCandidates { max-height: 280px; overflow: auto; margin-top: 10px; border: 1px solid var(--line2); border-radius: 4px; }
-  #mergeCandidates .empty { padding: 14px; text-align: center; color: var(--dim); font-size: 11.5px; }
-  .mergeCandidate {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    padding: 9px 11px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px;
-  }
-  .mergeCandidate:last-child { border-bottom: none; }
-  .mergeCandidate:hover { background: rgba(255,255,255,.05); }
-  .mergeCandidate .src { font-size: 10px; color: var(--dim); font-family: ui-monospace, monospace; text-align: right; white-space: nowrap; }
-  /* Right-click "merge near matches" menu on a player name in the main table —
-     same floating-menu pattern as the board's favorite/avoid right-click menu. */
-  .nearMergeMenu {
-    position: fixed; z-index: 150; background: #1C1F16; border: 1px solid #3A3E2E; border-radius: 8px;
-    padding: 10px; min-width: 240px; max-width: 320px;
-    box-shadow: 0 6px 16px rgba(0,0,0,.5); font-family: ui-monospace, monospace; font-size: 11px;
-  }
-  .nearMergeMenu .nmm-title { color: var(--dim2); margin-bottom: 8px; line-height: 1.4; }
-  .nearMergeMenu .nmm-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
-  .nearMergeMenu .nmm-row label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .nearMergeMenu .nmm-src { color: var(--dim); font-size: 9.5px; }
-  .nearMergeMenu .nmm-actions { display: flex; gap: 6px; margin-top: 8px; }
-  .nearMergeMenu button { all: unset; padding: 6px 10px; font-size: 10.5px; border-radius: 4px; cursor: pointer; }
-  .nearMergeMenu .nmm-merge { background: var(--green); color: var(--bg); font-weight: 700; }
-  .nearMergeMenu .nmm-merge[disabled] { opacity: .4; cursor: default; }
-  .nearMergeMenu .nmm-cancel { color: var(--dim2); }
-  .iconRow { display: flex; align-items: center; gap: 10px; }
-  .iconPreview {
-    width: 32px; height: 32px; border-radius: 6px; background: var(--line2); flex: none;
-    display: flex; align-items: center; justify-content: center; overflow: hidden;
-  }
-  .iconPreview img { width: 100%; height: 100%; object-fit: cover; }
-  #editIconClear { cursor: pointer; font-size: 10px; color: var(--dim2); font-family: ui-monospace, monospace; }
-  #editIconClear:hover { color: var(--red); }
-  #editStatusLine { color: var(--dim2); }
-  .sheet {
-    background: var(--panel); border: 1px solid var(--line2); border-radius: 8px;
-    width: 100%; max-width: 620px; max-height: 88vh; overflow: auto; padding: 20px;
-  }
-  .sheet h3 { font-family: ui-monospace, monospace; font-size: 13px; margin-bottom: 4px; }
-  .sheet p.hint { font-size: 11px; color: var(--dim); margin-bottom: 14px; line-height: 1.5; }
-  .sheet label { display: block; font-family: ui-monospace, monospace; font-size: 10px; color: var(--dim2); letter-spacing: 1px; margin: 12px 0 5px; }
-  .sheet label.checkRow {
-    display: flex; align-items: flex-start; gap: 8px; text-transform: none; letter-spacing: normal;
-    font-size: 11.5px; color: var(--text); font-family: inherit; cursor: pointer;
-  }
-  .sheet label.checkRow input[type=checkbox] { margin-top: 2px; flex: none; }
-  .sheet #srcPositionOnlyHint { margin: 4px 0 0; }
-  .sheet input[type=text], .sheet textarea {
-    width: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 4px;
-    color: var(--text); padding: 8px; font-family: ui-monospace, monospace; font-size: 11.5px;
-  }
-  .sheet textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
-  .sheet input:focus, .sheet textarea:focus { outline: 1px solid var(--green); }
-  .modalBtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  #parseNote, #editParseNote { font-size: 11px; margin-top: 10px; font-family: ui-monospace, monospace; line-height: 1.5; }
-  #parseNote.warn, #editParseNote.warn { color: var(--gold); }
-  #parseNote.err, #editParseNote.err { color: var(--red); }
-  #parseNote.ok, #editParseNote.ok { color: var(--green); }
+/* ---- table / data grid ---- */
+.tableWrap { overflow-x: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-panel); box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 12px 28px -16px rgba(0,0,0,.6); }
+table { border-collapse: collapse; width: 100%; min-width: 900px; font-size: var(--text-xs); }
+th {
+  background: var(--surface-sunken); font: 700 9.5px/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted); text-align: right; padding: 13px 15px; border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap; position: sticky; top: 0; z-index: 1;
+}
+th.l, td.l { text-align: left; }
+td { padding: 11px 15px; border-bottom: 1px solid var(--border-subtle); text-align: right; font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; color: var(--text-secondary); }
+td.nm { font-family: var(--font-body); font-weight: 600; color: var(--text-primary); }
+tr { border-left: 3px solid transparent; transition: background-color var(--dur-fast) var(--ease-out); }
+tr[data-pos="QB"] { border-left-color: var(--pos-qb); } tr[data-pos="RB"] { border-left-color: var(--pos-rb); }
+tr[data-pos="WR"] { border-left-color: var(--pos-wr); } tr[data-pos="TE"] { border-left-color: var(--pos-te); }
+tr.gone { opacity: .32; text-decoration: line-through; }
+tr.mine { background: var(--accent-tint); }
+tr.mine td.nm { color: var(--accent); }
+tbody tr:last-child td { border-bottom: none; }
+tr:hover { background: var(--surface-row-hover); }
+.avatarNameRow { display: flex; align-items: center; gap: 11px; }
+.posChip { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 20px; font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: var(--radius-xs); border: 1px solid; font-family: var(--font-mono); }
+.tierChip { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 20px; font-size: 10.5px; font-weight: 700; padding: 0 7px; border-radius: var(--radius-xs); color: var(--ink-950); font-family: var(--font-mono); }
+.xbtn { cursor: pointer; color: var(--text-disabled); font-size: 13px; }
+.xbtn:hover { color: var(--accent); }
+.flagBtn { cursor: pointer; color: var(--text-disabled); padding: 0 2px; font-size: 13px; }
+.flagBtn.fav.on { color: var(--accent); }
+.flagBtn.avoid.on { color: var(--red-500); }
+.flagBtn:not(.on):hover { color: var(--text-secondary); }
+.flagMark { margin-right: 4px; }
+.flagMark.fav { color: var(--accent); } .flagMark.avoid { color: var(--red-500); }
+tr.favRow { background: var(--chalk-a12); }
+tr.avoidRow { background: var(--red-a12); }
+.gridFoot { padding: 10px 16px; font: 500 11px/1.4 var(--font-body); color: var(--text-disabled); border-top: 1px solid var(--border-subtle); background: var(--surface-sunken); }
 
-  .empty { color: var(--dim); text-align: center; padding: 34px; font-size: 12px; }
-  #toast {
-    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(120%);
-    background: var(--gold); color: var(--bg); padding: 8px 16px; border-radius: 5px;
-    font-weight: 700; font-size: 11px; display: none; z-index: 200; font-family: ui-monospace, monospace;
-    opacity: 0; transition: opacity .2s ease, transform .2s ease;
-  } /* .show/.error states in theme.css */
+/* ---- unmatched-players banner ---- */
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 16px; background: var(--red-a12); border: 1px solid rgba(255,90,90,.20); border-radius: var(--radius-md); cursor: pointer; }
+.banner .l { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.banner .tag { font: 800 9.5px/1 var(--font-mono); letter-spacing: 0.08em; color: var(--red-500); background: rgba(255,90,90,.14); padding: 5px 8px; border-radius: 5px; flex: none; }
+.banner .txt { font: 600 12px/1.4 var(--font-body); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.banner .caret { color: var(--text-disabled); font-size: 11px; flex: none; }
+.bannerBody { padding: 14px 16px 4px; font-size: 11.5px; }
+
+/* ---- modal ---- */
+#modal, #confirmModal, #editModal, #mergeModal {
+  position: fixed; inset: 0; background: var(--surface-scrim); display: none;
+  align-items: center; justify-content: center; z-index: 100; padding: 20px;
+}
+#modal.open, #confirmModal.open, #editModal.open, #mergeModal.open { display: flex; }
+#mergeCandidates { max-height: 280px; overflow: auto; margin-top: 10px; border: 1px solid var(--border-default); border-radius: var(--radius-md); }
+#mergeCandidates .empty { padding: 14px; text-align: center; color: var(--text-muted); font-size: var(--text-xs); }
+.mergeCandidate {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; font-size: var(--text-xs);
+}
+.mergeCandidate:last-child { border-bottom: none; }
+.mergeCandidate:hover { background: var(--surface-row-hover); }
+.mergeCandidate .src { font-size: var(--text-2xs); color: var(--text-muted); font-family: var(--font-mono); text-align: right; white-space: nowrap; }
+/* Right-click "merge near matches" menu on a player name in the main table —
+   same floating-menu pattern as the board's favorite/avoid right-click menu. */
+.nearMergeMenu {
+  position: fixed; z-index: 150; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-md);
+  padding: 10px; min-width: 240px; max-width: 320px;
+  box-shadow: var(--shadow-menu); font-family: var(--font-body); font-size: var(--text-xs);
+}
+.nearMergeMenu .nmm-title { color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; }
+.nearMergeMenu .nmm-row { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.nearMergeMenu .nmm-row label { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nearMergeMenu .nmm-src { color: var(--text-disabled); font-size: 10px; }
+.nearMergeMenu .nmm-actions { display: flex; gap: 6px; margin-top: 8px; }
+.nearMergeMenu button { all: unset; padding: 6px 10px; font-size: var(--text-2xs); border-radius: var(--radius-sm); cursor: pointer; }
+.nearMergeMenu .nmm-merge { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+.nearMergeMenu .nmm-merge[disabled] { opacity: .4; cursor: default; }
+.nearMergeMenu .nmm-cancel { color: var(--text-secondary); }
+.iconRow { display: flex; align-items: center; gap: 10px; }
+.iconPreview {
+  width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--surface-input); flex: none;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.iconPreview img { width: 100%; height: 100%; object-fit: cover; }
+#editIconClear { cursor: pointer; font-size: var(--text-2xs); color: var(--text-muted); font-family: var(--font-mono); }
+#editIconClear:hover { color: var(--red-500); }
+#editStatusLine { color: var(--text-muted); }
+.sheet {
+  background: var(--surface-panel); border: 1px solid var(--border-default); border-radius: var(--radius-xl);
+  box-shadow: var(--edge-top), var(--shadow-menu);
+  width: 100%; max-width: 620px; max-height: 88vh; overflow: auto; padding: 22px;
+}
+.sheet h3 { font-family: var(--font-display); font-weight: 700; font-size: var(--text-md); margin-bottom: 4px; color: var(--text-primary); }
+.sheet p.hint { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: 14px; line-height: 1.5; }
+.sheet label { display: block; font: 600 var(--text-2xs)/1 var(--font-body); color: var(--text-muted); letter-spacing: 0.04em; margin: 14px 0 6px; text-transform: uppercase; }
+.sheet label.checkRow {
+  display: flex; align-items: flex-start; gap: 8px; text-transform: none; letter-spacing: normal;
+  font-size: var(--text-xs); color: var(--text-primary); font-family: inherit; cursor: pointer;
+}
+.sheet label.checkRow input[type=checkbox] { margin-top: 2px; flex: none; }
+.sheet #srcPositionOnlyHint { margin: 4px 0 0; }
+.sheet input[type=text], .sheet textarea {
+  width: 100%; background: var(--surface-input); border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  color: var(--text-primary); padding: 9px 10px; font-family: var(--font-mono); font-size: var(--text-xs);
+}
+.sheet textarea { min-height: 190px; resize: vertical; line-height: 1.45; }
+.sheet input:focus, .sheet textarea:focus { outline: none; border-color: var(--border-accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.modalBtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+#parseNote, #editParseNote { font-size: var(--text-xs); margin-top: 10px; font-family: var(--font-mono); line-height: 1.5; }
+#parseNote.warn, #editParseNote.warn { color: var(--accent); }
+#parseNote.err, #editParseNote.err { color: var(--red-500); }
+#parseNote.ok, #editParseNote.ok { color: var(--green-500); }
+
+.empty { color: var(--text-muted); text-align: center; padding: 34px; font-size: var(--text-xs); }
+#toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(120%);
+  background: var(--accent); color: var(--on-accent); padding: 9px 18px; border-radius: var(--radius-sm);
+  font-weight: 700; font-size: var(--text-xs); display: none; z-index: 200; font-family: var(--font-body);
+  opacity: 0; transition: opacity .2s ease, transform .2s ease; box-shadow: var(--shadow-menu);
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.error { background: var(--red-500); color: var(--ink-950); }
+
+/* ================================================================
+   RANKINGS CREATOR — see claude.md "Rankings Creator" section.
+   Deliberately NOT its own boxed/floating widget (that shipped in an
+   earlier pass and was called out directly as looking bolted-on, out of
+   place next to how the rest of the page flows) — the toolbar and position
+   tabs sit flush on the page background exactly like the Sources tab's own
+   #filters row, and only the actual data grid (rail + ranked list) gets a
+   card treatment, via the SAME .tableWrap look the Sources tab's player
+   table already uses. One shared "this is a data grid" visual language
+   instead of a second, different "this is a whole embedded app" one.
+   ================================================================ */
+.crToolbar {
+  display: flex; align-items: flex-end; gap: 0; background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 12px 28px -16px rgba(0,0,0,.6);
+  padding: 16px 18px; flex-wrap: wrap; row-gap: 14px;
+}
+.toolGroup { display: flex; align-items: flex-end; gap: 10px; padding-right: 20px; margin-right: 20px; border-right: 1px solid var(--border-subtle); }
+.toolGroup:last-of-type { border-right: none; margin-right: 0; padding-right: 0; }
+.toolGroup.grow { flex: 1; }
+.crFieldLabel { display: block; font: 700 9.5px/1 var(--font-mono); letter-spacing: .08em; color: var(--text-disabled); text-transform: uppercase; margin-bottom: 6px; }
+  .crToolbar select {
+    height: 34px; font: 600 12px/1 var(--font-body); background: var(--surface-input); color: var(--text-primary);
+    border: 1px solid var(--border-default); border-radius: 5px; padding: 0 9px; cursor: pointer;
+  }
+  .crBtn {
+    height: 34px; font: 600 12px/1 var(--font-body); padding: 0 13px; border-radius: 5px; border: 1px solid var(--border-default);
+    background: var(--surface-input); color: var(--text-primary); cursor: pointer; transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+  }
+  .crBtn:active { transform: scale(.97); }
+  .crBtn:hover { border-color: var(--border-strong); }
+  .crBtn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 700; }
+  .crBtn.primary:hover { background: var(--accent-hover); }
+  .crBtn.danger { color: var(--red-500); }
+  .crBtn.danger:hover { border-color: var(--red-500); background: rgba(255,90,90,.08); }
+  .crBtn.sm { height: 26px; padding: 0 10px; font-size: 11px; }
+  /* Temporary undo affordance after a destructive "Reset from base" — real
+     insurance instead of just a confirm dialog, since that action wipes
+     every manual edit with no way back otherwise. Auto-hides itself; see
+     CR_UNDO_TIMEOUT_MS in rankings-manager.js. */
+  .crUndoBar {
+    display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 8px 12px;
+    background: var(--chalk-a12); border: 1px solid var(--chalk-a24); border-radius: var(--radius-sm);
+    font: 500 12px/1 var(--font-body); color: var(--text-secondary);
+  }
+  .crName {
+    height: 34px; font: 600 15px/1 var(--font-display); background: transparent; color: var(--text-primary); border: 1px solid transparent;
+    border-radius: 5px; padding: 0 8px; min-width: 190px;
+  }
+  .crName:hover { border-color: var(--border-default); }
+  .crName:focus { outline: none; border-color: var(--border-accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+  .crSpacer { flex: 1; }
+  .crMetaStat { display: flex; flex-direction: column; gap: 3px; }
+  .crMetaStat .k { font: 700 9.5px/1 var(--font-mono); letter-spacing: .07em; color: var(--text-disabled); text-transform: uppercase; }
+  .crMetaStat .v { font: 700 15px/1 var(--font-mono); color: var(--text-primary); }
+  .crMetaStat .v small { color: var(--text-muted); font-weight: 600; font-size: 11px; }
+
+  .crPosTabs { margin-bottom: 14px; }
+  .crPosTab {
+    background: transparent; border: none; color: var(--text-muted); border-radius: var(--radius-sm);
+    height: 30px; padding: 0 13px; font: 700 11px/1 var(--font-body); letter-spacing: .02em; cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+  }
+  .crPosTab:hover:not(.active) { color: var(--text-secondary); }
+  .crPosTab.active { background: var(--accent); color: var(--on-accent); }
+  .crPosTab.active[data-pos="QB"] { background: var(--pos-qb); color: var(--ink-950); }
+  .crPosTab.active[data-pos="RB"] { background: var(--pos-rb); color: var(--ink-950); }
+  .crPosTab.active[data-pos="WR"] { background: var(--pos-wr); color: var(--ink-950); }
+  .crPosTab.active[data-pos="TE"] { background: var(--pos-te); color: var(--ink-950); }
+
+  /* The actual data-grid card — same border/radius/background as the
+     Sources tab's .tableWrap, so the two tabs read as one visual system. */
+  .crGrid { border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-panel); overflow: hidden; }
+  .creatorBody { display: grid; grid-template-columns: 220px 1fr; min-height: 480px; }
+  /* No max-height here either (see .crTableScroll above) — a CSS grid row's
+     items stretch to match each other's height by default, so this now
+     naturally matches however tall the ranked-list side ends up (which is
+     "as tall as its content," since it no longer self-caps), and its own
+     overflow-y:auto scrolls within THAT height rather than a hardcoded one. */
+  .crRail { background: var(--surface-sunken); border-right: 1px solid var(--border-subtle); padding: 12px; overflow-y: auto; }
+  .crRailLabel { font: 600 10px/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); margin: 0 0 8px; }
+  .crPoolRow {
+    display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 5px; margin-bottom: 2px;
+    cursor: grab; font-size: 12px; transition: background var(--dur-fast) var(--ease-out);
+    touch-action: none; user-select: none;
+  }
+  .crPoolRow:hover { background: var(--surface-row-hover); }
+  .crPoolRow .crName2 { flex: 1; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crPoolRow .crPosTag { font: 700 9px/1 var(--font-mono); padding: 2px 4px; border-radius: 3px; flex: none; }
+  .crEmptyPool { color: var(--text-disabled); font-size: 11px; padding: 10px 4px; }
+  /* Floating clone that follows the pointer 1:1 while dragging a pool
+     player toward the list — see startPoolDrag in rankings-manager.js. */
+  .crDragGhost { position: fixed; top: 0; left: 0; z-index: 200; pointer-events: none; background: var(--surface-raised); box-shadow: 0 14px 32px -10px rgba(0,0,0,.65), 0 0 0 1px var(--border-accent); transform: rotate(-1.2deg) scale(1.02); }
+
+  /* Header (crStatHeadRow) + rows (crList) scroll together, horizontally, as
+     ONE unit inside this wrapper — fixed the "stats get cut off with no way
+     to see them" report: previously each row was a flex box with crRowMain
+     at flex:1, so on a narrow viewport the browser just shrank/clipped the
+     stat columns instead of scrolling to them. Rows now have a real
+     deterministic total width (crRowMain gets a fixed basis instead of
+     flex:1, see below) so the content can genuinely overflow and scroll
+     instead of being crushed. */
+  /* No vertical cap/inner scrollbar here on purpose — this used to be
+     max-height:640px with its own overflow-y, which left a lot of dead
+     space below it on any window taller than ~640px worth of rows (direct
+     report: "there's still a lot of room on the bottom of the screen").
+     The Sources tab's own player table has never had this problem because
+     it was never given an inner scroll box — it just grows and the PAGE
+     scrolls. Matching that here: this only scrolls horizontally (for the
+     stat columns); vertical scrolling is the normal page scroll, so the
+     grid actually uses the height it's given instead of stopping short. */
+  /* Horizontal padding lives HERE, on the shared scroll container, not on
+     .crListWrap alone — .crStatHeadRow sits outside .crListWrap (it's a
+     sibling, not a child), so padding scoped to .crListWrap only shifted
+     the rows and left the sticky header 16px out of step with them on any
+     resize (the direct report: "stats column labels aren't lining up").
+     Both the header and the rows are direct descendants of this scroll
+     container, so padding set here applies identically to both. */
+  .crTableScroll { overflow-x: auto; padding: 0 16px; }
+  .crListWrap { padding: 0 0 40px; }
+  .crListWrap.empty::before {
+    content: "Drag players from the left to start ranking them — or click \"Reset from base\" above to load a starting order."; display: block;
+    color: var(--text-disabled); font-size: 12px; padding: 40px 20px; text-align: center;
+  }
+  .crRow {
+    display: flex; align-items: center; gap: 14px; padding: 8px 10px; border-radius: var(--radius-sm);
+    background: var(--surface-raised); border: 1px solid var(--border-subtle); margin-bottom: 4px;
+    width: max-content; min-width: 100%;
+  }
+  .crRow:hover { border-color: var(--border-default); }
+  /* The dragged row itself: NO transition on transform (see startListDrag's
+     comment) — it must track the pointer with zero added latency. Other
+     rows making room get `.shifting`'s eased transition instead, added/
+     removed only for the drag's duration so it can't leak into unrelated
+     transform uses. */
+  .crRow.grabbed { cursor: grabbing; box-shadow: 0 14px 32px -10px rgba(0,0,0,.65), 0 0 0 1px var(--border-accent); position: relative; }
+  .crRow.grabbed.overRail { box-shadow: 0 14px 32px -10px rgba(0,0,0,.65), 0 0 0 1px rgba(255,90,90,.5); opacity: .6; }
+  .crRow.shifting { transition: transform 180ms var(--ease-out); }
+  .crRow.dropBefore { box-shadow: 0 -2px 0 0 var(--accent); }
+  .crRow.dropAfter { box-shadow: 0 2px 0 0 var(--accent); }
+  .crRow.selected { background: var(--surface-row-hover); border-color: var(--border-strong); }
+  .crRow .crRank { font: 600 11px/1 var(--font-mono); color: var(--text-disabled); width: 22px; text-align: right; flex: none; }
+  .crRow .crGrip { color: var(--text-disabled); font-size: 11px; flex: none; cursor: grab; touch-action: none; user-select: none; }
+  .crRow .crGrip:active { cursor: grabbing; }
+  /* One-click reorder — same affordance as the board's Sleeper-queue move
+     buttons, added directly alongside drag-and-drop rather than instead of
+     it (dragging still works; this is the easier option for a small nudge
+     or for anyone who finds drag fiddly). */
+  .crMoveBtns { display: flex; flex-direction: column; flex: none; }
+  .crMoveBtn { width: 15px; height: 13px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; padding: 0; cursor: pointer; color: var(--text-disabled); border-radius: 3px; font-size: 7px; line-height: 1; }
+  .crMoveBtn:hover:not(:disabled) { background: var(--chalk-a12); color: var(--accent); }
+  .crMoveBtn:disabled { opacity: .25; cursor: default; }
+  .crStatHeadRow .crMoveBtns { width: 15px; visibility: hidden; }
+  .crRowMain { display: flex; align-items: center; gap: 8px; flex: 0 0 240px; min-width: 0; }
+  .crRowName { font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .crRowName .crTeam { color: var(--text-muted); font-weight: 400; font-size: 11px; margin-left: 5px; }
+  .crRowPos { font: 700 10px/20px var(--font-mono); width: 26px; height: 20px; text-align: center; border-radius: 4px; flex: none; }
+  /* Same headshot/team-logo markup avatarHtml() (shared.js) already builds
+     for the board window — CSS copied verbatim from panel.html since this
+     tab doesn't otherwise link that stylesheet. */
+  .avatarCircle { width: 24px; height: 24px; border-radius: 50%; flex: none; position: relative; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 9px; color: var(--text-primary); background: var(--surface-sunken); background-size: cover; background-position: center top; border: 1.5px solid var(--ink-500); }
+  .avatarCircle.sm { width: 22px; height: 22px; font-size: 8.5px; }
+  .avatarBadge { position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 999px; background: var(--ink-700) center/cover no-repeat; border: 1.5px solid var(--surface-raised); font-family: var(--font-mono); font-size: 5.5px; font-weight: 800; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .crRowRemove { color: var(--text-disabled); cursor: pointer; flex: none; padding: 2px 4px; font-size: 12px; }
+  .crRowRemove:hover { color: var(--red-500); }
+
+  .crStatBlock { flex: none; position: relative; height: 30px; }
+  .crStatBlock .statGroup { position: absolute; top: 0; left: 0; width: 134px; height: 100%; display: flex; align-items: center; padding: 0 4px; }
+  .crStatBlock .statGroup[data-pos]:not([data-pos="BASIC"]) { border-left: 1px solid var(--border-subtle); }
+  .crStatBlock .statCol { width: 42px; flex: none; text-align: center; font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-primary); }
+  .crStatBlock .statCol.empty { color: var(--text-disabled); font-weight: 400; }
+  /* top:0 only (vertical sticky, matching the Sources tab's own `th`) —
+     NOT left:0. A left value would make the header also stick horizontally,
+     pinning it at the scroll container's left edge instead of scrolling
+     WITH the stat columns during horizontal scroll, which would desync the
+     labels from their columns the moment you scroll sideways. */
+  .crStatHeadRow { display: flex; align-items: center; gap: 14px; padding: 13px 10px 11px; border-bottom: 1px solid var(--border-subtle); position: sticky; top: 0; background: var(--surface-panel); z-index: 2; width: max-content; min-width: 100%; }
+  .crStatHeadRow .crRank { width: 22px; flex: none; } .crStatHeadRow .crGrip { width: 11px; flex: none; }
+  /* MUST match .crRowMain's flex-basis exactly (both 240px) — this was
+     `flex:1` here while rows used a fixed 240px, so the header's name
+     column grew/shrank with window width while rows stayed put, throwing
+     every stat column out of alignment with its header on any resize
+     (direct report: "stats column labels aren't lining up as I resize the
+     window"). Verify any future layout change here with
+     getBoundingClientRect() on both a header label and a row value in the
+     same column — same lesson as the board's own alignment history. */
+  .crStatHeadRow .crRowMain { flex: 0 0 240px; }
+  .crStatHeadRow .statHeadGroup { position: absolute; top: 0; left: 0; width: 134px; display: flex; align-items: center; padding: 0 4px; }
+  .crStatHeadRow .statHeadCol { width: 42px; flex: none; text-align: center; font: 600 9.5px/1 var(--font-body); letter-spacing: .04em; color: var(--text-muted); cursor: default; }
+  .crStatHeadRow .crStatBlock { height: 16px; }
+  .crStatHeadRow .crRowRemove { visibility: hidden; }
+
+  .crTierDivider { display: flex; align-items: center; gap: 12px; margin: 18px 0 9px; }
+  .crTierDivider:first-child { margin-top: 2px; }
+  .crTierDivider .crTline { flex: 1; height: 1px; background: var(--border-subtle); }
+  .crTierLabel {
+    font: 700 10.5px/1 var(--font-mono); letter-spacing: .04em; color: var(--text-secondary);
+    white-space: nowrap; display: flex; align-items: center; gap: 7px;
+  }
+  .crTierLabel .crTierDot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .crTierLabel .crTierMerge { color: var(--text-disabled); cursor: pointer; padding: 0 2px; }
+  .crTierLabel .crTierMerge:hover { color: var(--red-500); }
+  .crAddBreakGap { height: 8px; position: relative; margin: -2px 0; }
+  .crAddBreakGap .crAddBreakLine { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: transparent; transition: background var(--dur-fast) var(--ease-out); }
+  .crAddBreakGap .crAddBreakBtn {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%) scale(.9); opacity: 0;
+    font: 600 9px/1 var(--font-mono); color: var(--text-disabled); background: var(--surface-app);
+    border: 1px dashed var(--border-strong); border-radius: 999px; padding: 3px 8px; cursor: pointer;
+    transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+    white-space: nowrap;
+  }
+  .crAddBreakGap:hover .crAddBreakLine { background: var(--border-strong); }
+  .crAddBreakGap:hover .crAddBreakBtn { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  .crAddBreakGap .crAddBreakBtn:hover { color: var(--text-primary); border-color: var(--accent); }
+
+  .crNote { background: var(--surface-input); border: 1px solid var(--border-subtle); border-radius: 7px; padding: 10px 12px; font-size: 11.5px; color: var(--text-secondary); margin: 0 16px 16px; }
 </style>
 </head>
 <body>
   <header>
-    <div class="wrap head-row">
-      <div>
-        <div class="brand">4TH&amp;GO — RANKINGS MANAGER</div>
-        <div class="sub" id="syncLine">NOT SYNCED</div>
+    <div class="wrap">
+      <div class="headTop">
+        <div class="brandLockup">
+          <div class="brandMark">4</div>
+          <div class="brandText">
+            <h1>4th<span>&amp;</span>Go</h1>
+            <p>Rankings Manager</p>
+          </div>
+        </div>
+        <div class="headMeta">
+          <span class="syncPill off" id="syncPill"><span class="dot"></span><span id="syncLine">Not synced</span></span>
+        </div>
       </div>
-      <div class="sub" style="max-width:340px;text-align:right;line-height:1.5">
-        Curate ranking sources here. Live picks and recommendations live in the board window (toolbar icon).
-      </div>
+      <nav class="topTabs">
+        <button class="topTabBtn active" id="tabSourcesBtn" data-tab="sources">Sources</button>
+        <button class="topTabBtn" id="tabCreatorBtn" data-tab="creator">Rankings Creator</button>
+      </nav>
     </div>
   </header>
 
-  <div class="wrap">
-    <h2>Ranking sources</h2>
-    <div id="sourceBar"></div>
+  <main class="wrap">
+  <div id="sourcesTab">
+    <div class="pageSection">
+      <div class="sectionHead"><h2>Ranking sources</h2></div>
+      <div id="sourceBar"></div>
+    </div>
 
-    <div id="orphansSection" style="display:none; margin-top: 18px; padding: 12px; background: rgba(201,122,110,.08); border: 1px solid rgba(201,122,110,.2); border-radius: 6px;">
-      <div id="orphansHeader" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer">
-        <h3 style="font-size: 12px; color: var(--red); margin: 0; font-weight: 700; letter-spacing: 0.5px;">UNMATCHED PLAYERS <span id="orphansCount" style="color:var(--dim); font-weight:400"></span></h3>
-        <span id="orphansToggle" style="color:var(--dim2); font-size:11px">▾</span>
+    <div class="pageSection">
+      <div id="orphansSection" style="display:none">
+        <div id="orphansHeader" class="banner">
+          <div class="l">
+            <span class="tag">Unmatched</span>
+            <span class="txt" id="orphansCount"></span>
+          </div>
+          <span class="caret" id="orphansToggle">▾</span>
+        </div>
+        <div id="orphansList" class="bannerBody" style="display:none"></div>
       </div>
-      <div id="orphansList" style="font-size: 11px; margin-top: 8px;"></div>
     </div>
 
-    <h2>All players</h2>
-    <div id="filters">
-      <button class="pf active" data-pos="ALL">ALL</button>
-      <button class="pf" data-pos="QB">QB</button>
-      <button class="pf" data-pos="RB">RB</button>
-      <button class="pf" data-pos="WR">WR</button>
-      <button class="pf" data-pos="TE">TE</button>
-      <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ SHOW TAKEN</button>
-      <input type="text" id="playerSearch" placeholder="Search name or team…" />
-    </div>
-    <div class="tableWrap" style="margin-top:10px">
-      <table id="tbl"></table>
+    <div class="pageSection">
+      <div class="sectionHead"><h2>All players</h2></div>
+      <div id="filters">
+        <div class="segmented">
+          <button class="pf active" data-pos="ALL">ALL</button>
+          <button class="pf" data-pos="QB">QB</button>
+          <button class="pf" data-pos="RB">RB</button>
+          <button class="pf" data-pos="WR">WR</button>
+          <button class="pf" data-pos="TE">TE</button>
+        </div>
+        <button class="pf" id="takenToggle" title="Also show drafted players, crossed out, at the current position filter">✕ Show taken</button>
+        <input type="text" id="playerSearch" placeholder="Search name or team…" />
+      </div>
+      <div class="tableWrap">
+        <table id="tbl"></table>
+      </div>
     </div>
   </div>
+
+  <div id="creatorTab" style="display:none">
+    <div class="pageSection">
+      <div class="sectionHead"><h2>Custom board</h2></div>
+      <div class="crToolbar">
+        <div class="toolGroup">
+          <div><span class="crFieldLabel">Board</span><select id="crBoardSelect" style="width:230px"></select></div>
+          <div><span class="crFieldLabel">Name</span><input type="text" id="crBoardName" class="crName" placeholder="Board name" style="width:200px" /></div>
+          <button class="crBtn" id="crNewBoardBtn">+ New</button>
+          <button class="crBtn" id="crDuplicateBoardBtn">Duplicate</button>
+          <button class="crBtn danger" id="crDeleteBoardBtn">Delete</button>
+        </div>
+        <div class="toolGroup">
+          <div><span class="crFieldLabel">Base</span><select id="crBaseSelect" style="width:200px" title="Which source (or plain Sleeper ADP order) to reset this board's starting order from"></select></div>
+          <button class="crBtn" id="crResetBaseBtn">Reset from base</button>
+        </div>
+        <div class="toolGroup">
+          <div class="crMetaStat"><span class="k">Placed</span><span class="v" id="crBaseMeta">0</span></div>
+        </div>
+        <div class="toolGroup grow" style="justify-content:flex-end;">
+          <button class="crBtn primary" id="crSaveBtn">Save to draft board</button>
+        </div>
+      </div>
+      <div id="crUndoBar" class="crUndoBar" style="display:none">
+        <span id="crUndoText"></span>
+        <button class="crBtn sm" id="crUndoBtn">Undo</button>
+      </div>
+    </div>
+    <div id="crEmptyState" class="crNote" style="display:none">No custom board yet — click "+ New" to start one.</div>
+    <div id="crMain" style="display:none">
+      <div class="pageSection">
+      <div class="sectionHead">
+        <h2>Ranked players</h2>
+        <span class="hint">Filtering ranks within a position — it's the same combined list, so both stay in sync.</span>
+      </div>
+      <div class="filterRow">
+        <div class="segmented crPosTabs" id="crPosTabs">
+          <button class="crPosTab active" data-pos="ALL">All · Combined</button>
+          <button class="crPosTab" data-pos="QB">QB</button>
+          <button class="crPosTab" data-pos="RB">RB</button>
+          <button class="crPosTab" data-pos="WR">WR</button>
+          <button class="crPosTab" data-pos="TE">TE</button>
+        </div>
+        <input type="text" id="crSearch" class="searchBox" placeholder="Search all players…" />
+      </div>
+      <div class="crGrid">
+        <div class="creatorBody">
+          <div class="crRail">
+            <div class="crRailLabel">Unplaced (<span id="crPoolCount">0</span>)</div>
+            <div id="crPool"></div>
+          </div>
+          <div style="min-width:0">
+            <div class="crTableScroll">
+              <div class="crStatHeadRow">
+                <span class="crRank"></span><span class="crMoveBtns"></span><span class="crGrip"></span>
+                <span class="crRowMain"><span style="font:600 10px/1 var(--font-body);letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)">Player</span></span>
+                <span class="crStatBlock" id="crStatHead"></span>
+                <span class="crRowRemove">✕</span>
+              </div>
+              <div class="crListWrap" id="crListWrap">
+                <div id="crList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="crNote">Drag a player from the left rail to place them, drag within the list to reorder/re-tier. Hover the gap between two players and click the dashed pill to add a tier break; click a tier pill's ✕ to merge it into the tier above. Switch ALL/QB/RB/WR/TE above to rank within one position — it's the same combined list, just filtered, so your positional and overall rankings always stay in sync. "Save to draft board" writes this as a normal ranking source — it'll show up in the board window immediately, same as any imported CSV.</div>
+      </div>
+    </div>
+  </div>
+  </main>
 
   <div id="modal">
     <div class="sheet">

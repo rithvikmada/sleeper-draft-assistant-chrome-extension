@@ -62,6 +62,90 @@ const K_SLEEPER_IDS = "sleeperPlayerIds"; // { updatedAt, ids: { playerKey: slee
                                      // fetchSleeperPlayerIdMap below. Needed to queue/draft a player through
                                      // Sleeper's write API, which addresses players by Sleeper's own numeric
                                      // player_id, not this project's playerKey.
+const K_CUSTOM_BOARDS = "customRankingBoards"; // array of Rankings Creator board objects — see rankings-manager.js's
+                                     // creator section. A board is NOT a ranking source itself; "Save to draft
+                                     // board" converts one into a normal source (via makeSource) on demand, so
+                                     // saving can't silently drift from every other source's shape.
+
+// ---------- position/avatar helpers shared by the board window and the
+// Rankings Creator (Rankings Manager) ----------
+// Distinct object from POS_COLORS above (which the manager's older-style
+// chips/table still use) — this is the 2026-08-24 redesign's token names.
+const POS_V2 = {
+  QB: { fg: "var(--pos-qb)", bg: "var(--pos-qb-tint)" },
+  RB: { fg: "var(--pos-rb)", bg: "var(--pos-rb-tint)" },
+  WR: { fg: "var(--pos-wr)", bg: "var(--pos-wr-tint)" },
+  TE: { fg: "var(--pos-te)", bg: "var(--pos-te-tint)" },
+};
+function posTint(pos) { return POS_V2[pos] || { fg: "var(--pos-flex)", bg: "var(--chalk-a12)" }; }
+
+function initials(name) {
+  const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+}
+
+// Headshot: Sleeper's own numeric player_id (idsMap, loaded from
+// K_SLEEPER_IDS) against Sleeper's public thumb CDN. Team logo: same CDN,
+// keyed off team abbreviation, lowercased (Sleeper's logo files use
+// lowercase 3-letter codes). Both are plain background-images on a <span>,
+// which MV3's default CSP doesn't restrict (script-src/object-src only) —
+// no manifest.json change needed. Falls back to initials / plain team text
+// when either is missing (unmatched player, or no team on file). `idsMap`
+// is passed explicitly (not read off a module-level global) since the board
+// window and the Rankings Manager each keep their own copy in memory.
+function avatarHtml(key, name, pos, team, size = "", idsMap = {}) {
+  const t = posTint(pos);
+  const sleeperId = idsMap[key];
+  const style = sleeperId
+    ? `border-color:${t.fg};background-image:url('https://sleepercdn.com/content/nfl/players/thumb/${sleeperId}.jpg')`
+    : `border-color:${t.fg}`;
+  const inner = sleeperId ? "" : esc(initials(name));
+  const badge = team
+    ? `<span class="avatarBadge" style="background-image:url('https://sleepercdn.com/images/team_logos/nfl/${team.toLowerCase()}.png')">${sleeperId ? "" : esc(team)}</span>`
+    : "";
+  return `<span class="avatarCircle${size ? ` ${size}` : ""}" style="${style}">${inner}${badge}</span>`;
+}
+
+// ---------- Rankings Creator boards ----------
+// A board is: { id, name, updatedAt, baseId ("adp" or a ranking source id),
+// players: { key: {name,team,pos} } (the full universe snapshot the board
+// was built from), order: [key,...] (placed/ranked players, in order),
+// breaks: [key,...] (identity-keyed tier boundaries — a key in this list
+// means "a new tier starts right before this player in `order`"; anchoring
+// to identity rather than an index means a boundary survives a drag-reorder
+// of the players around it, where an index would silently point at the
+// wrong gap after any reorder). Unplaced players are simply every key in
+// `players` not present in `order`.
+async function loadCustomBoards() {
+  const v = await chrome.storage.local.get([K_CUSTOM_BOARDS]);
+  return Array.isArray(v[K_CUSTOM_BOARDS]) ? v[K_CUSTOM_BOARDS] : [];
+}
+async function saveCustomBoards(boards) {
+  await chrome.storage.local.set({ [K_CUSTOM_BOARDS]: boards });
+}
+// Tier number (1-based) for the player at `idx` in board.order — every key
+// in `breaks` seen at or before idx starts a new tier.
+function boardTierAtIndex(board, idx) {
+  const breakSet = new Set(board.breaks || []);
+  let tier = 1;
+  for (let i = 1; i <= idx; i++) if (breakSet.has(board.order[i])) tier++;
+  return tier;
+}
+// Converts a board into the {name,team,pos,rank,tier} shape every ranking
+// source's `players` array already uses — this is the ONLY thing "Save to
+// draft board" does. No new storage schema, no new consensus-blending path:
+// a saved custom board is indistinguishable from any other imported source
+// once it lands in K_SOURCES.
+function boardToSourcePlayers(board) {
+  const breakSet = new Set(board.breaks || []);
+  let tier = 1;
+  return board.order.map((key, i) => {
+    if (i > 0 && breakSet.has(key)) tier++;
+    const p = board.players[key] || {};
+    return { name: p.name, team: p.team, pos: p.pos, rank: i + 1, tier: String(tier) };
+  });
+}
 
 // ---------- DOM helpers shared by both surfaces ----------
 // Identical in panel.js and rankings-manager.js before this — both are
