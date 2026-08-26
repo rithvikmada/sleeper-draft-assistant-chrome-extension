@@ -146,7 +146,7 @@ h1.headline .accent{
 .priceNote{ font-size:13.5px; color:var(--text-dim); }
 .priceNote b{ color:var(--text-hi); font-family:var(--font-mono); font-weight:700; }
 
-.heroStage{ position:relative; max-width:920px; margin:64px auto 0; padding-bottom:100px; }
+.heroStage{ position:relative; max-width:1120px; margin:64px auto 0; padding-bottom:100px; }
 .heroGlow{
   position:absolute; left:50%; top:-8%; transform:translateX(-50%); width:130%; height:420px; z-index:0;
   background:radial-gradient(ellipse 60% 60% at 50% 0%, rgba(255,216,77,.16), transparent 65%),
@@ -181,15 +181,18 @@ h1.headline .accent{
    visual seam between cards that still use one. */
 .featShot{ width:100%; max-width:360px; border-radius:10px; border:1px solid var(--line-strong); box-shadow:var(--shadow-card); }
 
-/* Rankings Creator showcase — same two-column copy+visual pattern as the
-   rest of the page's sections, not a third layout language. */
-.creatorShowcase{ display:grid; grid-template-columns: 0.85fr 1.15fr; gap:48px; align-items:center; }
-@media (max-width:860px){ .creatorShowcase{ grid-template-columns:1fr; } }
+/* Rankings Creator showcase — stacked, full-width, same "big screenshot
+   as the centerpiece" treatment the hero uses, not a cramped side-by-side
+   where the actual screenshot ends up small. Copy is centered above,
+   capped to a readable line length; the screenshot below gets the full
+   section width so the tool is actually legible, not a thumbnail. */
+.creatorShowcase{ display:flex; flex-direction:column; align-items:center; text-align:center; }
+.creatorCopy{ max-width:640px; }
 .creatorCopy .sectionTitle{ margin-top:14px; }
 .creatorCopy .sectionSub{ margin-top:14px; }
 .creatorShotWrap{
-  border-radius:var(--radius-lg); overflow:hidden; border:1px solid var(--line-strong);
-  box-shadow:var(--shadow-card); background:var(--ink-800);
+  margin-top:40px; width:100%; border-radius:var(--radius-lg); overflow:hidden;
+  border:1px solid var(--line-strong); box-shadow:var(--shadow-card); background:var(--ink-800);
 }
 .creatorShot{ display:block; width:100%; height:auto; }
 
@@ -377,7 +380,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
       off the moment it happens — no refreshing, no manual tracking.
     </p>
     <div class="heroActions">
-      <a class="btnPrimary" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Win Your Draft →</a>
+      <a class="btnPrimary" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
       <span class="priceNote">One purchase. <b>No subscription.</b> Yours for every draft after.</span>
     </div>
   </div>
@@ -414,21 +417,12 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
     <div class="featGrid">
       <div class="featCard wide">
         <div class="featMock">
-          <div class="mockPanel">
-            <div class="mockTop"><i></i><i></i><i></i></div>
-            <div class="mockBody">
-              <div class="mockRow"><span class="hi">sync --draft 998271...</span><span class="mockOk">[OK]</span></div>
-              <div class="mockRow"><span>polling Sleeper picks endpoint...</span><span>2.9s</span></div>
-              <div class="mockRow"><span>match: CeeDee Lamb → WR4</span><span>crossed off</span></div>
-              <div class="mockRule"></div>
-              <div class="mockRow hi"><span>● live — 34 picks synced</span><span>age 0s</span></div>
-            </div>
-          </div>
+          <img class="featShot" src="assets/screenshot-beer.png" alt="BEER value grid showing the best available player by position">
         </div>
         <div class="featBody">
-          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
-          <h3>Every pick, crossed off the second it lands</h3>
-          <p>Auto-detects your open Sleeper draft tab and polls live — no refresh button, no manual crossouts, no losing track mid-run.</p>
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
+          <h3>Value that updates as the board thins out</h3>
+          <p>Every player scored against the best replacement still on the clock — recalculated live, not a static preseason number.</p>
         </div>
       </div>
 
@@ -454,12 +448,21 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 
       <div class="featCard">
         <div class="featMock">
-          <img class="featShot" src="assets/screenshot-beer.png" alt="BEER value grid showing the best available player by position">
+          <div class="mockPanel">
+            <div class="mockTop"><i></i><i></i><i></i></div>
+            <div class="mockBody">
+              <div class="mockRow"><span class="hi">sync --draft 998271...</span><span class="mockOk">[OK]</span></div>
+              <div class="mockRow"><span>polling Sleeper picks endpoint...</span><span>2.9s</span></div>
+              <div class="mockRow"><span>match: CeeDee Lamb → WR4</span><span>crossed off</span></div>
+              <div class="mockRule"></div>
+              <div class="mockRow hi"><span>● live — 34 picks synced</span><span>age 0s</span></div>
+            </div>
+          </div>
         </div>
         <div class="featBody">
-          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
-          <h3>Value that updates as the board thins out</h3>
-          <p>Every player scored against the best replacement still on the clock — recalculated live, not a static preseason number.</p>
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+          <h3>Every pick, crossed off the second it lands</h3>
+          <p>Auto-detects your open Sleeper draft tab and polls live — no refresh button, no manual crossouts, no losing track mid-run.</p>
         </div>
       </div>
 
@@ -486,7 +489,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
         <p class="sectionSub">Drag and drop players into your own ranked list, break it into tiers by hand, and start from a blank Sleeper-ADP board or any source you've already imported — headshots, stat columns, and all, right alongside the same live data the tier board uses.</p>
       </div>
       <div class="creatorShotWrap">
-        <img class="creatorShot" src="assets/screenshot-creator.png" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns">
+        <img class="creatorShot" src="assets/screenshot-creator.png" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns" loading="eager">
       </div>
     </div>
   </div>
@@ -502,7 +505,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
       <div style="text-align:right">
         <div class="priceTag"><sup>$</sup>10</div>
         <div class="priceSub">one-time</div>
-        <a class="btnPrimary" style="margin-top:14px" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Win Your Draft →</a>
+        <a class="btnPrimary" style="margin-top:14px" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
       </div>
     </div>
   </div>
@@ -550,7 +553,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
             <li><span class="faqSideDot"></span> Works fully offline mid-draft, once activated</li>
             <li><span class="faqSideDot"></span> One purchase, every draft after — no renewal</li>
           </ul>
-          <a class="btnPrimary faqSideCta" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Win Your Draft →</a>
+          <a class="btnPrimary faqSideCta" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
         </div>
       </aside>
     </div>
