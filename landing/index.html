@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>4th&Go</title>
 <style>
 /* ---------- Design plan ----------
@@ -167,47 +172,26 @@ h1.headline .accent{
 }
 .boardTop .liveTag .pulse{ width:6px; height:6px; border-radius:50%; background:var(--rb); animation:pulse 1.8s ease-in-out infinite; }
 @keyframes pulse{ 0%,100%{ opacity:1; transform:scale(1);} 50%{ opacity:.4; transform:scale(.7);} }
-.boardHead{
-  display:grid; grid-template-columns: 28px 1fr 64px 74px; gap:10px; padding:9px 16px;
-  font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim);
-  border-bottom:1px solid var(--line);
+.boardShot{ display:block; width:100%; height:auto; }
+@media (prefers-reduced-motion: reduce){ .pulse{ animation:none !important; } }
+
+/* Real product screenshots inside a feature card's mock slot — same frame
+   treatment (radial glow backdrop) the illustrative mono-mocks used, so
+   swapping a card from illustration to a real screenshot doesn't create a
+   visual seam between cards that still use one. */
+.featShot{ width:100%; max-width:360px; border-radius:10px; border:1px solid var(--line-strong); box-shadow:var(--shadow-card); }
+
+/* Rankings Creator showcase — same two-column copy+visual pattern as the
+   rest of the page's sections, not a third layout language. */
+.creatorShowcase{ display:grid; grid-template-columns: 0.85fr 1.15fr; gap:48px; align-items:center; }
+@media (max-width:860px){ .creatorShowcase{ grid-template-columns:1fr; } }
+.creatorCopy .sectionTitle{ margin-top:14px; }
+.creatorCopy .sectionSub{ margin-top:14px; }
+.creatorShotWrap{
+  border-radius:var(--radius-lg); overflow:hidden; border:1px solid var(--line-strong);
+  box-shadow:var(--shadow-card); background:var(--ink-800);
 }
-.boardBody{ padding:6px 0; }
-.tierLabel{
-  display:flex; align-items:center; gap:8px; padding:10px 16px 4px; font-family:var(--font-mono);
-  font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-dim);
-}
-.tierLabel .tdot{ width:6px; height:6px; border-radius:50%; }
-.row{
-  display:grid; grid-template-columns: 28px 1fr 64px 74px; gap:10px; align-items:center;
-  padding:8px 16px; border-left:3px solid transparent; transition:opacity 420ms ease, filter 420ms ease;
-}
-.row[data-pos="QB"]{ border-left-color:var(--qb); }
-.row[data-pos="RB"]{ border-left-color:var(--rb); }
-.row[data-pos="WR"]{ border-left-color:var(--wr); }
-.row[data-pos="TE"]{ border-left-color:var(--te); }
-.row .rk{ font-family:var(--font-mono); font-size:12px; color:var(--text-dim); }
-.row .nm{ font-size:13.5px; font-weight:500; }
-.row .nm small{ display:block; font-family:var(--font-mono); font-size:10.5px; color:var(--text-dim); font-weight:400; margin-top:1px; }
-.row .adp{ font-family:var(--font-mono); font-size:11.5px; color:var(--text-mid); text-align:right; }
-.valBar{ height:5px; border-radius:3px; background:var(--ink-500); overflow:hidden; }
-.valBar i{ display:block; height:100%; border-radius:3px; }
-.row.taken{ opacity:.34; filter:grayscale(.5); }
-.row.taken .nm{ text-decoration:line-through; text-decoration-color:var(--text-dim); }
-.pickFlash{
-  position:absolute; inset:0; pointer-events:none; opacity:0;
-}
-.toastPick{
-  position:absolute; left:50%; bottom:14px; transform:translate(-50%,10px); opacity:0;
-  background:var(--ink-700); border:1px solid var(--line-strong); border-radius:10px; padding:9px 14px;
-  font-size:12.5px; font-weight:600; box-shadow:var(--shadow-card); white-space:nowrap;
-  transition:opacity 260ms var(--ease-out), transform 260ms var(--ease-out);
-}
-.toastPick.show{ opacity:1; transform:translate(-50%,0); }
-.toastPick b{ color:var(--chalk); }
-@media (prefers-reduced-motion: reduce){
-  .row, .toastPick, .pulse{ transition:none !important; animation:none !important; }
-}
+.creatorShot{ display:block; width:100%; height:auto; }
 
 /* ---------- sleeper strip ---------- */
 .sleeperStrip{
@@ -348,6 +332,8 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 .footLinks{ display:flex; gap:22px; flex-wrap:wrap; }
 .footRowSub{ border-top:1px solid var(--line); padding:18px 0 24px; font-size:12px; }
 </style>
+</head>
+<body>
 
 <div class="nav">
   <div class="wrap navRow">
@@ -399,24 +385,12 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
   <div class="wrap">
     <div class="heroStage">
       <div class="heroGlow" aria-hidden="true"></div>
-      <div class="boardShell" id="boardDemo">
+      <div class="boardShell">
         <div class="boardTop">
           <span class="trafficDot"></span><span class="trafficDot"></span><span class="trafficDot"></span>
           <span class="liveTag"><span class="pulse"></span> LIVE — SYNCED</span>
         </div>
-        <div class="boardHead"><span></span><span>PLAYER</span><span>ADP</span><span>VALUE</span></div>
-        <div class="boardBody" id="rows">
-          <div class="tierLabel"><span class="tdot" style="background:#F5C242"></span>TIER 1</div>
-          <div class="row" data-pos="RB"><span class="rk">1</span><span class="nm">Bijan Robinson<small>RB · ATL</small></span><span class="adp">2.4</span><div class="valBar"><i style="width:70%;background:var(--rb)"></i></div></div>
-          <div class="row" data-pos="WR"><span class="rk">2</span><span class="nm">Ja'Marr Chase<small>WR · CIN</small></span><span class="adp">1.8</span><div class="valBar"><i style="width:40%;background:var(--wr)"></i></div></div>
-          <div class="row" data-pos="RB"><span class="rk">3</span><span class="nm">Jahmyr Gibbs<small>RB · DET</small></span><span class="adp">3.1</span><div class="valBar"><i style="width:85%;background:var(--rb)"></i></div></div>
-          <div class="tierLabel"><span class="tdot" style="background:#E8853A"></span>TIER 2</div>
-          <div class="row" data-pos="WR"><span class="rk">4</span><span class="nm">CeeDee Lamb<small>WR · DAL</small></span><span class="adp">4.6</span><div class="valBar"><i style="width:55%;background:var(--wr)"></i></div></div>
-          <div class="row" data-pos="QB"><span class="rk">5</span><span class="nm">Josh Allen<small>QB · BUF</small></span><span class="adp">12.2</span><div class="valBar"><i style="width:30%;background:var(--qb)"></i></div></div>
-          <div class="row" data-pos="TE"><span class="rk">6</span><span class="nm">Brock Bowers<small>TE · LV</small></span><span class="adp">8.7</span><div class="valBar"><i style="width:60%;background:var(--te)"></i></div></div>
-          <div class="row" data-pos="WR"><span class="rk">7</span><span class="nm">Amon-Ra St. Brown<small>WR · DET</small></span><span class="adp">6.3</span><div class="valBar"><i style="width:45%;background:var(--wr)"></i></div></div>
-        </div>
-        <div class="toastPick" id="pickToast">Pick 4: <b>CeeDee Lamb</b></div>
+        <img class="boardShot" src="assets/screenshot-board.png" alt="4th&amp;Go board mid-draft, showing tiered rankings, Best Picks, and BEER value" loading="eager">
       </div>
     </div>
   </div>
@@ -480,15 +454,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 
       <div class="featCard">
         <div class="featMock">
-          <div class="mockPanel" style="max-width:220px">
-            <div class="mockTop"><i></i><i></i><i></i></div>
-            <div class="mockBody">
-              <div class="mockRow"><span>replacement (RB43)</span><span>9.2 pts</span></div>
-              <div class="mockRow"><span>this player</span><span>18.6 pts</span></div>
-              <div class="mockRule"></div>
-              <div class="mockRow hi"><span>BEER value</span><span class="mockOk">+9.4</span></div>
-            </div>
-          </div>
+          <img class="featShot" src="assets/screenshot-beer.png" alt="BEER value grid showing the best available player by position">
         </div>
         <div class="featBody">
           <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
@@ -499,20 +465,28 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 
       <div class="featCard wide">
         <div class="featMock">
-          <div style="width:100%;max-width:380px;display:flex;flex-direction:column;gap:8px">
-            <div style="display:flex;align-items:center;gap:10px">
-              <div class="mockPanel" style="flex:1;max-width:none"><div class="mockBody" style="padding:9px 12px">Sleeper ADP <b style="color:var(--text-hi)">4.8</b></div></div>
-              <div class="mockPanel" style="flex:1;max-width:none"><div class="mockBody" style="padding:9px 12px">Baseline ADP <b style="color:var(--text-hi)">7.2</b></div></div>
-            </div>
-            <div class="valBar" style="height:8px"><i style="width:64%;background:var(--rb)"></i></div>
-            <div style="font-family:var(--font-mono);font-size:11px;color:var(--rb)">+2.4 picks — a real discount here</div>
-          </div>
+          <img class="featShot" src="assets/screenshot-adpvalue.png" alt="ADP value delta showing a real discount versus baseline rankings">
         </div>
         <div class="featBody">
           <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div>
           <h3>See the reach before you make it</h3>
           <p>A flat pick-count comparison between Sleeper's live ADP and your baseline — green means a discount, red means you're paying up.</p>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="padding-top:0">
+  <div class="wrap">
+    <div class="creatorShowcase">
+      <div class="creatorCopy">
+        <div class="kicker">Rankings Creator</div>
+        <h2 class="sectionTitle">Don't like anyone's rankings? Build your own.</h2>
+        <p class="sectionSub">Drag and drop players into your own ranked list, break it into tiers by hand, and start from a blank Sleeper-ADP board or any source you've already imported — headshots, stat columns, and all, right alongside the same live data the tier board uses.</p>
+      </div>
+      <div class="creatorShotWrap">
+        <img class="creatorShot" src="assets/screenshot-creator.png" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns">
       </div>
     </div>
   </div>
@@ -647,26 +621,6 @@ document.querySelectorAll('.install-link').forEach(function(a){ a.href = INSTALL
     });
   });
 })();
-(function(){
-  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduced) return;
-  var rows = Array.from(document.querySelectorAll('#rows .row'));
-  var toast = document.getElementById('pickToast');
-  var i = 0;
-  function cycle(){
-    if (i > 0) rows[i-1] && rows[i-1].classList.remove('taken');
-    if (i >= rows.length) { i = 0; rows.forEach(function(r){ r.classList.remove('taken'); }); }
-    var row = rows[i];
-    if (row) {
-      row.classList.add('taken');
-      var name = row.querySelector('.nm').firstChild.textContent.trim();
-      toast.innerHTML = 'Pick ' + (i+1) + ': <b>' + name + '</b>';
-      toast.classList.add('show');
-      setTimeout(function(){ toast.classList.remove('show'); }, 1800);
-    }
-    i++;
-    setTimeout(cycle, 2600);
-  }
-  setTimeout(cycle, 1400);
-})();
 </script>
+</body>
+</html>
