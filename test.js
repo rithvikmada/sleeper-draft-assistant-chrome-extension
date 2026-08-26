@@ -345,6 +345,16 @@ const mk = (id, name, arr) =>
   const merged = { [playerKey("P. Nacua", "WR")]: playerKey("Puka Nacua", "WR") };
   eq(findPossibleDuplicates([srcA, srcC], merged).length, 0,
     "a pair already resolved via K_MERGES doesn't show up as a possible duplicate too");
+
+  // Real bug found live: two DIFFERENT real players who just happen to share
+  // a last name + first initial (both spelled out in full, neither an
+  // abbreviation) must NOT be reported — across a real 350+ player board
+  // this coincidence is common and was producing hundreds of false pairs
+  // before this was fixed to require an actual abbreviation collision.
+  const srcH = mk("h", "H", [{ name: "Diontae Johnson", team: "CAR", pos: "WR", tier: "", rank: 30 }]);
+  const srcI = mk("i", "I", [{ name: "David Johnson", team: "FA", pos: "WR", tier: "", rank: 200 }]);
+  eq(findPossibleDuplicates([srcH, srcI], {}).length, 0,
+    "two different full-named players sharing last name + initial are not flagged as duplicates");
 }
 
 // ============================================================

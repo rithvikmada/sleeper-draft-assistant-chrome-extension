@@ -2529,6 +2529,25 @@ function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {})
 // "Jaylen Gibbs" and "Jahmyr Gibbs" would both separately look like a match
 // for "J. Gibbs", but "J. Gibbs" itself can't tell which) is deliberately
 // left alone rather than guessed.
+//
+// Fixed 2026-08-27, same day this shipped — a real user hit this immediately:
+// "last name + first initial" alone is FAR too loose applied across an entire
+// board's worth of real players (350+), since plenty of genuinely different
+// people legitimately share a last name and first initial (two different
+// "D. Johnson"s, "A. Brown"s, etc. across real rankings) — that produced
+// "hundreds" of false-positive pairs, not the rare true duplicate this was
+// built for. The actual signal that makes this safe (and matches
+// findNearMatchOrphans's own real use, which is always "is THIS ONE
+// specific known orphan name an abbreviation of something else," not a
+// full-board sweep) is an ABBREVIATION collision specifically: one side's
+// first name is a bare single-letter initial ("P.", "K.") and the other
+// side spells the same initial out in full. Two full names that happen to
+// share a last name + initial (neither one abbreviated) are just as likely
+// to be two different real players and are no longer matched at all.
+function isAbbreviatedFirstName(name) {
+  const first = norm(name).split(" ")[0] || "";
+  return first.length === 1;
+}
 function findPossibleDuplicates(sources, merges = {}) {
   const enabled = usableSources(sources).filter((s) => s.enabled);
   const byPos = {}; // pos -> Map<key, {key,name,pos}>, one entry per distinct post-merge identity
@@ -2551,9 +2570,14 @@ function findPossibleDuplicates(sources, merges = {}) {
       const normA = norm(a.name);
       const lastA = normA.split(" ").slice(-1)[0];
       const firstA = normA.charAt(0);
-      const matches = entries.filter(
-        (b) => b.key !== a.key && norm(b.name).endsWith(" " + lastA) && norm(b.name).charAt(0) === firstA
-      );
+      const aAbbrev = isAbbreviatedFirstName(a.name);
+      const matches = entries.filter((b) => {
+        if (b.key === a.key) return false;
+        if (norm(b.name).charAt(0) !== firstA || !norm(b.name).endsWith(" " + lastA)) return false;
+        // Require exactly one side to be a bare initial — two full names
+        // sharing a last name + initial are a coincidence, not a duplicate.
+        return aAbbrev !== isAbbreviatedFirstName(b.name);
+      });
       if (matches.length === 1) candidateOf.set(a.key, matches[0].key);
     });
     const seen = new Set();
