@@ -200,6 +200,16 @@ let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
 
+// ---------- K/DST support (added 2026-08-26) ----------
+// includeKdst is the master on/off (default true — see K_INCLUDE_KDST in
+// shared.js); includeKdstInBestPicks is the narrower opt-in for letting them
+// into the Best Picks Right Now widget specifically (default false — never
+// reach for a kicker/defense, per claude.md). Both loaded at init() and kept
+// in sync via the storage listener below, same pattern as every other
+// board-window setting.
+let includeKdst = true;
+let includeKdstInBestPicks = false;
+
 // ---------- Queue/Roster pop-out windows (added 2026-08-25) ----------
 // "Pop out" on the Roster/Queue dropdown opens that SAME popover in its own
 // small chrome.windows.create popup — deliberately just this page again
@@ -222,25 +232,48 @@ let injuriesUpdatedAt = null; // when K_INJURIES was last written — surfaced i
 
 // This draft's own roster shape, straight from Sleeper — GET /v1/draft/{id}
 // returns a `settings` object with real per-position slot counts (slots_qb,
-// slots_rb, slots_wr, slots_te, slots_flex, slots_bn, ...), the exact
-// template Sleeper itself pre-builds your roster board from once a draft
-// starts. Used ONLY to size the Team/Roster dropdown's slot list (see
-// buildMyRosterSlots) — a real league's bench depth varies (this session's
-// own league needed 15 total roster spots, not the previous flat 6-bench
-// guess), so pulling it from the actual draft beats a hardcoded constant.
-// Does not touch LEAGUE_SETTINGS/BEER's math at all — that's a separate,
-// deliberately-fixed representation of this league's shape for replacement-
-// level math, out of scope here. K/DST slot counts are ignored even if
-// present, matching this app's blanket "no K/DST" handling everywhere else
-// (poll() drops every K/DST pick) — showing perpetually-open K/DST slots
-// with no way to ever fill them would just be clutter.
+// slots_rb, slots_wr, slots_te, slots_k, slots_def, slots_flex, slots_bn,
+// teams, ...), the exact template Sleeper itself pre-builds your roster
+// board from once a draft starts. Sizes the Team/Roster dropdown's slot list
+// (see buildMyRosterSlots) — a real league's bench depth/flex count varies
+// (this session's own league needed 15 total roster spots, not the previous
+// flat 6-bench guess), so pulling it from the actual draft beats a
+// hardcoded constant. Also feeds LEAGUE_SETTINGS/BEER's replacement-level
+// math now (K/DST support, 2026-08-26 — see applySyncedLeagueSettings in
+// shared.js and claude.md's "League shape sync" section); that used to be a
+// deliberately-fixed representation of just this one league's shape, kept
+// separate from this — no longer true.
+//
+// Persisted to K_DRAFT_SETTINGS (chrome.storage), not just held in memory —
+// a real bug, found live-testing a 12-team/3-flex mock draft: a popped-out
+// Roster window runs its own separate copy of this whole script (see
+// "Queue/Roster pop-out windows" above) and NEVER calls poll()/
+// fetchDraftSettings itself (only the main window polls, by design), so its
+// own draftSettings/LEAGUE_SETTINGS stayed at the hardcoded 10-team/2-flex
+// default forever — a real league's extra FLEX slot (and whoever was
+// drafted into it) simply never had a slot to appear in over there, even
+// though the main window had already synced correctly. Same fix pattern as
+// K_DRAFT/K_SLEEPER_QUEUE above: the main window writes it once fetched,
+// every window (including itself) picks it up via the storage.onChanged
+// listener below, and init() loads whatever was last persisted for THIS
+// draftId before the first fetch ever resolves. K_DRAFT_SETTINGS itself
+// lives in shared.js (not here) — rankings-manager.js reads it too, to keep
+// its own scoring-format sync consistent with whatever the board synced.
 let draftSettings = null;
 let draftSettingsForId = null; // which draftId draftSettings was fetched for — refetch only on change, not every ~3s poll tick
+// Also reads `data.metadata.scoring_type` off the same response — Sleeper's
+// own record of whether this draft is PPR/Half-PPR/Standard (confirmed live:
+// `"std"` on a real Standard-scoring test draft) — the other half of
+// "scoring format" sync (see shared.js), fed from the exact same call
+// already used for league-shape sync, no second fetch.
 async function fetchDraftSettings(draftId) {
   const res = await fetch(`https://api.sleeper.app/v1/draft/${draftId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-  return (data && data.settings) || null;
+  return {
+    settings: (data && data.settings) || null,
+    scoringType: (data && data.metadata && data.metadata.scoring_type) || null,
+  };
 }
 const K_SLEEPER_QUEUE = "sleeperQueueKeys"; // this extension's own local mirror of "what should be queued" — playerKey[]
 let sleeperQueueKeys = []; // loaded from storage on init, kept in sync with the button state
@@ -406,13 +439,28 @@ function renderStatusPanel() {
   // is the exact same question a mid-draft glance needs answered here too.
   const injStale = injuriesUpdatedAt && (Date.now() - injuriesUpdatedAt) > SOURCE_STALE_MS;
   const injRow = `<div class="statusSrcRow"><span class="nm">Sleeper injury data</span><span class="age${injStale ? " stale" : ""}">${esc(timeAgoLabel(injuriesUpdatedAt))}</span></div>`;
+  // Scoring format — every BEER value/projection/ADP number in this app
+  // depends on this being right, so it's worth its own glance-able line
+  // rather than being buried in Settings. Labels the SOURCE (synced vs.
+  // manually forced) so a stale/wrong sync is obvious, not silent.
+  const SCORING_FORMAT_LABELS = { ppr: "PPR", half_ppr: "Half-PPR", std: "Standard" };
+  const scoringLabel = SCORING_FORMAT_LABELS[SCORING_FORMAT] || SCORING_FORMAT;
+  // Three real states, not two — "synced from draft" is a claim that should
+  // only be made once a real sync (or a restore of one) has actually
+  // happened; before that, SCORING_FORMAT is just the untouched default.
+  const scoringSource = SCORING_FORMAT_OVERRIDE
+    ? "manually forced"
+    : SCORING_FORMAT_EVER_SYNCED ? "synced from draft" : "default, not yet synced";
+  const scoringRow = `<div class="statusSrcRow"><span class="nm">Scoring format</span><span class="age">${esc(scoringLabel)} (${esc(scoringSource)})</span></div>`;
   $("statusPanel").innerHTML = `
     <div class="statusSectionLabel">Sleeper sync</div>
     ${syncLine}
     <div class="statusSectionLabel">Source freshness</div>
     ${rows}
     <div class="statusSectionLabel">Injury status</div>
-    ${injRow}`;
+    ${injRow}
+    <div class="statusSectionLabel">Scoring</div>
+    ${scoringRow}`;
 }
 function openStatusPanel() {
   closeSettingsPanel();
@@ -508,10 +556,14 @@ function renderBest() {
   const roundsCompleted = Math.floor(lastSharedPicks.length / LEAGUE_SETTINGS.teams);
   const highlightsEnabled = roundsCompleted >= HIGHLIGHT_AFTER_ROUND;
   const myCounts = {};
-  POSITIONS.forEach((pos) => { myCounts[pos] = 0; });
+  // CORE_POSITIONS, not POSITIONS — this grid stays QB/RB/WR/TE only, by
+  // explicit decision (see claude.md's K/DST section): K/DEF never get a
+  // "best pick" crown here, since real draft strategy says never reach for
+  // one early and this grid's whole job is spotlighting the best value pick.
+  CORE_POSITIONS.forEach((pos) => { myCounts[pos] = 0; });
   lastSharedPicks.forEach((p) => { if (p.byMe && myCounts[p.pos] !== undefined) myCounts[p.pos]++; });
   const best = {};
-  POSITIONS.forEach((pos) => {
+  CORE_POSITIONS.forEach((pos) => {
     const candidates = rows.filter((r) => r.pos === pos && !isGone(r) && beerValues.has(r.key));
     if (candidates.length) {
       // The card itself still shows the position's TRUE best-by-value
@@ -528,7 +580,7 @@ function renderBest() {
   });
   let objectiveBestPos = null, objectiveBestScore = -Infinity;
   if (highlightsEnabled) {
-    POSITIONS.forEach((pos) => {
+    CORE_POSITIONS.forEach((pos) => {
       const p = best[pos];
       if (!p) return;
       const v = beerValues.get(p.key);
@@ -548,7 +600,7 @@ function renderBest() {
     toast(`🍺 Rare pour — this pick's BEER value (${crownedVal.toFixed(1)}) cleared the rare threshold. Worth a serious look.`);
   }
   rareAlerted = nowRare;
-  $("best").innerHTML = POSITIONS.map((pos) => {
+  $("best").innerHTML = CORE_POSITIONS.map((pos) => {
     const t = posTint(pos);
     const p = best[pos];
     const val = p ? beerValues.get(p.key) : undefined;
@@ -560,6 +612,7 @@ function renderBest() {
         ${isObjectiveBest ? `<span class="topPickTag${isRare ? " topPickTagRare" : ""}" title="${isRare ? `Crossed the rare BEER threshold (${RARE_BEER_VALUE}+)` : "Weighted for what you already have, not just raw BEER value"}">${isRare ? "🍺 Last call" : "On tap"}</span>` : ""}
       </div>
       <div class="nm2">
+        ${p ? avatarHtml(p.key, p.name, p.pos, p.team, "sm", sleeperIds) : ""}
         <strong>${p ? esc(p.name) : "—"}</strong>
         ${p ? injuryBadge(injuries[p.key]) : ""}
         ${p && p.tier ? `<span>T-${esc(p.tier)}</span>` : ""}
@@ -628,8 +681,17 @@ let selectedStatPos = null;
 // the whole board"), and selecting the SAME position the filter already
 // implies is a harmless no-op via statGroupOrder's own dedupe.
 function effectiveStatPos() {
-  if (selectedStatPos) return selectedStatPos;
-  return POSITIONS.includes(posFilter) ? posFilter : null;
+  if (selectedStatPos && CORE_POSITIONS.includes(selectedStatPos)) return selectedStatPos;
+  return CORE_POSITIONS.includes(posFilter) ? posFilter : null;
+}
+
+// The definitive gate for "is K/DST actually showing right now" — applied to
+// consensus rows before they reach the board, Best Picks, or team counts, so
+// turning the master toggle off hides K/DEF everywhere those come from
+// regardless of whether a K/DEF ranking source happens to still be enabled
+// in storage.
+function filterActivePositions(rows) {
+  return includeKdst ? rows : rows.filter((r) => CORE_POSITIONS.includes(r.pos));
 }
 
 function renderBoard() {
@@ -650,7 +712,7 @@ function renderBoard() {
   // single QB/RB/WR/TE position — not ALL, not any multi-position filter —
   // since a stat sort only makes sense when every visible row actually has
   // that stat (see renderStatHeaderGroups in shared.js for the full reasoning).
-  const sortablePos = POSITIONS.includes(posFilter) ? posFilter : null;
+  const sortablePos = CORE_POSITIONS.includes(posFilter) ? posFilter : null;
   $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats, { sortablePos, sortColumn, sortDir });
   $("statHead").style.width = `${statBlockWidth}px`;
   document.querySelectorAll("#colHead .sortCol").forEach((el) => {
@@ -658,7 +720,11 @@ function renderBoard() {
     el.classList.toggle("active", active);
     el.querySelector(".sortArrow").textContent = active ? (sortDir === 1 ? "▲" : "▼") : "";
   });
-  const allRows = buildConsensus(activeSources(sources, soloSource), merges);
+  // includeKdst off means K/DEF are gone from the available-player board
+  // entirely, even if a K/DEF ranking source happens to still be enabled in
+  // storage (e.g. the auto-generated one, turned off but never deleted) —
+  // the toggle is the definitive gate, not just "does a source exist."
+  const allRows = filterActivePositions(buildConsensus(activeSources(sources, soloSource), merges));
   const isGone = (r) => !!(taken[r.key] || manualTaken[r.key]);
   const list = applyFilters(allRows, { posFilter, showTaken, playerSearch, isGone });
   const posRanks = computePosRanks(allRows);
@@ -819,17 +885,24 @@ function renderSoloBar() {
 // populates them differently across real vs. mock drafts), while rosterId
 // itself always prefers roster_id — the two could disagree in an edge case,
 // so this sidesteps that instead of assuming they always match.
-function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = new Map() } = {}) {
+function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = new Map(), posRankValues = null } = {}) {
   if (myRosterId == null) {
     el.innerHTML = `<span class="teamHint">Set your draft slot # in settings to track your own roster.</span>`;
     return;
   }
   const mine = picks.filter((p) => p.byMe);
   const myTeamId = mine.find((p) => p.rosterId != null)?.rosterId;
-  const ranks = myTeamId != null ? buildTeamPositionRanks(picks, beerValues) : {};
+  // posRankValues (buildPositionRankValueMap's output — beerValues with DEF's
+  // BEER-less keys substituted by raw projected points) drives the PER-
+  // POSITION rank badges below; the plain beerValues map (DEF simply absent)
+  // still drives the overall "Tot" grade further down, so DEF's raw points
+  // never get mixed into that total-BEER-value sum. Falls back to beerValues
+  // itself if a caller doesn't pass one (keeps this function usable without
+  // DEF-awareness if ever called from somewhere that hasn't computed it).
+  const ranks = myTeamId != null ? buildTeamPositionRanks(picks, posRankValues || beerValues) : {};
   const myRanks = myTeamId != null ? ranks[myTeamId] : null;
-  const tones = { QB: "accent", RB: "positive", WR: "info", TE: "warning" };
-  const counts = POSITIONS.map((pos) => {
+  const tones = { QB: "accent", RB: "positive", WR: "info", TE: "warning", K: "k", DEF: "def" };
+  const counts = activePositions(includeKdst).map((pos) => {
     const n = mine.filter((p) => p.pos === pos).length;
     const r = myRanks && myRanks[pos];
     const tone = tones[pos];
@@ -839,7 +912,12 @@ function renderTeamCountsV2(el, { picks = [], myRosterId = null, beerValues = ne
     // back to a plain badge (no rank strip at all) until then.
     if (!r || n === 0) return badgeHtml(tone, `${pos} ${n}`);
     const { bg, fg } = rankColor(r.rank, r.of);
-    return `<span class="posRankPill t-${tone}" title="${esc(pos)} ranks ${esc(ordinal(r.rank))} of ${r.of} in the league by BEER value">
+    // DEF's rank here comes from summed projected points, not BEER value
+    // (see buildPositionRankValueMap in shared.js) — the tooltip says so
+    // rather than silently reusing the "by BEER value" wording every other
+    // position gets, since it really is a different metric.
+    const metricLabel = pos === "DEF" ? "projected points" : "BEER value";
+    return `<span class="posRankPill t-${tone}" title="${esc(pos)} ranks ${esc(ordinal(r.rank))} of ${r.of} in the league by ${metricLabel}">
       <span class="prpTop t-${tone}">${esc(pos)} ${n}</span>
       <span class="prpRank" style="background:${bg};color:${fg}">${esc(ordinal(r.rank).toUpperCase())}</span>
     </span>`;
@@ -931,6 +1009,12 @@ function buildMyRosterSlots() {
     RB: rosterSlotCount("slots_rb", LEAGUE_SETTINGS.starters.RB),
     WR: rosterSlotCount("slots_wr", LEAGUE_SETTINGS.starters.WR),
     TE: rosterSlotCount("slots_te", LEAGUE_SETTINGS.starters.TE),
+    K: rosterSlotCount("slots_k", LEAGUE_SETTINGS.starters.K),
+    // DEF isn't part of LEAGUE_SETTINGS.starters (BEER's replacement-level
+    // math never uses it — see shared.js), but the roster popover still
+    // needs SOME starter-slot guess before a real draft's settings sync in —
+    // 1 is the standard-league default, same spirit as ROSTER_BENCH_SLOTS.
+    DEF: rosterSlotCount("slots_def", 1),
   };
   const flexSlots = rosterSlotCount("slots_flex", LEAGUE_SETTINGS.flexSlots);
   const benchSlots = rosterSlotCount("slots_bn", ROSTER_BENCH_SLOTS);
@@ -938,7 +1022,11 @@ function buildMyRosterSlots() {
   const mine = lastSharedPicks.filter((p) => p.byMe).slice().sort((a, b) => (a.pickNo || 0) - (b.pickNo || 0));
   const used = new Set();
   const slots = [];
-  POSITIONS.forEach((pos) => {
+  // activePositions, not POSITIONS — with K/DST turned off, the roster
+  // popover should show exactly the starter slots it always has (this is the
+  // one behavior a user turning the master toggle off should get back
+  // byte-for-byte).
+  activePositions(includeKdst).forEach((pos) => {
     const need = starters[pos] || 0;
     const atPos = mine.filter((p) => p.pos === pos && !used.has(p));
     for (let i = 0; i < need; i++) {
@@ -1166,10 +1254,13 @@ function renderRosterPopover() {
   const mine = lastSharedPicks.filter((p) => p.byMe);
   const myTeamId = mine.find((p) => p.rosterId != null)?.rosterId;
   const { values: beerValues } = buildBeerValues(blendRows, projMap, takenKeySet());
-  const ranks = myTeamId != null ? buildTeamPositionRanks(lastSharedPicks, beerValues) : {};
+  // Same DEF-uses-projected-points substitution as renderTeamCountsV2's
+  // per-position badges — see buildPositionRankValueMap (shared.js).
+  const posRankValues = buildPositionRankValueMap(blendRows, beerValues, projMap);
+  const ranks = myTeamId != null ? buildTeamPositionRanks(lastSharedPicks, posRankValues) : {};
   const myRanks = myTeamId != null ? ranks[myTeamId] : null;
 
-  const summaryHtml = POSITIONS.map((pos) => {
+  const summaryHtml = activePositions(includeKdst).map((pos) => {
     const t = posTint(pos);
     const r = myRanks && myRanks[pos];
     const n = mine.filter((p) => p.pos === pos).length;
@@ -1332,6 +1423,7 @@ function renderBestPicksV2(el, opts) {
       </header>
       <div class="body">
         <div class="nameRow">
+          ${avatarHtml(r.key, r.name, r.pos, r.team, "lg", sleeperIds)}
           ${ico("star", { size: 14, color: isFav ? "var(--accent)" : "var(--text-disabled)" })}
           <strong>${esc(r.name)}</strong>
           ${injuryBadge(injuries[r.key])}
@@ -1357,18 +1449,30 @@ function renderRecommendations() {
   // think of the same pick. Position-filtering it here (not inside the widget)
   // means "each source's own #1 pick" naturally becomes "each source's own
   // #1 pick AT THIS POSITION" too.
-  const consensusRows = buildConsensus(sources.filter((s) => s.enabled), merges);
+  const consensusRows = filterActivePositions(buildConsensus(sources.filter((s) => s.enabled), merges));
   const takenSet = takenKeySet();
   // Same values feed both the team-rank chips below and buildBeerValues
   // callers elsewhere — one computation per render, not per widget.
   const { values: beerValues } = buildBeerValues(consensusRows, projMap, takenSet);
-  renderTeamCountsV2($("teamCounts"), { picks: lastSharedPicks, myRosterId, beerValues });
+  // DEF has no real BEER value (see buildBeerValues) — this substitutes
+  // summed projected points for DEF specifically, ONLY for the per-position
+  // league-rank badge (buildTeamPositionRanks inside renderTeamCountsV2).
+  // beerValues itself (unmodified, DEF absent) still drives the "Tot" overall
+  // grade — see buildPositionRankValueMap's own comment for why the two must
+  // stay separate.
+  const posRankValues = buildPositionRankValueMap(consensusRows, beerValues, projMap);
+  renderTeamCountsV2($("teamCounts"), { picks: lastSharedPicks, myRosterId, beerValues, posRankValues });
   renderSourceListV2($("sourceList"), {
     sources,
     soloSource,
     onSolo: (id) => { soloSource = id; renderAll(); },
   });
-  const bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos, posFilter));
+  let bestPicksRows = posFilter === "ALL" ? consensusRows : consensusRows.filter((r) => filterMatchesPos(r.pos, posFilter));
+  // Best Picks Right Now defaults to never recommending a kicker/defense —
+  // real draft strategy says don't reach for one, and surfacing it here
+  // would actively encourage that. includeKdstInBestPicks (default false) is
+  // the explicit opt-in for anyone who wants them considered anyway.
+  if (!includeKdstInBestPicks) bestPicksRows = bestPicksRows.filter((r) => r.pos !== "K" && r.pos !== "DEF");
   renderBestPicksV2($("bestPicks"), {
     rows: bestPicksRows,
     sources,
@@ -1548,6 +1652,63 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     injuriesUpdatedAt = changes[K_INJURIES].newValue?.updatedAt || null;
     renderAll();
   }
+  // Only meaningfully changed from THIS window's own Settings panel, but a
+  // popout window (which hides its own Settings UI) still needs to pick up
+  // the change to render its roster/queue consistently with the main window.
+  if (changes[K_INCLUDE_KDST]) {
+    includeKdst = changes[K_INCLUDE_KDST].newValue !== false;
+    $("includeKdstToggle").classList.toggle("on", includeKdst);
+    $("includeKdstToggle").setAttribute("aria-checked", String(includeKdst));
+    $("includeKdstBestPicksField").style.display = includeKdst ? "" : "none";
+    applyKdstFilterVisibility();
+    renderAll();
+  }
+  if (changes[K_INCLUDE_KDST_BEST_PICKS]) {
+    includeKdstInBestPicks = !!changes[K_INCLUDE_KDST_BEST_PICKS].newValue;
+    $("includeKdstBestPicksToggle").classList.toggle("on", includeKdstInBestPicks);
+    $("includeKdstBestPicksToggle").setAttribute("aria-checked", String(includeKdstInBestPicks));
+    renderRecommendations();
+  }
+  if (changes[K_SCORING_FORMAT_OVERRIDE]) {
+    const prevFormat = SCORING_FORMAT;
+    const val = changes[K_SCORING_FORMAT_OVERRIDE].newValue;
+    setScoringFormatOverride(val);
+    $("scoringFormatSelect").value = SCORING_FORMAT_OVERRIDE || "";
+    if (SCORING_FORMAT !== prevFormat) {
+      renderStatusPanel();
+      autoRefreshAdpAndStats();
+      autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+    }
+  }
+  // Only the main window ever WRITES this (see poll()'s fetchDraftSettings
+  // callback), but every window — including a popped-out Roster window,
+  // which never polls Sleeper itself — needs to pick it up to get the real
+  // per-draft slot counts (was previously stuck on the hardcoded default
+  // forever in a popout; see K_DRAFT_SETTINGS's own comment above).
+  if (changes[K_DRAFT_SETTINGS]) {
+    const v = changes[K_DRAFT_SETTINGS].newValue;
+    if (v) {
+      if (v.settings) {
+        draftSettings = v.settings;
+        draftSettingsForId = v.draftId;
+        applySyncedLeagueSettings(v.settings);
+      }
+      // Same "did this actually change anything" check as poll()'s own
+      // callback — in the main window this mostly re-applies what its own
+      // write already set directly (harmless, idempotent); in a popped-out
+      // window this is the ONLY way it ever learns the real scoring format,
+      // same reasoning as league shape above.
+      const prevFormat = SCORING_FORMAT;
+      applySyncedScoringFormat(v.scoringType);
+      if (SCORING_FORMAT !== prevFormat) {
+        renderStatusPanel();
+        autoRefreshAdpAndStats();
+        autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+      }
+      renderRosterBtn();
+      renderAll();
+    }
+  }
 });
 
 // ---------- Sleeper sync ----------
@@ -1558,16 +1719,57 @@ function fmtTime(d) {
 async function poll(draftId, { manual = false } = {}) {
   if (inFlight) return; // never stack requests
   inFlight = true;
-  // Fire-and-forget, once per draftId (not every poll tick) — a separate,
-  // cheap endpoint from the picks poll above, so it doesn't block or
-  // throttle that loop. Silent on failure, same pattern as every other
+  // Fire-and-forget, once per draftId (not every ~3s poll tick) — a
+  // separate, cheap endpoint from the picks poll above, so it doesn't block
+  // or throttle that loop. Silent on failure, same pattern as every other
   // auto-refresh in this app: the roster popover just keeps using whatever
   // slot counts it already had (the ROSTER_BENCH_SLOTS guess, or a
   // previous draft's settings) until this resolves.
-  if (draftSettingsForId !== draftId) {
+  //
+  // `|| manual` — a real league's settings changing MID-DRAFT (someone edits
+  // Sleeper's draft settings after the room's already open) is a genuinely
+  // rare scenario, not worth polling for on every tick — but it should be
+  // recoverable without reconnecting entirely. The existing "Refresh now"
+  // button (already the answer to "I think something's stale, force a
+  // fresh pull") now also forces a fresh settings pull, not just picks.
+  if (manual || draftSettingsForId !== draftId) {
     draftSettingsForId = draftId;
     fetchDraftSettings(draftId)
-      .then((s) => { if (s) { draftSettings = s; renderRosterBtn(); } })
+      .then(({ settings: s, scoringType }) => {
+        if (s) {
+          draftSettings = s;
+          // League-shape sync (K/DST support) — makes BEER's replacement-
+          // level math reflect THIS draft's real team count/starter slots
+          // instead of staying hardcoded to this project's own league. Only
+          // overwrites LEAGUE_SETTINGS fields Sleeper actually provided a
+          // finite number for (see applySyncedLeagueSettings, shared.js);
+          // everything else keeps whatever it already had.
+          applySyncedLeagueSettings(s);
+        }
+        // Scoring format sync — separate from the settings-object check
+        // above since a draft could plausibly expose one without the other.
+        // If this actually CHANGES the effective format (not just confirms
+        // what was already active), every points/ADP-based fetch that
+        // already ran was computed off the wrong field — re-run them now
+        // rather than leaving stale PPR-based numbers up until the next
+        // window reopen.
+        const prevFormat = SCORING_FORMAT;
+        applySyncedScoringFormat(scoringType);
+        const formatChanged = SCORING_FORMAT !== prevFormat;
+        if (formatChanged) {
+          renderStatusPanel();
+          autoRefreshAdpAndStats();
+          autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+        }
+        if (s || formatChanged) {
+          // Relay to any popped-out Roster window (and this window's own
+          // next reload) — see K_DRAFT_SETTINGS's comment above for why this
+          // can't just stay in memory.
+          chrome.storage.local.set({ [K_DRAFT_SETTINGS]: { draftId, settings: s, scoringType } });
+          renderRosterBtn();
+          renderAll(); // BEER values/replacement ranks everywhere just changed
+        }
+      })
       .catch((e) => console.warn("[4th&Go] draft settings fetch failed:", e.message));
   }
   if (manual) {
@@ -1593,14 +1795,18 @@ async function poll(draftId, { manual = false } = {}) {
     const nextTaken = {};
     const sharedPicks = []; // source-agnostic record for the Rankings Manager
     unmatched = [];
-    let skippedPos = 0; // picks dropped for not being QB/RB/WR/TE — normally K/DST, but ALL of them means wrong sport
+    // Picks dropped for not being an active position — normally means K/DST
+    // with the master toggle off (see includeKdst), but ALL of them means
+    // wrong sport (see wrongSport below).
+    let skippedPos = 0;
+    const activePos = activePositions(includeKdst);
     picks.forEach((pk) => {
       const md = pk.metadata || {};
       const first = md.first_name || "";
       const last = md.last_name || "";
       const pos = (md.position || "").toUpperCase();
       if (!first && !last) return;
-      if (!["QB","RB","WR","TE"].includes(pos)) { skippedPos++; return; } // skip K/DEF picks entirely
+      if (!activePos.includes(pos)) { skippedPos++; return; }
       // A pick is "mine" if its roster_id or draft_slot matches what the user entered.
       // Sleeper populates these differently across real vs. mock drafts, so accept either.
       const mine =
@@ -1663,7 +1869,7 @@ async function poll(draftId, { manual = false } = {}) {
     const wrongSport = picks.length > 0 && skippedPos === picks.length;
     let msg;
     if (wrongSport) {
-      msg = `${picks.length} picks synced, but none are QB/RB/WR/TE — is this an NFL draft? Check the draft ID.`;
+      msg = `${picks.length} picks synced, but none are ${activePos.join("/")} — is this an NFL draft? Check the draft ID.`;
     } else {
       msg = `Live — ${picks.length} picks synced`;
       if (unmatched.length) msg += ` · ${unmatched.length} not in your rankings (ignored)`;
@@ -1739,6 +1945,13 @@ function scheduleNext(draftId) {
 
 function startPolling(draftId) {
   stopPolling();
+  // Connecting to a genuinely different draft than last time — reset the
+  // scoring-format sync state so a stale confirmation from the PREVIOUS
+  // draft can't leak into this one (and misreport itself as "synced") if
+  // this new draft's object happens not to expose scoring_type at all. The
+  // very next poll() will re-sync for real regardless (draftSettingsForId
+  // already won't match), this just closes the gap in between.
+  if (currentDraftId !== draftId) resetSyncedScoringFormat();
   currentDraftId = draftId;
   errorStreak = 0;
   pollTimer = -1; // truthy sentinel so poll() knows to keep chaining
@@ -1945,7 +2158,9 @@ function onStatPickerOutsideClick(e) {
 }
 function renderStatPickerPanel() {
   const panel = $("statPickerPanel");
-  panel.innerHTML = POSITIONS.map((pos) => {
+  // CORE_POSITIONS, not POSITIONS — K/DEF have no STAT_OPTION_DEFS entries
+  // (see claude.md's K/DST section) — nothing to pick for them.
+  panel.innerHTML = CORE_POSITIONS.map((pos) => {
     const opts = STAT_OPTION_DEFS[pos].map((def) => {
       const checked = (visibleStats[pos] || []).includes(def.id);
       return `<label class="statPickerOpt" data-tip="${esc(def.full)}">
@@ -2652,6 +2867,34 @@ $("statHead").addEventListener("click", (e) => {
   renderBoard();
 });
 
+// ---------- K/DST support settings ----------
+// Hides the K/DEF position-filter buttons the instant the master toggle is
+// off, and drops out of a now-hidden K/DEF filter back to ALL rather than
+// leaving the board stuck on a filter with no visible button for it.
+function applyKdstFilterVisibility() {
+  document.querySelectorAll("[data-kdst]").forEach((btn) => { btn.style.display = includeKdst ? "" : "none"; });
+  if (!includeKdst && (posFilter === "K" || posFilter === "DEF")) {
+    document.querySelectorAll(".pf[data-pos]").forEach((b) => b.classList.toggle("active", b.dataset.pos === "ALL"));
+    posFilter = "ALL";
+  }
+}
+$("includeKdstToggle").addEventListener("click", () => {
+  includeKdst = !includeKdst;
+  saveIncludeKdst(includeKdst);
+  $("includeKdstToggle").classList.toggle("on", includeKdst);
+  $("includeKdstToggle").setAttribute("aria-checked", String(includeKdst));
+  $("includeKdstBestPicksField").style.display = includeKdst ? "" : "none";
+  applyKdstFilterVisibility();
+  renderAll(); // team counts / roster slots / pick-sync allowlist all depend on this
+});
+$("includeKdstBestPicksToggle").addEventListener("click", () => {
+  includeKdstInBestPicks = !includeKdstInBestPicks;
+  saveIncludeKdstInBestPicks(includeKdstInBestPicks);
+  $("includeKdstBestPicksToggle").classList.toggle("on", includeKdstInBestPicks);
+  $("includeKdstBestPicksToggle").setAttribute("aria-checked", String(includeKdstInBestPicks));
+  renderRecommendations();
+});
+
 // ---------- EXPERIMENTAL: Sleeper draft-actions on/off toggle ----------
 $("sleeperWriteToggle").addEventListener("click", () => {
   sleeperWriteEnabled = !sleeperWriteEnabled;
@@ -2873,6 +3116,51 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   setTimeout(() => document.addEventListener("click", onSleeperInfoOutsideClick), 0);
 });
 
+// Same click-to-open pattern as sleeperTokenInfo above, for the Scoring
+// format field — explains that this is a backup, not the primary path.
+let scoringInfoEl = null;
+function closeScoringInfo() {
+  if (scoringInfoEl) { scoringInfoEl.remove(); scoringInfoEl = null; }
+  document.removeEventListener("click", onScoringInfoOutsideClick);
+}
+function onScoringInfoOutsideClick(e) {
+  if (!e.target.closest(".infoPopover") && !e.target.closest("#scoringFormatInfo")) closeScoringInfo();
+}
+$("scoringFormatInfo").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (scoringInfoEl) { closeScoringInfo(); return; }
+  const el = document.createElement("div");
+  el.className = "infoPopover";
+  el.innerHTML = `<b>Scoring format</b>
+    <p>This should sync automatically the moment you Sync — every BEER value, projected points, and ADP number gets computed off whichever scoring format the draft you're synced to actually uses.</p>
+    <p>This dropdown is a backup, not the normal path. Only change it if the auto-detected format looks wrong, or you're not synced to a draft yet.</p>`;
+  document.body.appendChild(el);
+  const r = $("scoringFormatInfo").getBoundingClientRect();
+  const w = el.offsetWidth;
+  el.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - w - 6))}px`;
+  el.style.top = `${r.bottom + 6}px`;
+  scoringInfoEl = el;
+  setTimeout(() => document.addEventListener("click", onScoringInfoOutsideClick), 0);
+});
+
+// Manual backup for scoring format — Auto (empty value) means "trust
+// whatever the synced draft says" (applySyncedScoringFormat); an explicit
+// choice overrides that until set back to Auto. Same "did this actually
+// change the EFFECTIVE format" gate as the sync paths, so picking the format
+// that's already active (e.g. forcing PPR when the synced draft is already
+// PPR) doesn't trigger a pointless re-fetch.
+$("scoringFormatSelect").addEventListener("change", () => {
+  const prevFormat = SCORING_FORMAT;
+  const val = $("scoringFormatSelect").value;
+  setScoringFormatOverride(val);
+  saveScoringFormatOverride(val);
+  if (SCORING_FORMAT !== prevFormat) {
+    renderStatusPanel();
+    autoRefreshAdpAndStats();
+    autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+  }
+});
+
 // ---------- init: restore settings, then load the curated sources ----------
 (async function init() {
   $("settingsBtn").innerHTML = ico("settings", { size: 15 });
@@ -2906,11 +3194,50 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
     if (d.manualKeys) applyManualKeysFromStorage(d.manualKeys);
   }
 
+  // Same resume path as picks above, for the real per-draft slot counts —
+  // matters most for a popped-out Roster window, which never fetches this
+  // itself (see K_DRAFT_SETTINGS's comment near draftSettings). Without this,
+  // a popout opened after the main window already synced would still show
+  // the hardcoded default shape until the NEXT live fetch happens to resolve
+  // (once per draftId, so possibly never again this session).
+  //
+  // Deliberately does NOT set draftSettingsForId here — a real bug, found
+  // live-testing: setting it at restore time made poll()'s own `if (manual
+  // || draftSettingsForId !== draftId)` guard believe a fresh fetch had
+  // already happened for this session, so reconnecting to a draft whose
+  // settings changed since the last time this window was open (a mid-draft
+  // Sleeper settings edit, exactly the "highly rare" scenario just tested)
+  // silently kept showing the STALE restored shape until a manual Refresh
+  // forced it, instead of the fresh one Syncing should have pulled. This
+  // restore is a placeholder for "something reasonable to show before the
+  // real fetch," not a substitute for that fetch — draftSettingsForId should
+  // only ever be set by poll()'s own live fetch actually resolving.
+  const dsv = await chrome.storage.local.get([K_DRAFT_SETTINGS]);
+  const savedDs = dsv[K_DRAFT_SETTINGS];
+  if (savedDs && id && String(savedDs.draftId) === String(id)) {
+    if (savedDs.settings) {
+      draftSettings = savedDs.settings;
+      applySyncedLeagueSettings(savedDs.settings);
+    }
+    applySyncedScoringFormat(savedDs.scoringType);
+  }
+  const savedOverride = await loadScoringFormatOverride();
+  setScoringFormatOverride(savedOverride);
+  $("scoringFormatSelect").value = savedOverride || "";
+
   sources = await loadSources();
   adp = await loadAdp();
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
+  includeKdst = await loadIncludeKdst();
+  includeKdstInBestPicks = await loadIncludeKdstInBestPicks();
+  $("includeKdstToggle").classList.toggle("on", includeKdst);
+  $("includeKdstToggle").setAttribute("aria-checked", String(includeKdst));
+  $("includeKdstBestPicksField").style.display = includeKdst ? "" : "none";
+  $("includeKdstBestPicksToggle").classList.toggle("on", includeKdstInBestPicks);
+  $("includeKdstBestPicksToggle").setAttribute("aria-checked", String(includeKdstInBestPicks));
+  applyKdstFilterVisibility();
   projMap = await loadProjections();
   playerStats = await loadPlayerStats();
   visibleStats = await loadStatPrefs();

@@ -22,6 +22,7 @@ let editingAdp = false;  // the add/import modal is in "ADP" mode
 let projMap = {};        // playerKey -> projected PPR points, for the VALUE (BEER/VBD) column
 let sortByValue = false; // click the VALUE column header to toggle sorting the table by it
 const echo = makeEchoGuard(); // per-key — saving sources must not swallow a live pick update (see shared.js)
+let includeKdst = true; // master K/DST toggle (K_INCLUDE_KDST, shared.js) — set from the board window's Settings, read here so this surface's filters/table match it. Default true.
 
 // ---------- Rankings Creator state ----------
 let activeTab = "sources"; // "sources" | "creator" — which top-level tab is showing
@@ -116,7 +117,7 @@ function renderSourceBar() {
     `<span class="chipAdd" id="addAdpBtn">+ Add ADP source</span>` +
     `<span class="chipAdd" id="addSrcBtn">+ Add source</span>` +
     `<div class="toolRow">` +
-    `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ Fetch Sleeper ADP</button>` +
+    `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live ADP straight from Sleeper's own public API (api.sleeper.app/projections), matched to your league's scoring format — no login, same domain this extension already talks to">⟳ Fetch Sleeper ADP</button>` +
     `<button class="alt" id="fetchProjectionsBtn" title="Auto-fetch season point projections from the same Sleeper API, used to compute the BEER column">⟳ Fetch projections</button>` +
     `<button class="alt" id="fetchStatsBtn" title="Auto-fetch the board's stat columns (projected volume + prior-season target share/air yards/red-zone targets) from Sleeper's public API — same domain, no login">⟳ Fetch stats</button>` +
     `<button class="alt" id="downloadSkillBtn" title="Download a Claude Code skill (SKILL.md) that converts any raw rankings/ADP export into an importable CSV — drop it in .claude/skills/">⬇ Download AI skill</button>` +
@@ -266,7 +267,7 @@ async function fetchSleeperAdp() {
     if (players.length < MIN_PLAUSIBLE_ADP_PLAYERS) {
       toast(`ADP fetched, but only ${players.length} players came back — that's far fewer than expected. Check the column before trusting it.`, true);
     } else {
-      toast(`ADP fetched — ${players.length} players from Sleeper's own PPR ADP`);
+      toast(`ADP fetched — ${players.length} players from Sleeper's own ADP`);
     }
   } catch (err) {
     toast(`Sleeper ADP fetch failed: ${err.message} — use "+ ADD ADP SOURCE" to paste an export instead`, true);
@@ -369,7 +370,7 @@ function renderTable(rows) {
     ${cols.map((s) => `<th style="color:${esc(s.color)}" title="${s.positionOnly ? "Position-only source — shows this source's own within-position tier, not a rank. Reference only, never affects blended rank/tier." : ""}">${esc(s.name.toUpperCase())}${s.positionOnly ? " ⓘ" : ""}</th>`).join("")}
     ${adpCols.map((s) => `<th style="color:${esc(s.color)}">${esc(s.name.toUpperCase())}</th>`).join("")}
     <th title="Sleeper Live ADP vs. your other enabled ADP source(s) (baseline). Green = Sleeper drafts them later than baseline (a discount). Red = Sleeper drafts them earlier than baseline (a reach). Needs Sleeper Live ADP + at least one other ADP source enabled.">VALUE</th>
-    <th id="valueColHead" style="cursor:pointer;user-select:none" title="BEER value — projected PPR points above replacement level at this player's position, recomputed live as the draft goes. Click to sort by it.">BEER${sortByValue ? " ▼" : ""}</th>
+    <th id="valueColHead" style="cursor:pointer;user-select:none" title="BEER value — projected points (your league's scoring) above replacement level at this player's position, recomputed live as the draft goes. Click to sort by it.">BEER${sortByValue ? " ▼" : ""}</th>
     <th></th>
   </tr>`;
 
@@ -659,9 +660,16 @@ $("tbl").addEventListener("contextmenu", (e) => {
 // comparison table. Live recommendations and team counts live in the board window
 // (they render from renderBestPicksWidget/renderTeamCountsWidget in shared.js,
 // so re-adding them here later is just a mount point away).
+// The definitive K/DST gate for this surface, same reasoning as panel.js's
+// filterActivePositions — the master toggle hides K/DEF from the comparison
+// table even if a K/DEF source happens to still be enabled in storage.
+function filterActivePositions(rows) {
+  return includeKdst ? rows : rows.filter((r) => CORE_POSITIONS.includes(r.pos));
+}
+
 function renderAll() {
   try {
-    const rows = buildConsensus(activeSources(sources, soloSource), merges);
+    const rows = filterActivePositions(buildConsensus(activeSources(sources, soloSource), merges));
     renderSyncLine();
     renderSourceBar();
     renderTable(rows);
@@ -1040,7 +1048,54 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     if (!customBoards.find((b) => b.id === activeBoardId)) activeBoardId = sortedBoards()[0] ? sortedBoards()[0].id : null;
     if (activeTab === "creator") renderCreator();
   }
+  // Set from the board window's Settings panel — this surface has no
+  // settings of its own (curation-only, per claude.md's surface split), it
+  // just follows along.
+  if (changes[K_INCLUDE_KDST]) {
+    includeKdst = changes[K_INCLUDE_KDST].newValue !== false;
+    applyKdstFilterVisibility();
+    renderAll();
+    if (activeTab === "creator") renderCreator();
+  }
+  // Scoring format sync (see the loader in init() for why this surface
+  // needs it too, not just panel.js) — only re-fetches if this tab is
+  // synced to the SAME draft, same guard as init()'s own restore.
+  if (changes[K_DRAFT_SETTINGS]) {
+    const v = changes[K_DRAFT_SETTINGS].newValue;
+    if (v && draft.draftId && String(v.draftId) === String(draft.draftId)) {
+      const prevFormat = SCORING_FORMAT;
+      applySyncedScoringFormat(v.scoringType);
+      if (SCORING_FORMAT !== prevFormat) {
+        autoRefreshAdpAndStats().then(renderAll);
+        autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+      }
+    }
+  }
+  if (changes[K_SCORING_FORMAT_OVERRIDE]) {
+    const prevFormat = SCORING_FORMAT;
+    setScoringFormatOverride(changes[K_SCORING_FORMAT_OVERRIDE].newValue);
+    if (SCORING_FORMAT !== prevFormat) {
+      autoRefreshAdpAndStats().then(renderAll);
+      autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
+    }
+  }
 });
+
+// Hides the K/DEF filter buttons (both the Sources tab's .pf row and the
+// Creator's .crPosTab row) the instant the master toggle is off, and drops
+// out of a now-hidden K/DEF filter back to ALL/All-Combined — same pattern
+// as panel.js's applyKdstFilterVisibility.
+function applyKdstFilterVisibility() {
+  document.querySelectorAll("[data-kdst]").forEach((btn) => { btn.style.display = includeKdst ? "" : "none"; });
+  if (!includeKdst && (posFilter === "K" || posFilter === "DEF")) {
+    posFilter = "ALL";
+    document.querySelectorAll(".pf[data-pos]").forEach((b) => b.classList.toggle("active", b.dataset.pos === "ALL"));
+  }
+  if (!includeKdst && (creatorPosFilter === "K" || creatorPosFilter === "DEF")) {
+    creatorPosFilter = "ALL";
+    document.querySelectorAll("#crPosTabs .crPosTab").forEach((b) => b.classList.toggle("active", b.dataset.pos === "ALL"));
+  }
+}
 
 // ---------- top-level tab switching ----------
 $("tabSourcesBtn").addEventListener("click", () => switchTab("sources"));
@@ -1102,6 +1157,7 @@ async function buildBoardFromBase(baseId) {
     try { adpPlayers = await fetchSleeperAdpPlayers(); } catch (e) {
       toast(`Couldn't fetch Sleeper ADP for a fresh base: ${e.message}`, true);
     }
+    if (!includeKdst) adpPlayers = adpPlayers.filter((p) => CORE_POSITIONS.includes(p.pos));
     adpPlayers.sort((a, b) => a.rank - b.rank);
     adpPlayers.forEach((p) => {
       const key = playerKey(p.name, p.pos);
@@ -1264,12 +1320,16 @@ async function saveBoardToSource() {
 // brings that position's stat group forward too — direct request, matching
 // how the board already does this for its own position filter buttons.
 function crEffectiveStatPos() {
+  // CORE_POSITIONS, not POSITIONS — same reasoning as panel.js's
+  // effectiveStatPos: K/DEF have no stat group in STAT_GROUP_SEQUENCE, so
+  // treating one as a valid "bring forward" target would feed statGroupOrder
+  // an id with no configured width and poison every offset after it.
   const board = getActiveBoard();
   if (board && creatorSelectedKey) {
     const p = board.players[creatorSelectedKey];
-    if (p && POSITIONS.includes(p.pos)) return p.pos;
+    if (p && CORE_POSITIONS.includes(p.pos)) return p.pos;
   }
-  return POSITIONS.includes(creatorPosFilter) ? creatorPosFilter : null;
+  return CORE_POSITIONS.includes(creatorPosFilter) ? creatorPosFilter : null;
 }
 
 // Most-recently-edited first — with more than a couple of boards, "the one
@@ -1803,6 +1863,22 @@ async function ensureBuiltinSources() {
   adpSources = await loadAdpSources();
   flags = await loadFlags();
   merges = await loadMerges();
+  includeKdst = await loadIncludeKdst();
+  applyKdstFilterVisibility();
+  // Scoring format sync (shared.js) — this surface's own "⟳ Fetch stats/
+  // projections/ADP" buttons (and its silent autoRefreshAdpAndStats/
+  // autoRefreshProjections calls just below) would otherwise always fetch
+  // PPR fields regardless of what the board window already synced from a
+  // real draft, silently overwriting correctly-fetched non-PPR data with
+  // wrong-format data. Loaded the same way panel.js restores it: the synced
+  // draft's own settings (only if it's the SAME draft this tab's draft state
+  // is for) plus any manual override, in that priority order.
+  const dsv = await chrome.storage.local.get([K_DRAFT_SETTINGS]);
+  const savedDs = dsv[K_DRAFT_SETTINGS];
+  if (savedDs && draft.draftId && String(savedDs.draftId) === String(draft.draftId)) {
+    applySyncedScoringFormat(savedDs.scoringType);
+  }
+  setScoringFormatOverride(await loadScoringFormatOverride());
   projMap = await loadProjections();
   injuries = await loadInjuries();
   const v = await chrome.storage.local.get([K_ROSTER]);

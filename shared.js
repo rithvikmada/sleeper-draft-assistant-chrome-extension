@@ -46,8 +46,22 @@ const POS_COLORS = {
   RB:{ text:"var(--legacy-pos-rb)", bg:"rgba(95,207,138,.12)", border:"rgba(95,207,138,.35)" },
   WR:{ text:"var(--legacy-pos-wr)", bg:"rgba(95,168,232,.12)", border:"rgba(95,168,232,.35)" },
   TE:{ text:"var(--legacy-pos-te)", bg:"rgba(232,138,201,.12)", border:"rgba(232,138,201,.35)" },
+  K:{ text:"var(--legacy-pos-k)", bg:"rgba(167,139,250,.12)", border:"rgba(167,139,250,.35)" },
+  DEF:{ text:"var(--legacy-pos-def)", bg:"rgba(110,140,174,.12)", border:"rgba(110,140,174,.35)" },
 };
-const POSITIONS = ["QB","RB","WR","TE"];
+// Every position this app can rank/track/draft. K/DEF were added 2026-08-26
+// (see claude.md's "K/DST support" section) so the app works for the many
+// leagues that use them, not just this project's own K/DST-less league.
+// Structural recognition (parsing, matching, board grouping) is unconditional
+// — whether K/DEF actually SHOW UP in the UI is a separate, user-facing
+// toggle (see K_INCLUDE_KDST below), not a second "valid positions" list.
+// CORE_POSITIONS is the narrower set with real stat groups, BEER replacement-
+// level math, and the BEST-by-position grid — K/DEF deliberately don't
+// participate in those (see claude.md for the reasoning: DEF is a team
+// entity with no man-games/bye-week replacement model, and K/DEF getting
+// their own "best pick" crown would actively encourage reaching for them).
+const POSITIONS = ["QB","RB","WR","TE","K","DEF"];
+const CORE_POSITIONS = ["QB","RB","WR","TE"];
 
 // Colors handed out to user-added ranking sources, in order.
 const SOURCE_PALETTE = ["#5FA8E8","#E88AC9","#F5C242","#9B8AE8","#5FCFC4","#E8A05F"];
@@ -70,6 +84,14 @@ const K_SLEEPER_IDS = "sleeperPlayerIds"; // { updatedAt, ids: { playerKey: slee
 const K_INJURIES = "playerInjuries"; // { updatedAt, injuries: { playerKey: {status,bodyPart,updatedAt} } } —
                                      // read off the same projections response fetchSleeperPlayerIdMap already
                                      // walks. See INJURY_META/injuryBadge below.
+const K_DRAFT_SETTINGS = "syncedDraftSettings"; // { draftId, settings, scoringType } — settings is Sleeper's
+                                     // own /v1/draft/{id} `.settings` object verbatim, scoringType is
+                                     // data.metadata.scoring_type off the same response. Written only by
+                                     // panel.js's poll() (the only surface that ever polls Sleeper), but read
+                                     // by both panel.js (a popped-out Roster window never fetches this itself)
+                                     // and rankings-manager.js (so its own stats/ADP/projections auto-refresh
+                                     // doesn't silently fetch the wrong scoring format) — see claude.md's
+                                     // "League shape sync" / "Scoring format" sections.
 const K_RAGEBAIT_ENABLED  = "rageBaitEnabled";  // bool — master on/off, only meaningful when Draft actions is also on
 const K_RAGEBAIT_MESSAGES = "rageBaitMessages"; // string[] — the pool a random message gets picked from; falls back to DEFAULT_RAGE_BAIT_MESSAGES when empty/unset
 const K_RAGEBAIT_MIN_GAP  = "rageBaitMinGap";    // number — min picks between auto-fires, user-adjustable in the Manage popover
@@ -100,6 +122,123 @@ const K_CUSTOM_BOARDS = "customRankingBoards"; // array of Rankings Creator boar
                                      // board" converts one into a normal source (via makeSource) on demand, so
                                      // saving can't silently drift from every other source's shape.
 
+// ---------- K/DST support (added 2026-08-26) ----------
+// Most leagues start a kicker and a defense; this project's own league is the
+// exception, not the rule (see claude.md). K_INCLUDE_KDST is the master
+// on/off — defaults ON so the majority of users get full K/DEF support with
+// zero setup, with an explicit off-switch for leagues (like this one) that
+// don't use them. Purely a UI/behavior filter, not a data-model one: POSITIONS
+// always structurally includes K/DEF (parsing, matching, storage never
+// change shape), this only controls whether they're shown/filterable/synced.
+const K_INCLUDE_KDST = "includeKdst";
+async function loadIncludeKdst() {
+  const v = await chrome.storage.local.get([K_INCLUDE_KDST]);
+  return v[K_INCLUDE_KDST] !== false; // default true — only an explicit false turns it off
+}
+async function saveIncludeKdst(val) {
+  await chrome.storage.local.set({ [K_INCLUDE_KDST]: !!val });
+}
+// Best Picks Right Now (the top-3 consensus-rank widget) defaults to
+// excluding K/DEF even when the master toggle above is on — real draft
+// strategy says never reach for a kicker/defense early, and recommending one
+// there would actively encourage exactly that. This is a second, narrower
+// opt-IN for anyone who wants them considered anyway. Meaningless (and
+// ignored by callers) when K_INCLUDE_KDST itself is off.
+const K_INCLUDE_KDST_BEST_PICKS = "includeKdstInBestPicks";
+async function loadIncludeKdstInBestPicks() {
+  const v = await chrome.storage.local.get([K_INCLUDE_KDST_BEST_PICKS]);
+  return !!v[K_INCLUDE_KDST_BEST_PICKS]; // default false
+}
+async function saveIncludeKdstInBestPicks(val) {
+  await chrome.storage.local.set({ [K_INCLUDE_KDST_BEST_PICKS]: !!val });
+}
+// The one set of positions actually in play right now, respecting the master
+// toggle — the single place every position-filter button list, board
+// gate, and pick-sync allowlist should read from instead of branching on
+// includeKdst individually.
+function activePositions(includeKdst) {
+  return includeKdst ? POSITIONS : CORE_POSITIONS;
+}
+
+// ---------- scoring format (added 2026-08-26) ----------
+// Every points/ADP fetch in this app was hardcoded to Sleeper's PPR fields
+// (`pts_ppr`/`adp_ppr`) — a reasonable default while this was built for one
+// specific full-PPR league, but wrong for anyone else: confirmed live against
+// a real user draft whose own `scoring_type` is `"std"` (Standard), meaning
+// every BEER value/projection/ADP number was silently computed off the wrong
+// scoring format the whole time. Sleeper's projections/stats responses carry
+// pts_std/pts_half_ppr/pts_ppr and adp_std/adp_half_ppr/adp_ppr side by side
+// on the SAME response already being fetched — no new endpoint, no new
+// permission, same philosophy as everything else auto-fetched in this file.
+//
+// SYNCED_SCORING_FORMAT is what the current draft's own metadata says
+// (`applySyncedScoringFormat`, fed by panel.js's fetchDraftSettings, which
+// also reads `data.metadata.scoring_type` off the same /v1/draft/{id} call
+// already used for league-shape sync). SCORING_FORMAT_OVERRIDE is a user
+// setting (default null = "Auto") for the rare case the sync gets it wrong
+// or a draft doesn't expose it — explicitly a backup, not the primary path,
+// per direct instruction. SCORING_FORMAT is the one fetch functions actually
+// read, recomputed whenever either input changes: override wins if set,
+// otherwise whatever synced (or the safe "ppr" default if nothing has yet).
+const SCORING_FORMATS = ["ppr", "half_ppr", "std"];
+let SYNCED_SCORING_FORMAT = "ppr";
+let SCORING_FORMAT_OVERRIDE = null;
+let SCORING_FORMAT = "ppr";
+// Distinct from SYNCED_SCORING_FORMAT actually holding a real value — before
+// any draft has ever synced (or a restore never found a matching one),
+// SYNCED_SCORING_FORMAT is just the untouched "ppr" default, not a real
+// confirmation. Without this, the status panel would claim "PPR (synced
+// from draft)" on a brand-new window that has never synced anything —
+// caught in review, not a live bug report, but a real and avoidable false
+// claim about where a number came from.
+let SCORING_FORMAT_EVER_SYNCED = false;
+function recomputeScoringFormat() {
+  SCORING_FORMAT = SCORING_FORMAT_OVERRIDE || SYNCED_SCORING_FORMAT;
+}
+// Only overwrites the synced half when the value is one of the three known
+// suffixes — an unrecognized/missing scoring_type (a custom scoring league,
+// or a draft object that doesn't expose it) leaves whatever was already
+// there rather than corrupting it, same fallback discipline as
+// applySyncedLeagueSettings. Still marks a real sync as having happened
+// even on a repeat call with the SAME value — this only tracks "has a real
+// sync (or restore of one) ever landed," not "did the value just change."
+function applySyncedScoringFormat(scoringType) {
+  if (SCORING_FORMATS.includes(scoringType)) {
+    SYNCED_SCORING_FORMAT = scoringType;
+    SCORING_FORMAT_EVER_SYNCED = true;
+  }
+  recomputeScoringFormat();
+}
+function setScoringFormatOverride(val) {
+  SCORING_FORMAT_OVERRIDE = SCORING_FORMATS.includes(val) ? val : null;
+  recomputeScoringFormat();
+}
+// Called when connecting to a genuinely DIFFERENT draft mid-session (see
+// startPolling in panel.js) — without this, switching drafts without
+// reloading the whole window could leak the PREVIOUS draft's confirmed
+// scoring format into the new one (if the new draft's object doesn't expose
+// scoring_type at all, poll()'s sync call would just leave the stale value
+// in place) and keep claiming "synced from draft" for a draft that never
+// actually confirmed anything. Deliberately does NOT touch
+// SCORING_FORMAT_OVERRIDE — a manual override is a standing preference,
+// not something tied to one specific draft.
+function resetSyncedScoringFormat() {
+  SYNCED_SCORING_FORMAT = "ppr";
+  SCORING_FORMAT_EVER_SYNCED = false;
+  recomputeScoringFormat();
+}
+function scoringPtsField() { return `pts_${SCORING_FORMAT}`; }
+function scoringAdpField() { return `adp_${SCORING_FORMAT}`; }
+
+const K_SCORING_FORMAT_OVERRIDE = "scoringFormatOverride"; // null/unset = "Auto" (follow the synced draft)
+async function loadScoringFormatOverride() {
+  const v = await chrome.storage.local.get([K_SCORING_FORMAT_OVERRIDE]);
+  return SCORING_FORMATS.includes(v[K_SCORING_FORMAT_OVERRIDE]) ? v[K_SCORING_FORMAT_OVERRIDE] : null;
+}
+async function saveScoringFormatOverride(val) {
+  await chrome.storage.local.set({ [K_SCORING_FORMAT_OVERRIDE]: SCORING_FORMATS.includes(val) ? val : null });
+}
+
 // ---------- position/avatar helpers shared by the board window and the
 // Rankings Creator (Rankings Manager) ----------
 // Distinct object from POS_COLORS above (which the manager's older-style
@@ -109,6 +248,8 @@ const POS_V2 = {
   RB: { fg: "var(--pos-rb)", bg: "var(--pos-rb-tint)" },
   WR: { fg: "var(--pos-wr)", bg: "var(--pos-wr-tint)" },
   TE: { fg: "var(--pos-te)", bg: "var(--pos-te-tint)" },
+  K: { fg: "var(--pos-k)", bg: "var(--pos-k-tint)" },
+  DEF: { fg: "var(--pos-def)", bg: "var(--pos-def-tint)" },
 };
 function posTint(pos) { return POS_V2[pos] || { fg: "var(--pos-flex)", bg: "var(--chalk-a12)" }; }
 
@@ -127,9 +268,14 @@ function initials(name) {
 // when either is missing (unmatched player, or no team on file). `idsMap`
 // is passed explicitly (not read off a module-level global) since the board
 // window and the Rankings Manager each keep their own copy in memory.
+// DEF is a deliberate exception: idsMap[key] for a defense is Sleeper's
+// team-code pseudo-id ("LAR"), not a numeric player id — there's no headshot
+// thumb at that path, so DEF always falls through to the initials+team-badge
+// treatment regardless of what's in idsMap (the id is still real and correct
+// for queue/draft purposes, see fetchSleeperPlayerIdMap — just not a photo).
 function avatarHtml(key, name, pos, team, size = "", idsMap = {}) {
   const t = posTint(pos);
-  const sleeperId = idsMap[key];
+  const sleeperId = pos === "DEF" ? null : idsMap[key];
   const style = sleeperId
     ? `border-color:${t.fg};background-image:url('https://sleepercdn.com/content/nfl/players/thumb/${sleeperId}.jpg')`
     : `border-color:${t.fg}`;
@@ -513,7 +659,7 @@ function parseRankings(text) {
     let pos = idx.pos !== undefined ? String(r[idx.pos] || "").toUpperCase().trim() : "";
     // Strip numeric suffixes (WR1 → WR, TE2 → TE) for sources like FantasyPros that use positional tiers
     pos = pos.replace(/\d+$/, "");
-    if (pos && !POSITIONS.includes(pos)) { skipped++; return; } // drop K/DEF/unknown
+    if (pos && !POSITIONS.includes(pos)) { skipped++; return; } // drop unrecognized positions (K/DEF are valid now — see POSITIONS)
     const rawRank = idx.rank !== undefined ? Number(r[idx.rank]) : NaN;
     players.push({
       name,
@@ -528,7 +674,7 @@ function parseRankings(text) {
   if (!players.some((p) => p.pos)) {
     warnings.push("No position column found — position filters won't work for this source.");
   }
-  if (skipped) warnings.push(`${skipped} row(s) skipped (blank name, or a K/DEF position).`);
+  if (skipped) warnings.push(`${skipped} row(s) skipped (blank name, or an unrecognized position).`);
   return { players, warnings };
 }
 
@@ -561,7 +707,7 @@ function validateParsedSource(players, warnings = []) {
     return {
       level: "error",
       message:
-        `None of these ${total} rows have a position (QB/RB/WR/TE), so none of them can be ` +
+        `None of these ${total} rows have a position (QB/RB/WR/TE/K/DEF), so none of them can be ` +
         `matched to players or appear anywhere — the source would import but do nothing. ` +
         `Add a Position column, or check you pasted the right file.`,
     };
@@ -593,8 +739,9 @@ function validateParsedSource(players, warnings = []) {
 // ---------- AI ranking/ADP source converter (skill + standalone prompt) ----------
 // Every ranking/ADP source imported into this tool goes through parseRankings()
 // above, and real-world exports vary wildly (multiple tabs, no combined rank,
-// letter tiers vs numeric vs none, team/bye baked into the name cell, K/DST
-// rows that need dropping). Rather than teach every user that shape by hand,
+// letter tiers vs numeric vs none, team/bye baked into the name cell, K/DEF
+// rows that need their real (non-abbreviated) name kept as-is). Rather than
+// teach every user that shape by hand,
 // this is a single canonical set of conversion instructions, offered two ways
 // from the Rankings Manager UI (see rankings-manager.js's
 // downloadConverterSkill()/copyConverterPrompt()):
@@ -635,8 +782,11 @@ Rank,Name,Team,Position,Tier
   ()"), strip that off — output just "Jahmyr Gibbs".
 - **Team** — the player's NFL team abbreviation if the export has one.
   Leave blank if it doesn't; never guess one.
-- **Position** — QB, RB, WR, or TE only. **Drop every K and DST/DEF row
-  entirely** — don't include them in the output at all. If a cell has a
+- **Position** — QB, RB, WR, TE, K, or DEF. Kickers and defenses ARE valid
+  positions now (they weren't in an earlier version of this converter — don't
+  drop them). A team defense's "name" is just its city + mascot (e.g. "San
+  Francisco 49ers"), not a person — keep it exactly as the export writes it,
+  don't reformat it into an abbreviation or vice versa. If a cell has a
   positional-tier suffix like "RB1" or "WR12", output just the base position
   ("RB", "WR") — the number is rank information, not part of the position.
 - **Tier** — only include this column if the source export actually has tier
@@ -1319,8 +1469,8 @@ async function loadAdp() {
 const STAT_META = {
   BASIC: [
     { label: "EXP", full: "Years of NFL experience", unit: "yrs" },
-    { label: "PROJ", full: "Projected fantasy points, full season (PPR)", unit: "pts" },
-    { label: "P/WK", full: "Projected fantasy points per game (PPR)", unit: "pts/gm" },
+    { label: "PROJ", full: "Projected fantasy points, full season (your league's scoring)", unit: "pts" },
+    { label: "P/WK", full: "Projected fantasy points per game (your league's scoring)", unit: "pts/gm" },
   ],
 };
 
@@ -1338,10 +1488,10 @@ const STAT_OPTION_DEFS = {
   QB: [
     { id: "pass_proj", label: "PASS", full: "Projected passing yards" },
     { id: "rush_proj", label: "RUSH", full: "Projected rushing yards" },
-    { id: "proj_ppr", label: "PROJ", full: "Projected fantasy points, full season (PPR)" },
+    { id: "proj_ppr", label: "PROJ", full: "Projected fantasy points, full season (your league's scoring)" },
     { id: "rush_yd_g", label: "RU/G", full: "Rushing yards per game, prior season" },
     { id: "pass_att_g", label: "AT/G", full: "Pass attempts per game, prior season" },
-    { id: "fpdb", label: "FPDB", full: "Fantasy points per dropback (PPR), prior season — dropbacks approximated as pass attempts + sacks (no play-by-play dropback count in Sleeper's data)" },
+    { id: "fpdb", label: "FPDB", full: "Fantasy points per dropback (your league's scoring), prior season — dropbacks approximated as pass attempts + sacks (no play-by-play dropback count in Sleeper's data)" },
   ],
   RB: [
     { id: "tgt_share", label: "TGT%", full: "Target share, prior season" },
@@ -1386,7 +1536,10 @@ async function loadStatPrefs() {
   // happen in practice, but a corrupted/hand-edited storage value silently
   // rendering nothing for a whole group would be a confusing dead end).
   const clean = {};
-  POSITIONS.forEach((pos) => {
+  // CORE_POSITIONS, not POSITIONS — K/DEF have no STAT_OPTION_DEFS entries at
+  // all (only the pinned BASIC group applies to them, see claude.md's K/DST
+  // section), so there's nothing to validate/store a preference for.
+  CORE_POSITIONS.forEach((pos) => {
     const validIds = new Set(STAT_OPTION_DEFS[pos].map((o) => o.id));
     clean[pos] = Array.isArray(stored[pos]) ? stored[pos].filter((id) => validIds.has(id)) : [...DEFAULT_VISIBLE_STATS[pos]];
   });
@@ -1431,7 +1584,12 @@ const DEFAULT_STAT_POS_ORDER = ["WR", "RB", "QB", "TE"];
 const STAT_COL_WIDTH = 42; // px per individual stat column
 const STAT_GROUP_PAD = 8;  // px horizontal padding per group (4 each side) — 0 if the group has no visible columns
 function statGroupOrder(selectedPos) {
-  const rest = selectedPos && POSITIONS.includes(selectedPos)
+  // CORE_POSITIONS, not POSITIONS — K/DEF have no stat group in
+  // STAT_GROUP_SEQUENCE at all, so treating one as a valid "bring this
+  // position's group forward" target would insert an id with no configured
+  // width into the offset math below (statGroupLayout), producing NaN
+  // offsets for every group after it.
+  const rest = selectedPos && CORE_POSITIONS.includes(selectedPos)
     ? [selectedPos, ...DEFAULT_STAT_POS_ORDER.filter((p) => p !== selectedPos)]
     : DEFAULT_STAT_POS_ORDER;
   return ["BASIC", ...rest];
@@ -1546,27 +1704,28 @@ function applyStatGroupOrder(order, visibleStats) {
 const MIN_PLAUSIBLE_ADP_PLAYERS = 100; // below this, the response is partial/degraded, not a real ADP set
 async function fetchSleeperAdpPlayers() {
   const year = new Date().getFullYear();
-  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF&order_by=pts_ppr`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const raw = Array.isArray(data) ? data : [];
+  const adpField = scoringAdpField(); // adp_ppr/adp_half_ppr/adp_std — see "scoring format" above
   const players = raw
-    .filter((p) => p.stats && isFinite(p.stats.adp_ppr) && p.player && POSITIONS.includes(p.player.position))
+    .filter((p) => p.stats && isFinite(p.stats[adpField]) && p.player && POSITIONS.includes(p.player.position))
     .map((p) => ({
       name: `${p.player.first_name} ${p.player.last_name}`,
       pos: p.player.position,
-      rank: Number(p.stats.adp_ppr), // coerced at the boundary — see median() above
+      rank: Number(p.stats[adpField]), // coerced at the boundary — see median() above
     }));
   // Two very different failures used to share one message. If Sleeper ever
-  // renames adp_ppr, every player fails the shape guard and the old code
+  // renames this field, every player fails the shape guard and the old code
   // reported "No ADP data for 2026 season yet" — which in August is an
   // entirely believable thing to read, so you'd shrug and move on instead of
   // noticing their API changed. Tell them apart by whether the response had
   // players in it at all.
   if (!players.length) {
     throw new Error(raw.length
-      ? `Sleeper returned ${raw.length} players but none carried a usable adp_ppr value — their API may have changed`
+      ? `Sleeper returned ${raw.length} players but none carried a usable ${adpField} value — their API may have changed`
       : `No ADP data for the ${year} season yet`);
   }
   return players;
@@ -1583,6 +1742,73 @@ async function upsertAdpSourceInStorage(id, name, color, players) {
   const src = makeAdpSource(name, players, { id, color, enabled });
   if (idx !== -1) list[idx] = src; else list.push(src);
   await saveAdpSources(list);
+}
+
+// ---------- built-in K/DEF ranking source ----------
+// Every other ranking source in this app (rankings.js, fp-rankings.js) has
+// its K/DEF rows stripped on purpose — this project's own league doesn't use
+// them, so there's never been bundled rank/tier data for kickers/defenses.
+// With K/DST defaulting ON for most users (see K_INCLUDE_KDST above), a
+// user who's never imported anything would otherwise see K/DEF players on
+// the board with no rank or tier at all. This auto-generates one, refreshed
+// the same silent way Sleeper Live ADP is (autoRefreshAdpAndStats below) —
+// same source/no-auth endpoint, no CSV, no user action needed.
+//
+// Ranked by projected PPR points (not ADP) per the reasoning logged when
+// this was scoped: ADP for K/DEF is thin/unreliable market data, whereas
+// projected points is a real, if rough, quality signal this app already
+// trusts elsewhere (BEER). K and DEF are sorted together into ONE combined
+// list (not two separately-ranked groups spliced together) — simplest
+// defensible ordering for "which of these bottom-of-draft options is better,"
+// not a rigorous cross-position value model.
+//
+// KDST_BASELINE_RANK deliberately pushes every K/DEF player's rank/tier to
+// the bottom of the board rather than wherever their raw point total would
+// otherwise land them — a top-projected kicker or defense is NOT a real
+// early-round-value pick the way that raw number might suggest next to
+// skill players, and real draft strategy is "take these last." Tiers 15-16
+// (the bottom two of TIER_ORDER's 16) are used for the same reason: it's
+// this source's own tier opinion (see buildConsensus's single-source
+// passthrough), so where it places them is what the board actually shows
+// whenever no other source ranks K/DEF. Both numbers are judgment calls, not
+// derived — revisit if real draft data ever suggests they should sit higher/
+// lower or split into more than two tiers.
+const KDST_BASELINE_RANK = 150;
+async function fetchSleeperKdstPlayers() {
+  const year = new Date().getFullYear();
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=K&position[]=DEF&order_by=pts_ppr`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  const raw = Array.isArray(data) ? data : [];
+  const ptsField = scoringPtsField();
+  const combined = raw
+    .filter((p) => p.player && (p.player.position === "K" || p.player.position === "DEF") && p.stats && isFinite(p.stats[ptsField]))
+    .map((p) => ({
+      name: `${p.player.first_name} ${p.player.last_name}`.trim(),
+      team: p.player.team || "",
+      pos: p.player.position,
+      pts: p.stats[ptsField],
+    }))
+    .sort((a, b) => b.pts - a.pts);
+  if (!combined.length) throw new Error(`No K/DEF projection data for the ${year} season yet`);
+  const n = combined.length;
+  return combined.map((p, i) => ({
+    name: p.name, team: p.team, pos: p.pos,
+    rank: KDST_BASELINE_RANK + i + 1,
+    tier: i < n / 2 ? "15" : "16",
+  }));
+}
+
+const KDST_SOURCE_ID = "kdst_auto";
+async function upsertKdstSourceInStorage() {
+  const players = await fetchSleeperKdstPlayers();
+  const list = await loadSources();
+  const idx = list.findIndex((s) => s.id === KDST_SOURCE_ID);
+  const enabled = idx !== -1 ? list[idx].enabled : true;
+  const src = makeSource("Kickers & Defenses (Sleeper)", players, { id: KDST_SOURCE_ID, color: "#6E8CAE", enabled });
+  if (idx !== -1) list[idx] = src; else list.push(src);
+  await saveSources(list);
 }
 
 // Percentile of each value within its own position group (0-100, higher =
@@ -1603,8 +1829,10 @@ const MIN_PLAUSIBLE_STATS_PLAYERS = 100;
 
 // Computes each team's total pass-catcher targets from a /stats/ response —
 // the denominator the "tgt_share" option needs, since no single player
-// field carries it. Only summed across RB/WR/TE (QBs don't receive targets,
-// K/DST are already excluded everywhere).
+// field carries it. Only summed across RB/WR/TE — QBs don't receive targets,
+// and K/DEF are never fetched into statList in the first place (see
+// fetchSleeperStatsPlayers's posQuery below, deliberately QB/RB/WR/TE only —
+// K/DEF get BASIC stats from a separate fetch, not this per-position one).
 function buildTeamTargetTotals(statPlayers) {
   const totals = new Map();
   statPlayers.forEach((p) => {
@@ -1631,10 +1859,16 @@ function buildTeamTargetTotals(statPlayers) {
 // Returns { year, players, playerCount } — throws on a degraded/failed fetch.
 async function fetchSleeperStatsPlayers() {
   const year = new Date().getFullYear();
-  const posQuery = "position[]=QB&position[]=RB&position[]=WR&position[]=TE";
+  // The prior-year role/usage stats (statRes below) only ever feed
+  // STAT_OPTION_DEFS' per-position "options", which K/DEF don't have — no
+  // need to fetch that data for them. The current-year projections (projRes)
+  // DO need to include K/DEF, since that's where BASIC's EXP/PROJ/P-WK comes
+  // from, and K/DEF get BASIC stats like every other position.
+  const posQueryStat = "position[]=QB&position[]=RB&position[]=WR&position[]=TE";
+  const posQueryProj = `${posQueryStat}&position[]=K&position[]=DEF`;
   const [projRes, statRes] = await Promise.all([
-    fetch(`https://api.sleeper.app/projections/nfl/${year}?season_type=regular&${posQuery}&order_by=pts_ppr`),
-    fetch(`https://api.sleeper.app/stats/nfl/${year - 1}?season_type=regular&${posQuery}&order_by=pts_ppr`),
+    fetch(`https://api.sleeper.app/projections/nfl/${year}?season_type=regular&${posQueryProj}&order_by=pts_ppr`),
+    fetch(`https://api.sleeper.app/stats/nfl/${year - 1}?season_type=regular&${posQueryStat}&order_by=pts_ppr`),
   ]);
   if (!projRes.ok) throw new Error(`Projections HTTP ${projRes.status}`);
   if (!statRes.ok) throw new Error(`Stats HTTP ${statRes.status}`);
@@ -1648,6 +1882,12 @@ async function fetchSleeperStatsPlayers() {
   }
 
   const teamTargetTotals = buildTeamTargetTotals(statList);
+  // Scoring format (see the "scoring format" section above) — read once,
+  // reused for both the current-year projection below (BASIC's PROJ/P-WK)
+  // and the prior-year fpPerDropback rate further down. Property name stays
+  // `ptsPpr` for both regardless of the actual format in use — an internal
+  // identifier, not a claim about which field it came from.
+  const ptsField = scoringPtsField();
 
   // Current-year projected volume, keyed by playerKey.
   const projByKey = new Map();
@@ -1656,7 +1896,7 @@ async function fetchSleeperStatsPlayers() {
     const key = playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position);
     projByKey.set(key, {
       pos: p.player.position,
-      ptsPpr: isFinite(p.stats.pts_ppr) ? p.stats.pts_ppr : null,
+      ptsPpr: isFinite(p.stats[ptsField]) ? p.stats[ptsField] : null,
       yearsExp: isFinite(p.player.years_exp) ? p.player.years_exp : null,
       passYd: isFinite(p.stats.pass_yd) ? p.stats.pass_yd : null,
       rushYd: isFinite(p.stats.rush_yd) ? p.stats.rush_yd : null,
@@ -1687,7 +1927,7 @@ async function fetchSleeperStatsPlayers() {
       rzTgt: isFinite(s.rec_rz_tgt) ? s.rec_rz_tgt : null,
       rushYdPerG: gp && isFinite(s.rush_yd) ? s.rush_yd / gp : null,
       passAttPerG: gp && isFinite(s.pass_att) ? s.pass_att / gp : null,
-      fpPerDropback: dropbacks && isFinite(s.pts_ppr) ? s.pts_ppr / dropbacks : null,
+      fpPerDropback: dropbacks && isFinite(s[ptsField]) ? s[ptsField] / dropbacks : null,
       recPerG: gp && isFinite(s.rec) ? s.rec / gp : null,
       snapsPerG: gp && offSnp ? offSnp / gp : null,
       rushAttPerG: gp && isFinite(s.rush_att) ? s.rush_att / gp : null,
@@ -1750,12 +1990,13 @@ async function fetchSleeperStatsPlayers() {
   // players are in both, but a rookie (no prior-year stats) or someone who
   // missed all of last season (no meaningful rate stats) legitimately isn't.
   const allKeys = new Set([...projByKey.keys(), ...rateByKey.keys()]);
-  const byPos = { QB: [], RB: [], WR: [], TE: [] };
+  const byPos = {};
+  POSITIONS.forEach((pos) => { byPos[pos] = []; });
   allKeys.forEach((key) => {
     const proj = projByKey.get(key);
     const rate = rateByKey.get(key);
     const pos = (proj && proj.pos) || (rate && rate.pos);
-    if (pos) byPos[pos].push({ key, proj: proj || {}, rate: rate || {} });
+    if (pos && byPos[pos]) byPos[pos].push({ key, proj: proj || {}, rate: rate || {} });
   });
 
   const players = {};
@@ -1763,7 +2004,9 @@ async function fetchSleeperStatsPlayers() {
     const entries = byPos[pos];
 
     // BASIC — percentiles computed within this position (a 10-year veteran
-    // QB and a 10-year veteran TE aren't being compared to each other).
+    // QB and a 10-year veteran TE aren't being compared to each other). Real
+    // for every position including K/DEF (they just came from a narrower
+    // fetch above — see posQueryProj — with no rate/options data attached).
     const basicRanks = BASIC_IDS.map((id) =>
       percentileRanker(entries.map((e) => rawBasicValue(id, e.proj)).filter((v) => v != null))
     );
@@ -1777,16 +2020,20 @@ async function fetchSleeperStatsPlayers() {
 
     // Every selectable option for this position — always computed, so the
     // stat picker only changes what renderStatGroups reads, never what got
-    // fetched.
+    // fetched. K/DEF have no STAT_OPTION_DEFS entry at all (see claude.md —
+    // "no K or DEF stats other than EXP/PROJ/P-WK"), so optionDefs is simply
+    // empty for them and `options` never gets set below — renderStatGroups
+    // already shows a blank placeholder for any position with no options.
+    const optionDefs = STAT_OPTION_DEFS[pos] || [];
     const optionRanks = {};
-    STAT_OPTION_DEFS[pos].forEach((def) => {
+    optionDefs.forEach((def) => {
       optionRanks[def.id] = percentileRanker(
         entries.map((e) => rawOptionValue(def.id, e.proj, e.rate)).filter((v) => v != null)
       );
     });
     entries.forEach(({ key, proj, rate }) => {
       const options = {};
-      STAT_OPTION_DEFS[pos].forEach((def) => {
+      optionDefs.forEach((def) => {
         const v = rawOptionValue(def.id, proj, rate);
         if (v == null) return;
         options[def.id] = { label: def.label, full: def.full, value: v, pct: optionRanks[def.id](v), display: formatDisplay(def.label, v) };
@@ -1819,7 +2066,14 @@ async function saveStatsToStorage(year, players) {
 // reliably populated on the public projections response.
 async function fetchSleeperPlayerIdMap() {
   const year = new Date().getFullYear();
-  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  // Includes K/DEF: a DEF's "player_id" here is Sleeper's own team-code
+  // pseudo-id (e.g. "LAR", confirmed by direct query) — that's the exact unit
+  // Sleeper's draft-write API (draft_pick_player/update_draft_queue) expects
+  // for drafting/queuing a defense, so it needs to flow through the same map
+  // real players' numeric ids do. avatarHtml() knows not to treat it as a
+  // headshot image id (see its own comment) — this map's contract is "the id
+  // Sleeper uses to draft this", not "has a real headshot".
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF&order_by=pts_ppr`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
@@ -1924,6 +2178,13 @@ async function autoRefreshAdpAndStats() {
     await saveInjuriesToStorage(injuries);
   } catch (e) {
     console.warn("[4th&Go] auto-refresh of Sleeper player IDs/injuries failed", e);
+  }
+  // Gated on the master toggle (default true) — a user who's turned K/DST
+  // off shouldn't have this quietly refetching/upserting in the background.
+  try {
+    if (await loadIncludeKdst()) await upsertKdstSourceInStorage();
+  } catch (e) {
+    console.warn("[4th&Go] auto-refresh of the built-in K/DEF source failed", e);
   }
 }
 
@@ -2139,13 +2400,16 @@ function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {})
 // what makes values comparable ACROSS positions (raw point totals aren't:
 // a QB's raw total dwarfs a TE's and says nothing about relative value).
 
-// This league's actual shape (10 teams, full PPR, 1QB/2RB/2WR/1TE/2FLEX, no
-// K/D — see claude.md). Reused nowhere else in the codebase yet; this is the
-// first place league shape needed a real representation instead of being
-// implicit in hardcoded numbers.
-const LEAGUE_SETTINGS = {
+// This league's DEFAULT shape (10 teams, full PPR, 1QB/2RB/2WR/1TE/2FLEX/1K,
+// no DEF — see claude.md) — used until a real draft's own settings sync in
+// (see applySyncedLeagueSettings below), and as the permanent fallback for
+// any field a synced draft doesn't provide. `let`, not `const`: unlike when
+// this was first built for one specific league, other users' leagues have
+// different team counts/starter slots, and REPLACEMENT_RANK needs to reflect
+// THEIR league, not this project's own — see applySyncedLeagueSettings.
+let LEAGUE_SETTINGS = {
   teams: 10,
-  starters: { QB: 1, RB: 2, WR: 2, TE: 1 },
+  starters: { QB: 1, RB: 2, WR: 2, TE: 1, K: 1 },
   flexSlots: 2, // FLEX-eligible: RB/WR/TE
 };
 
@@ -2154,7 +2418,9 @@ const LEAGUE_SETTINGS = {
 // flattens RB/WR value enough that flex usage skews roughly even between
 // them; TE sees much less flex usage in practice since a flex-worthy TE
 // is almost always started outright at the TE slot instead. Revisit if
-// replacement ranks below look off against real draft behavior.
+// replacement ranks below look off against real draft behavior. K is never
+// FLEX-eligible in a standard league, so it has no entry here — its
+// replacement rank below comes from its own starter slots only.
 const FLEX_SHARE = { RB: 0.45, WR: 0.45, TE: 0.10 };
 
 const SEASON_GAMES = 17;
@@ -2171,17 +2437,37 @@ const SEASON_GAMES = 17;
 // fewest games (least contact, backups rarely needed); RBs miss the most
 // (workload + committee/injury risk); WR/TE land in between. Revisit these
 // against real injury-rate data if replacement ranks ever look badly off.
-const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5 };
+// K (added for K/DST support) is set even higher than QB — kickers are
+// rarely benched for performance and see the least streaming/committee
+// churn of any position — a judgment call, not derived, same spirit as the
+// rest of this table; revisit if it ever looks off. DEF has no entry at all
+// and deliberately never will: see REPLACEMENT_RANK below for why a team
+// defense doesn't fit this man-games model in the first place.
+const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5, K: 16 };
+
+// Every position BEER's replacement-level math actually applies to — every
+// CORE_POSITIONS entry plus K (added for K/DST support: kickers are
+// individual players who can be benched/injured/have byes, so the same
+// man-games replacement model reasonably applies). DEF is deliberately
+// excluded, permanently: a team defense is a fixed 32-entity pool with no
+// waiver-replenishment churn the way an individual player has, so "how many
+// man-games deep before you hit replacement level" isn't a coherent question
+// for it. buildBeerValues below never computes a DEF entry as a result —
+// there is no workaround planned for this, DEF just doesn't participate in
+// BEER (see claude.md's K/DST section for the full reasoning, including the
+// separate raw-points-based league-rank substitute used elsewhere instead).
+const BEER_POSITIONS = [...CORE_POSITIONS, "K"];
 
 // REPLACEMENT_RANK[pos] = how many players deep (by projected points) you
 // have to go at that position before you hit "replacement level" for this
-// league's exact shape. Computed once from league math above — this number
-// itself is static, but WHICH player sits at that depth is not (see
-// buildBeerValues below, which recomputes live off the current draft state).
+// league's exact shape. Recomputed whenever LEAGUE_SETTINGS changes (see
+// applySyncedLeagueSettings) — the depth itself is a function of league
+// shape, but WHICH player sits at that depth is not (see buildBeerValues
+// below, which recomputes live off the current draft state).
 function computeReplacementRanks() {
   const flexSlotsTotal = LEAGUE_SETTINGS.flexSlots * LEAGUE_SETTINGS.teams;
   const ranks = {};
-  POSITIONS.forEach((pos) => {
+  BEER_POSITIONS.forEach((pos) => {
     const base = (LEAGUE_SETTINGS.starters[pos] || 0) * LEAGUE_SETTINGS.teams;
     const flexShare = Math.round(flexSlotsTotal * (FLEX_SHARE[pos] || 0));
     const starterSlots = base + flexShare;
@@ -2189,7 +2475,38 @@ function computeReplacementRanks() {
   });
   return ranks;
 }
-const REPLACEMENT_RANK = computeReplacementRanks();
+let REPLACEMENT_RANK = computeReplacementRanks();
+
+// Syncs LEAGUE_SETTINGS from a real draft's own settings (Sleeper's
+// GET /v1/draft/{id} response, already fetched by panel.js's
+// fetchDraftSettings for the Roster popover's slot counts) and recomputes
+// REPLACEMENT_RANK off the result — this is what makes BEER's replacement-
+// level math work for OTHER leagues' shapes, not just this project's own
+// 10-team/1QB/2RB/2WR/1TE/2FLEX default. Only overwrites a field when the
+// synced value is actually a finite number; anything missing/malformed keeps
+// whatever LEAGUE_SETTINGS already had (this project's own league's shape,
+// or whatever a previous successful sync left it at) rather than corrupting
+// it with a partial/bad response. `teams` is read straight from Sleeper's
+// settings object — confirmed present on a real draft's settings alongside
+// slots_qb/rb/wr/te/flex/bn (same response fetchDraftSettings already
+// trusts for those). Callers must re-render after calling this — it doesn't
+// trigger one itself, same as every other pure data function in this file.
+function applySyncedLeagueSettings(draftSettings) {
+  if (!draftSettings) return;
+  const num = (v, fallback) => (Number.isFinite(v) ? v : fallback);
+  LEAGUE_SETTINGS = {
+    teams: num(draftSettings.teams, LEAGUE_SETTINGS.teams),
+    starters: {
+      QB: num(draftSettings.slots_qb, LEAGUE_SETTINGS.starters.QB),
+      RB: num(draftSettings.slots_rb, LEAGUE_SETTINGS.starters.RB),
+      WR: num(draftSettings.slots_wr, LEAGUE_SETTINGS.starters.WR),
+      TE: num(draftSettings.slots_te, LEAGUE_SETTINGS.starters.TE),
+      K: num(draftSettings.slots_k, LEAGUE_SETTINGS.starters.K),
+    },
+    flexSlots: num(draftSettings.slots_flex, LEAGUE_SETTINGS.flexSlots),
+  };
+  REPLACEMENT_RANK = computeReplacementRanks();
+}
 
 // Sleeper's projections endpoint — same domain, same no-auth public endpoint
 // fetchSleeperAdp() already calls in rankings-manager.js for adp_ppr, just
@@ -2199,20 +2516,25 @@ const REPLACEMENT_RANK = computeReplacementRanks();
 // than inventing a CSV path for one and a live fetch for the other.
 async function fetchSleeperProjections() {
   const year = new Date().getFullYear();
-  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&order_by=pts_ppr`;
+  // Includes K/DEF, even though DEF never gets a real BEER value (see
+  // BEER_POSITIONS/REPLACEMENT_RANK above) — DEF's raw projected points are
+  // still needed as the substitute metric for its league-rank badge
+  // (buildPositionRankValueMap below), so projMap has to carry them too.
+  const url = `https://api.sleeper.app/projections/nfl/${year}?season_type=regular&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF&order_by=pts_ppr`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const raw = Array.isArray(data) ? data : [];
+  const ptsField = scoringPtsField();
   const players = raw
-    .filter((p) => p.stats && isFinite(p.stats.pts_ppr) && p.player && POSITIONS.includes(p.player.position))
+    .filter((p) => p.stats && isFinite(p.stats[ptsField]) && p.player && POSITIONS.includes(p.player.position))
     .map((p) => ({
       key: playerKey(`${p.player.first_name} ${p.player.last_name}`, p.player.position),
-      pts: Number(p.stats.pts_ppr),
+      pts: Number(p.stats[ptsField]),
     }));
   if (!players.length) {
     throw new Error(raw.length
-      ? `Sleeper returned ${raw.length} players but none carried a usable pts_ppr projection — their API may have changed`
+      ? `Sleeper returned ${raw.length} players but none carried a usable ${ptsField} projection — their API may have changed`
       : `No projections for the ${year} season yet`);
   }
   return players;
@@ -2254,6 +2576,13 @@ async function autoRefreshProjections() {
 function buildBeerValues(rows, projMap, takenKeySet = new Set()) {
   const byPos = {};
   rows.forEach((r) => {
+    // DEF never gets a BEER value, full stop — see BEER_POSITIONS/
+    // REPLACEMENT_RANK above for why a team defense doesn't fit the
+    // man-games replacement model. Gating on REPLACEMENT_RANK having an
+    // entry (rather than relying on the `|| available.length` fallback
+    // below) means a position with no entry is silently skipped entirely,
+    // not given a degenerate "replacement = worst available" value.
+    if (REPLACEMENT_RANK[r.pos] === undefined) return;
     const pts = projMap[r.key];
     if (pts === undefined) return;
     (byPos[r.pos] = byPos[r.pos] || []).push({ key: r.key, pts, taken: takenKeySet.has(r.key) });
@@ -2272,6 +2601,28 @@ function buildBeerValues(rows, projMap, takenKeySet = new Set()) {
     });
   });
   return { values, replacementByPos };
+}
+
+// DEF never gets a BEER value (see buildBeerValues), so it needs a different
+// metric to answer "how do my defenses rank against the league's" at all —
+// otherwise buildTeamPositionRanks below would just silently show nothing
+// for DEF, since beerValues.get() always misses for a DEF key. Summed
+// PROJECTED POINTS (not BEER value) is the substitute: comparable within
+// DEF-vs-DEF, which is the only comparison this specific badge ever makes,
+// even though it isn't on the same normalized scale a real replacement-value
+// number would be. Deliberately NOT used for buildTeamOverallRanks (the "Tot"
+// grade) — mixing DEF's raw points into a total-BEER-value sum would
+// conflate two different units; that rollup should keep calling
+// buildTeamOverallRanks with the plain (unmodified) beerValues map, where DEF
+// is simply and correctly absent from the sum.
+function buildPositionRankValueMap(rows, beerValues, projMap) {
+  const map = new Map(beerValues);
+  rows.forEach((r) => {
+    if (r.pos !== "DEF") return;
+    const pts = projMap[r.key];
+    if (pts !== undefined) map.set(r.key, pts);
+  });
+  return map;
 }
 
 // Team-level positional value ranking — backlog #13 ("team grade vs.

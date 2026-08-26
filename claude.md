@@ -13,9 +13,19 @@ Sleeper's public read-only draft API. The board lives in its own resizable
 popup window, opened directly by the toolbar icon — see "Window architecture"
 below; there is no docked side panel (removed 2026-08-23).
 
-**League format this is tuned for:** 10-team, full PPR, 1QB/2RB/2WR/1TE/2FLEX,
-no K/D. This matters for ranking/logic decisions (see backlog #4) and is why
-K/DST rows are dropped everywhere a source is parsed or fetched.
+**League format this project's own maintainer drafts in:** 10-team, full PPR,
+1QB/2RB/2WR/1TE/2FLEX, no K/DST — this is why `LEAGUE_SETTINGS`'s hardcoded
+default shape looks like this, and why some early ranking/logic decisions
+(see backlog #4) were made against it specifically. As of 2026-08-26 (see
+"K/DST support" below) this is no longer a hard assumption baked into the
+whole app: K/DST are real, full-featured positions the board supports by
+default (most leagues use them), off by a toggle for leagues like this one
+that don't, and the league's actual shape (team count, starters) syncs live
+from a real draft's own settings rather than staying hardcoded to just this
+league. Read that section before assuming "no K/DST" anywhere else in this
+file — plenty of older entries below still describe the pre-2026-08-26
+behavior accurately for how something was BUILT, but "K/DST rows are
+dropped" is no longer true of the app as it stands today.
 
 ## File structure
 - `manifest.json` — MV3 config. Host permission for `api.sleeper.app` only
@@ -2166,6 +2176,392 @@ leaguemates during a live draft.
   multi-line control), and a Test button + status line mirroring
   `#sleeperTestField`'s exact layout/status-class pattern
   (`testStatus`/`.ok`/`.err`).
+
+## K/DST support (added 2026-08-26, own worktree/branch)
+This project was built for one specific league that doesn't use a kicker or
+defense (see "What this is" above) — but most leagues do, and this was
+scoped explicitly to open the tool up for them without touching the existing
+league's behavior. Discussed at length before any code was written (see the
+conversation itself for the full back-and-forth) — the key scoping decisions,
+all made by the user directly, not assumed:
+- K/DST support defaults **ON** (most leagues use them), with an explicit
+  off-switch for this project's own league.
+- Full board functionality for K/DEF — filterable, ranked, tiered, shown in
+  queue/roster like any other player — but **excluded from BEER/VBD** (the
+  4-card "best by position" grid) and **excluded from Best Picks Right Now
+  by default** (a second, narrower opt-in exists for that specifically).
+- League **shape** (team count, starter slots) syncs live from the real
+  draft's own settings rather than staying hardcoded to this one league —
+  the other half of "make this usable for other leagues," which K/DST alone
+  wouldn't have solved on its own.
+
+### Data model — POSITIONS is structural, includeKdst is a UI toggle
+`POSITIONS` (`shared.js`) is now `["QB","RB","WR","TE","K","DEF"]` —
+permanent, unconditional. Parsing, matching, storage shape, and CSV import
+all recognize K/DEF regardless of any setting; a CSV/paste with K or DEF rows
+that used to get silently dropped now imports normally. **Whether K/DEF
+actually show up anywhere** is a separate, independent boolean:
+`K_INCLUDE_KDST` (`includeKdst` in storage, default **true**,
+`loadIncludeKdst()`/`saveIncludeKdst()`). This split matters — a runtime
+toggle that changed what "valid position" even meant would make CSV import
+validation behave differently depending on a setting, which is a worse shape
+than "always recognize it, sometimes hide it." `activePositions(includeKdst)`
+(shared.js) is the one place that turns the toggle into an actual position
+list (`POSITIONS` when on, `CORE_POSITIONS` when off) — every position-filter
+button list, the pick-sync allowlist in `poll()`, and the roster/team-count
+iterations all read from this instead of branching on `includeKdst`
+individually.
+- **`CORE_POSITIONS`** (`["QB","RB","WR","TE"]`) is the narrower, permanent
+  set with real stat groups, BEER replacement math, and the BEST-by-position
+  grid — K/DEF never join it, master toggle or not. Places that used to loop
+  `POSITIONS` for something CORE_POSITIONS-only (the stat-group picker,
+  `statGroupOrder`'s "bring this position forward" logic, the BEST grid
+  iteration in `renderBest()`) were switched to `CORE_POSITIONS` explicitly —
+  missing even one of these was a real bug caught during this build:
+  `statGroupOrder("K")` would have inserted an id with no configured width
+  into `statGroupLayout`'s offset math, poisoning every stat column's
+  `translateX` with `NaN`. Same class of fix needed in `rankings-manager.js`'s
+  `crEffectiveStatPos()` (the Creator's stat-group-follows-filter logic).
+- **`BEER_POSITIONS`** (`["QB","RB","WR","TE","K"]`) is CORE_POSITIONS plus
+  K — see the BEER section below for why K is in and DEF permanently isn't.
+- **`filterActivePositions()`** (defined separately in both `panel.js` and
+  `rankings-manager.js`, same logic) is the definitive gate applied to
+  consensus rows before they reach the board/Best Picks/team counts —
+  turning the master toggle off hides K/DEF everywhere those come from even
+  if a K/DEF ranking source happens to still be enabled in storage (e.g. the
+  auto-generated one below, which doesn't get deleted when the toggle flips
+  off, just stops being surfaced).
+- **Position colors**: `POS_COLORS` (legacy) and `POS_V2`/`posTint()`
+  (current) both got K/DEF entries — K reuses the violet already in the
+  signal palette (`#A78BFA`), DEF got a new steel-blue (`#6E8CAE`, light-mode
+  version `#2B5F82`) since every other hue in this app's palette was already
+  spoken for. New CSS tokens (`--pos-k`/`--pos-def`/`--legacy-pos-k`/
+  `--legacy-pos-def` + tint variants) added to both `panel.html` (dark AND
+  light theme blocks) and `rankings-manager.html`'s own `:root` copy, plus new
+  `.badge2.t-k`/`.t-def` and `.posRankPill.t-k`/`.t-def` tone classes for the
+  position-count/league-rank pills.
+
+### Sleeper fetch endpoints — K/DEF added, mostly for free
+Every fetch already hitting `api.sleeper.app/projections/nfl/{year}` got
+`&position[]=K&position[]=DEF` appended (`fetchSleeperAdpPlayers`,
+`fetchSleeperPlayerIdMap`, `fetchSleeperProjections`) — same endpoint, same
+no-auth, no manifest change, confirmed via direct query before wiring any of
+it in (not assumed): a kicker is a normal individual player record; a
+**defense's `player_id` is Sleeper's own team-code pseudo-id** (e.g. `"LAR"`),
+its `first_name`/`last_name` are the city and mascot (`"Los Angeles"`/
+`"Rams"`), `years_exp` is always `null`, and `injury_status` is always `null`
+(a team entity can't be questionable). Because name-building everywhere
+already just does `${first_name} ${last_name}` generically, DEF identity
+("Los Angeles Rams") falls out of the existing code with no special-casing
+needed for parsing/matching.
+- **`fetchSleeperStatsPlayers()`** (the per-position selectable-stat fetch)
+  deliberately does NOT add K/DEF to its prior-year `/v1/stats/` query
+  (`posQueryStat`, unchanged) — that data only ever feeds STAT_OPTION_DEFS'
+  per-position options, which K/DEF don't have (see Stats below). It DOES add
+  them to the current-year `/v1/projections/` query (`posQueryProj`, a
+  separate string now) since that's where BASIC's EXP/PROJ/P-WK comes from,
+  and K/DEF get BASIC like everyone else. The position loop that builds
+  `players[key].options` now reads `STAT_OPTION_DEFS[pos] || []` instead of
+  `STAT_OPTION_DEFS[pos]` directly — the old direct-index form would throw
+  for K/DEF (no entry in that object at all).
+- **`avatarHtml()`** (shared.js) has one DEF-specific branch: a defense's
+  `idsMap[key]` is a team-code string, not a numeric player id, so there's no
+  real headshot thumb at that path — `pos === "DEF"` forces the fallback
+  (initials + team-logo badge) regardless of what's in `idsMap`, rather than
+  trying (and failing) to load `thumb/LAR.jpg`. The id itself stays real and
+  correct for queue/draft purposes — see the background.js fix below.
+- **`background.js`'s `assertDigits`** (validates `player_id`/`draft_id`/
+  `pick_no` before splicing them into a GraphQL query string) would have
+  rejected every real defense pick/queue action with "Invalid player ID",
+  since a team-code id like `"LAR"` isn't digits. Caught before shipping, not
+  after a bug report: added a separate `assertPlayerId()` (digits OR a 2-4
+  letter team code) used only for `player_id` args; `draft_id`/`pick_no` stay
+  on the strict digits-only `assertDigits`, since those should never be
+  anything else.
+
+### No bundled default data for K/DEF — solved with an auto-generated source
+`rankings.js`/`fp-rankings.js` both have their K/DST rows stripped on purpose
+(this league doesn't use them) — so unlike every other position, there was no
+existing default ranking data to fall back on. With the master toggle
+defaulting ON, a user who's imported nothing would otherwise see K/DEF as
+draftable-but-completely-unranked. Fixed with a new built-in source,
+auto-refreshed the same silent way Sleeper Live ADP is:
+- **`fetchSleeperKdstPlayers()`** (shared.js) pulls K+DEF from the
+  projections endpoint, ranked by **projected PPR points** (not ADP — K/DEF
+  ADP is thin/unreliable market data; projected points is the same rough
+  quality signal BEER already trusts elsewhere), combined into ONE sorted
+  list (not two separately-ranked groups spliced together — simplest
+  defensible ordering, not a rigorous cross-position model).
+- **`KDST_BASELINE_RANK = 150`** deliberately pushes every K/DEF player's
+  rank to the bottom of the board rather than wherever their raw point total
+  would otherwise land them — a top-projected kicker is NOT an early-round
+  value pick the way that number might suggest sitting next to skill
+  players, and real draft strategy is "take these last." Tiers 15-16 (the
+  bottom two of 16) are used for the same reason — this is the source's own
+  tier opinion, and where it places them is what the board shows whenever no
+  other source ranks K/DEF. Both numbers are judgment calls, not derived.
+  Verified against live data before shipping: the auto-generated source
+  (`kdst_auto`, "Kickers & Defenses (Sleeper)") combined with just the
+  bundled 356-player default source correctly tiers a real top kicker into
+  tier 15/16, sitting at consensus rank ~151+ — not colliding with real
+  tier-1 skill players — via `buildConsensus`'s existing depth-blending math
+  (no special-casing needed there at all, the tier/rank numbers this source
+  assigns are what carries the "bottom of the board" behavior through).
+- **`upsertKdstSourceInStorage()`** upserts by the fixed id `kdst_auto`
+  (never duplicates on repeated refresh, verified directly), gated inside
+  `autoRefreshAdpAndStats()` on `loadIncludeKdst()` — turning the master
+  toggle off stops it from refetching/upserting, though it doesn't delete an
+  already-created source (see `filterActivePositions` above for why that's
+  fine — the toggle is the definitive display gate regardless of what's in
+  storage).
+- The source is a normal, deletable, non-`codeSeeded` source once created —
+  same conventions as any import, not a special protected entry.
+
+### BEER/VBD carve-outs — DEF excluded permanently, K included normally
+Per direct instruction: leave DEF out of BEER's replacement-value math
+entirely (a team defense is a fixed 32-entity pool with no waiver-
+replenishment churn the way an individual player has — the whole man-games
+model assumes bye/injury churn pulling bench players into starting lineups,
+which doesn't apply to a team entity), but K participates in BEER normally
+(kickers are individual players who really do get benched/injured/have byes,
+so the same model reasonably applies to them).
+- **`LEAGUE_SETTINGS`** is now `let`, not `const` (see league-shape sync
+  below), and its `starters` map gained a `K` entry (defaulting to 1) — but
+  deliberately has **no `DEF` entry at all**, ever.
+- **`AVG_GAMES_PLAYED`** gained `K: 16` — kickers are rarely
+  benched/streamed, the highest of any position (a judgment call, not
+  derived, same spirit as the rest of that table).
+- **`BEER_POSITIONS`** (`[...CORE_POSITIONS, "K"]`) is the actual list
+  `computeReplacementRanks()` iterates now (previously bare `POSITIONS`,
+  which would have thrown trying to compute a DEF replacement rank with no
+  `AVG_GAMES_PLAYED.DEF`/`starters.DEF` to divide by).
+- **`buildBeerValues()`** explicitly gates on `REPLACEMENT_RANK[r.pos] !==
+  undefined` before doing anything with a row — DEF never has an entry, so
+  it's skipped outright, rather than falling through to the old `||
+  available.length` fallback (which would have silently computed a
+  degenerate "replacement = worst available defense" value instead of no
+  value at all).
+- **The BEST QB/RB/WR/TE grid (`renderBest()`, panel.js)** iterates
+  `CORE_POSITIONS`, not `POSITIONS` — K/DEF never get a card or the "On tap"
+  crown here, full stop, regardless of the master toggle. Direct
+  instruction: real draft strategy says never reach for a kicker/defense
+  early, and this grid's entire job is spotlighting the single best value
+  pick — crowning one would actively encourage the wrong thing.
+- **Best Picks Right Now** (`renderRecommendations()`, panel.js) filters K/DEF
+  out of `bestPicksRows` by default, gated on a SECOND, narrower setting —
+  `K_INCLUDE_KDST_BEST_PICKS` (`includeKdstInBestPicks`, default **false**,
+  `#includeKdstBestPicksToggle` in Settings, only shown while the master
+  toggle is on). Turning it on lets K/DEF be recommended there like any other
+  position; turning off the master toggle hides this sub-setting entirely
+  (meaningless without the master toggle).
+- **DEF's league-rank workaround** — the small "3RD of 10" badge next to each
+  position's count (backlog #13's `buildTeamPositionRanks`) sums BEER value
+  per position by default, which is undefined for DEF. Rather than DEF simply
+  never showing a rank badge, **`buildPositionRankValueMap(rows, beerValues,
+  projMap)`** (shared.js) builds a copy of the BEER-values map with DEF's
+  entries substituted by **raw summed projected points** instead — a real,
+  comparable number since this badge only ever compares DEF against DEF
+  (never against another position), even though it isn't on BEER's
+  normalized scale. Used ONLY for the per-position badges
+  (`renderTeamCountsV2`/`renderRosterPopover` in panel.js, both pass this
+  augmented map into `buildTeamPositionRanks`). The overall "Tot" team-grade
+  rollup (`buildTeamOverallRanks`) deliberately keeps using the **plain,
+  unmodified** `beerValues` map — mixing DEF's raw points into a total-BEER-
+  value sum would conflate two different units, so DEF is simply and
+  correctly absent from that total, not substituted into it. The per-position
+  badge's tooltip says "by projected points" for DEF specifically and "by
+  BEER value" for everything else, rather than silently reusing wording that
+  would now be inaccurate for one position.
+
+### League shape sync — the other half of "usable for other leagues"
+K/DST support alone doesn't make this usable for someone else's league if
+`LEAGUE_SETTINGS` (team count, starter slots) stays hardcoded to this one
+league's shape — a 12-team league with different starters needs BEER's
+replacement-level math to reflect ITS shape, not this project's. Chosen over
+manual entry, per direct preference: **sync it live from the real draft's own
+settings**, the same `GET /v1/draft/{id}` response `fetchDraftSettings`
+(panel.js) already fetches for the Roster popover's slot counts.
+- **`applySyncedLeagueSettings(draftSettings)`** (shared.js) overwrites
+  `LEAGUE_SETTINGS.teams`/`.starters.{QB,RB,WR,TE,K}`/`.flexSlots` from the
+  draft's `teams`/`slots_qb`/`slots_rb`/`slots_wr`/`slots_te`/`slots_k`/
+  `slots_flex` fields — but only when a field is actually a finite number;
+  anything missing/malformed keeps whatever `LEAGUE_SETTINGS` already had
+  (this project's own hardcoded default, or a previous successful sync)
+  rather than corrupting it with a partial response. Recomputes
+  `REPLACEMENT_RANK` immediately after, since that's derived from
+  `LEAGUE_SETTINGS` and would otherwise go stale.
+- Wired into `poll()` (panel.js), right alongside the existing
+  `fetchDraftSettings` call — fire-and-forget, once per draftId, same as
+  before; now also calls `applySyncedLeagueSettings` + a `renderAll()` once
+  it resolves, since BEER values everywhere just changed.
+- **`buildMyRosterSlots()`** (the Roster popover's slot list) gained K and
+  DEF starter slots (`rosterSlotCount("slots_k", ...)`/
+  `rosterSlotCount("slots_def", 1)` — DEF isn't in `LEAGUE_SETTINGS.starters`
+  at all, so its fallback is a plain standard-league guess of 1, not routed
+  through league-shape sync) and now iterates `activePositions(includeKdst)`
+  instead of bare `POSITIONS`, so turning the master toggle off restores the
+  exact original starter-slot list.
+- **Not yet built, logged as a real gap, not silently accepted**: this only
+  syncs the numbers `fetchDraftSettings` already exposes (teams/starters/
+  flex). It doesn't attempt anything more exotic (superflex, dynasty-specific
+  slots, etc.) — those would need their own scoping pass if ever needed.
+
+### Verification
+Confirmed live against the real Sleeper API (not assumed) before writing any
+UI: K/DEF entries in the projections/stats/ADP responses, a DEF's team-code
+identity shape, `injury_status`/`years_exp` always null for DEF. `test.js`
+gained a new block (POSITIONS/CORE_POSITIONS/BEER_POSITIONS, DEF excluded
+from BEER, `buildPositionRankValueMap`'s substitution, `applySyncedLeagueSettings`
+overwriting only finite fields and recomputing `REPLACEMENT_RANK`) — 110
+checks passing, up from 90. Also verified end-to-end in a browser (a stubbed-
+`chrome.storage` harness over `python3 -m http.server`, same pattern as the
+Stage 2 audit's escaping-fix verification): the K/DEF filter buttons appear
+in both the board and the Rankings Manager (Sources tab + Creator), the auto-
+generated source populates and tiers correctly, the BEST grid stays
+QB/RB/WR/TE-only, Best Picks correctly excludes then includes K once its
+setting is flipped, and turning the master toggle off restores the board to
+byte-identical original behavior (filters, Best Picks, roster slots) with no
+K/DEF anywhere.
+
+### Real bug found live-testing a 12-team/3-flex mock draft (fixed same day)
+User-reported, not caught by the verification above: drafting into an extra
+FLEX slot (a real league configured with `slots_flex: 3`, not the usual 2)
+didn't show up in the popped-out Roster window — confirmed the actual
+Sleeper data itself was fine first (`GET /v1/draft/{draft_id}` on the user's
+real draft ID does return `teams: 12`, `slots_flex: 3`, `slots_k`/`slots_def`
+— the field names/shapes this whole feature assumed were right) before
+looking for the bug in this project's own code.
+
+**Root cause**: `draftSettings` (and by extension the synced
+`LEAGUE_SETTINGS`) only ever lived in memory, set once inside `poll()`'s
+`fetchDraftSettings` callback — and **only the main board window ever polls
+Sleeper** (documented architecture, "one window polls, by design"). A popped-
+out Roster window runs its own completely separate copy of this script (see
+"Queue/Roster pop-out windows") and never calls `poll()`/
+`fetchDraftSettings` itself, so its own `draftSettings` stayed `null` forever
+and its own `LEAGUE_SETTINGS` never got `applySyncedLeagueSettings` called on
+it either — it was permanently stuck on the hardcoded 10-team/2-flex
+default, with no way to ever learn the real 3-flex shape. The 3rd flex
+pick wasn't actually missing, it just had no FLEX slot to render into over
+there (would have silently landed in bench, mislabeled, once enough other
+positions were filled to reach it).
+
+This is the same class of gap `K_DRAFT`/`K_SLEEPER_QUEUE` already solved for
+picks/queue when the pop-out windows feature was built (2026-08-25) —
+`draftSettings` just never got the same treatment at the time, since no one
+had yet tested a league whose slot counts actually diverged from the
+defaults enough to notice.
+
+**Fix**: `K_DRAFT_SETTINGS` (chrome.storage, `{draftId, settings}` — Sleeper's
+own `/v1/draft/{id}` `.settings` object, verbatim). The main window persists
+it right after `applySyncedLeagueSettings` in `poll()`'s callback; a
+`storage.onChanged` listener entry (every window, including the main one
+reacting to its own write — harmless, idempotent) applies it and re-renders;
+`init()` also loads whatever was last persisted for the CURRENT draftId
+(same `String(saved.draftId) === String(id)` guard `loadDraftState()`
+already uses for picks) so a popout opened AFTER the main window already
+synced doesn't have to wait for a live event that might not fire again this
+session (the main window only fetches once per draftId). Verified directly
+against the user's real draft ID: a simulated main-window sync followed by
+opening a **fresh** popout tab (a genuinely separate JS context, matching
+the real bug scenario) correctly showed 3 FLEX rows with no sync of its own.
+
+**Related, same day: mid-draft settings changes on Sleeper's side weren't
+picked up at all** — user tested this deliberately (changed a real draft's
+roster settings, e.g. WR slot count, after the room was already open) and,
+correctly, nothing updated. Root cause is by design, not a bug:
+`draftSettingsForId !== draftId` in `poll()` only ever fetches settings
+ONCE per draftId, on purpose (an occasional settings check on every ~3s poll
+tick would be wasted work for something that essentially never changes
+mid-draft). Rather than add a recurring poll for a genuinely rare scenario,
+"Refresh now" (`poll(draftId, {manual:true})`) now ALSO forces a fresh
+settings pull (`if (manual || draftSettingsForId !== draftId)`) — the
+button that already means "I think something's stale, force it" is the
+right, low-cost place for this, not a new background timer.
+
+**Second related regression, found the SAME session, right after the fix
+above shipped**: a plain reload-and-resync of the SAME draft stopped
+picking up a mid-session Sleeper-side settings change too — the exact
+scenario "Refresh now" was just fixed for, but via the normal Sync button
+this time. Root cause was the K_DRAFT_SETTINGS restore itself: `init()` was
+setting `draftSettingsForId = savedDs.draftId` on restore, which made
+`poll()`'s own `draftSettingsForId !== draftId` guard believe a fresh fetch
+had already happened THIS session — so the very first Sync after a reload
+silently kept the stale restored shape instead of checking Sleeper again.
+Fixed by never setting `draftSettingsForId` at restore time — a restored
+value is a placeholder for "something reasonable to show before the real
+fetch," never a substitute for that fetch; only poll()'s own live resolve
+is allowed to set it. Verified directly: planted a stale "2 WR / 2 FLEX"
+value (simulating the reload), hit Sync, and it correctly corrected to the
+draft's real live shape ("1 WR / 3 FLEX") with no manual refresh needed.
+
+## Scoring format (added 2026-08-26, same day)
+Every points/ADP fetch in this app (`fetchSleeperAdpPlayers`,
+`fetchSleeperProjections`, `fetchSleeperKdstPlayers`, `fetchSleeperStatsPlayers`)
+was hardcoded to Sleeper's PPR fields (`pts_ppr`/`adp_ppr`) unconditionally —
+a reasonable default while this was built for one specific full-PPR league,
+but silently wrong for anyone else. **Confirmed live, not theoretical**: the
+same user draft used to find the FLEX bugs above has its own
+`metadata.scoring_type` set to `"std"` (Standard) — meaning every BEER
+value, projection, and ADP number had been computed off the wrong scoring
+format for that entire test session.
+
+**Auto-detected from the same call already used for league-shape sync** —
+`fetchDraftSettings` (panel.js) now also reads `data.metadata.scoring_type`
+off the same `/v1/draft/{id}` response, no second fetch. `shared.js` tracks
+two separate inputs and one resolved, actually-used value:
+- `SYNCED_SCORING_FORMAT` — whatever the current draft's own metadata says,
+  applied via `applySyncedScoringFormat(scoringType)`. Only overwrites on
+  one of the three known suffixes (`ppr`/`half_ppr`/`std`) — an
+  unrecognized/missing value (a custom-scoring league, or a draft object
+  that doesn't expose it) leaves whatever was already there, same fallback
+  discipline as `applySyncedLeagueSettings`.
+- `SCORING_FORMAT_OVERRIDE` — a manual setting (`#scoringFormatSelect` in
+  the board's Settings panel, `null`/"Auto" by default), explicitly scoped
+  as a **backup, not the primary path** per direct instruction — an info
+  icon next to the field says so, same click-to-open pattern as the
+  Sleeper-token field's own info button. Only relevant when the auto-sync
+  gets it wrong or a draft doesn't expose `scoring_type` at all.
+- `SCORING_FORMAT` (what fetch functions actually read, via
+  `scoringPtsField()`/`scoringAdpField()`) = override if set, else synced,
+  else the safe `"ppr"` default — recomputed by `recomputeScoringFormat()`
+  whenever either input changes.
+
+**Re-fetches automatically when the effective format actually changes**,
+not just on the next window reopen — both `poll()`'s settings-sync callback
+and the manual override's `change` handler compare `SCORING_FORMAT` before
+vs. after, and if it moved, re-run `autoRefreshAdpAndStats()` +
+`autoRefreshProjections()` right away so stale wrong-format numbers don't
+linger until something else happens to trigger a refetch. Verified live
+against the real Standard-scoring test draft: Jahmyr Gibbs' projection read
+268.4 under the synced Standard format, then correctly jumped to 331.4 the
+instant the override was set to "Force: PPR" — no reload needed.
+
+**Persisted and relayed the same way league shape is** — `K_DRAFT_SETTINGS`
+(shared.js, moved there from panel.js specifically so `rankings-manager.js`
+can read it too) now also carries `scoringType` alongside `settings`.
+`rankings-manager.js` loads it at its own `init()` (guarded on being synced
+to the SAME `draft.draftId` this tab already has, mirroring panel.js's own
+restore guard) and listens for live changes — otherwise its own "⟳ Fetch
+stats/projections/ADP" buttons and silent auto-refresh would keep pulling
+PPR data regardless of what the board window had already correctly synced,
+overwriting good data with wrong-format data.
+
+**UI copy fixed to not falsely claim PPR** — `STAT_META`/`STAT_OPTION_DEFS`
+tooltip text ("Projected fantasy points... (PPR)") and a few user-facing
+strings in `rankings-manager.js` (button tooltips, toasts, the BEER column
+header) all said "PPR" unconditionally; reworded to "(your league's
+scoring)" or dropped the claim entirely rather than making them dynamically
+reactive to a state that can change at runtime — the actual number is
+always correct regardless of wording, and the real active format is visible
+in the board's status dropdown (`renderStatusPanel`, labeled "synced from
+draft" vs. "manually forced" so a wrong value is never silently ambiguous
+about its source).
+
+`test.js` gained a new block (defaults to PPR, switches on a synced format,
+ignores unrecognized sync values, override wins over a later sync, clearing
+the override falls back to synced, an invalid override is treated as Auto)
+— 121 checks passing, up from 110.
 
 ## Design fundamentals pass (completed, historical)
 An Apple-design/Emil-design-eng principles review fixed: double-click source
