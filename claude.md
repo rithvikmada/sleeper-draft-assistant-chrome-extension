@@ -46,6 +46,13 @@ K/DST rows are dropped everywhere a source is parsed or fetched.
 - `build-fp-source.js` — one-off regeneration script (not extension code).
   Usage: `node build-fp-source.js` after replacing the source CSV. Not a live
   test suite — see Testing below.
+- `games-played-data.js` — real historical games-played-by-finish-rank
+  curves per position (`GAMES_PLAYED_CURVE`), auto-generated from 3 seasons
+  of Sleeper's own stats by `build-games-played-data.js`. Feeds the BEER
+  man-games replacement calc — see the "BEER / VBD" section below for the
+  full writeup, including the real (and somewhat surprising) finding this
+  data surfaced. Re-run the build script (updating `SEASONS`) once a new
+  NFL season completes to roll the 3-year window forward.
 - `4thGo-feature-backlog.md` — the actual backlog, with sequencing notes. Don't
   re-derive priorities from scratch; read that file. Note: some items (ADP
   endpoint, VORP) are now unblocked (see Feature backlog section below).
@@ -784,16 +791,71 @@ hit replacement level) from this league's real settings
    this was picked as reasonable and defensible, not exotic, per the build
    prompt's own instruction.
 2. Man-games: `REPLACEMENT_RANK[pos] = ceil(starterSlots × 17 games /
-   AVG_GAMES_PLAYED[pos])`. `AVG_GAMES_PLAYED` is one blended constant per
-   position (QB 14, RB 11.5, WR 13.5, TE 13.5) — QBs miss the fewest games
-   (least contact, backups rarely needed mid-season), RBs miss the most
-   (workload + committee/injury risk), WR/TE in between. This is what
-   converts "how many starters does the league need" into "how many players
-   deep you actually have to draft to cover a full season" — starters alone
-   undercount replacement depth since byes/injuries/in-season churn pull
-   bench players into starting lineups.
-   Resulting depths for this league's exact settings (locked in as a
-   regression check in `test.js`): **QB13, RB43, WR37, TE16.**
+   gamesPlayedAt(pos, rank))`. This is what converts "how many starters does
+   the league need" into "how many players deep you actually have to draft
+   to cover a full season" — starters alone undercount replacement depth
+   since byes/injuries/in-season churn pull bench players into starting
+   lineups.
+
+**Games-played is now REAL historical data, not a guess (upgraded
+2026-08-25) — read this before touching `AVG_GAMES_PLAYED`, which no longer
+exists.** The original build used one hand-guessed constant per position
+(QB 14, RB 11.5, WR/TE 13.5), explicitly logged at the time as "a reasonable
+estimate, not fit to real injury data." That honesty prompted the user to
+ask directly whether we could get real data instead of guessing — the answer
+was yes, and it changed a real assumption that turned out to be wrong.
+
+- **Source**: `build-games-played-data.js` fetches 3 seasons
+  (2022-2024, re-run and update `SEASONS` to roll the window forward each
+  year) from Sleeper's public `/stats/nfl/{year}` endpoint — same domain,
+  no new host permission. Each row carries both `gp` (real games played)
+  AND `pos_rank_ppr` (that player's actual season-END finish rank by total
+  PPR points) — so bucketing by real historical performance tier needs no
+  separate historical-ADP source, just this one endpoint.
+- **Output**: `games-played-data.js` (checked in, auto-generated — don't
+  hand-edit) holds `GAMES_PLAYED_CURVE[pos]`, a 60-deep array where index
+  `i` = the real average games played by players who finished that season
+  ranked `i+1` at that position, smoothed across a ±4-rank window and
+  averaged over the 3 seasons. Loaded before `shared.js` in both
+  `panel.html` and `rankings-manager.html`, and in `test.js`'s loader —
+  same pattern as `rankings.js`/`fp-rankings.js`.
+- **The real, honest finding this surfaced — the original per-position
+  guess was WRONG in its own terms, not just imprecise:** the assumption
+  had been "RBs miss the most games" (workload/injury risk) with QB missing
+  the fewest. Real data shows the opposite shape: QB's curve drops off
+  steeply by rank (a rank-40 QB averages ~7 games — because a backup QB
+  only accumulates value by starting when the incumbent gets hurt, so low
+  QB rank near-perfectly correlates with missed time), while RB stays
+  comparatively flat even out to rank 60 (~14-15 games) — a low-rank RB is
+  usually a healthy committee/timeshare back who just doesn't get enough
+  touches to score well, not someone who's injured. **Games played and
+  fantasy production are different things at RB, conflated at QB.** This
+  is exactly the kind of wrong-but-plausible-sounding assumption that
+  motivated getting real data in the first place — it would never have
+  been caught by reasoning about it harder, only by measuring it.
+- **What this data does NOT prove — stated plainly, not glossed over.**
+  Bucketing by season-END finish rank measures "how many games did players
+  who ended up around this production tier play," which blends TRUE
+  injury/availability with committee/opportunity-share effects (especially
+  at RB, per the finding above). It is the closest real proxy available
+  without deeper play-by-play/snap-share data, not a pure health measure.
+  It's also still just 3 seasons of NFL-wide noise, not a large sample —
+  treat the resulting `REPLACEMENT_RANK` numbers as "a real, defensible
+  estimate," not as ground truth.
+- **The circularity, and how it's resolved**: games-played now varies BY
+  the very rank `REPLACEMENT_RANK` is trying to compute (deeper picks play
+  fewer games), so a single division no longer works. `computeReplacementRanks()`
+  solves this by iterating: start from a guess (rank 20), look up
+  games-played at that depth via `gamesPlayedAt(pos, rank)`, recompute the
+  depth from that, repeat 5 times. The curve is smooth (no cliffs), so this
+  converges in 2-3 iterations in practice — verified in `test.js`.
+- **Resulting depths for this league's exact settings changed materially
+  once real data replaced the guess** (also a locked-in regression check in
+  `test.js` — expected to shift again whenever the curve is regenerated for
+  a new season, that's not a bug): **QB11, RB34, WR32, TE14** — all
+  shallower than the old guessed depths (QB13, RB43, WR37, TE16), because
+  real games-played at those depths is generally higher than the old
+  constants assumed, especially at RB.
 
 **Live recompute — no new polling mechanism, reuses the existing pick-sync
 plumbing exactly as the build prompt required.** `REPLACEMENT_RANK[pos]`

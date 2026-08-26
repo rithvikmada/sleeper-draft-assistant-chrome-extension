@@ -2024,22 +2024,45 @@ const SEASON_GAMES = 17;
 // The "man-games" piece of BEER: converts "how many starter-slots does the
 // league need" into "how many players deep do you actually need to draft to
 // cover a full season," by dividing total starter man-games needed by the
-// average games a rostered player around that depth actually plays. Starters
-// alone undercount replacement depth — byes, injuries, and in-season bench
-// churn pull more than just the nominal starter count into starting lineups
-// over a season. Single blended constant per position (not split into a
-// separate starter-tier/replacement-tier number) — simple and defensible,
-// not exotic, per the reasoning logged when this was built. QBs miss the
-// fewest games (least contact, backups rarely needed); RBs miss the most
-// (workload + committee/injury risk); WR/TE land in between. Revisit these
-// against real injury-rate data if replacement ranks ever look badly off.
-const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5 };
+// average games a rostered player around THAT DEPTH actually plays.
+// Starters alone undercount replacement depth — byes, injuries, and
+// in-season bench churn pull more than just the nominal starter count into
+// starting lineups over a season.
+//
+// Used to be one guessed flat constant per position (QB 14, RB 11.5, WR/TE
+// 13.5) — replaced (2026-08-25) with GAMES_PLAYED_CURVE (games-played-data.js),
+// a real games-played-by-finish-rank curve built from 3 seasons of Sleeper's
+// own stats (see build-games-played-data.js). Real data overturned part of
+// the original guess: QB's curve drops off steeply (a rank-40 QB is almost
+// always a backup who only played because a starter got hurt, averaging
+// ~7 games), but RB/WR/TE stay much flatter through rank 60 (~14-15 games)
+// than assumed — a mid/low-rank RB is usually a healthy committee/timeshare
+// player, not an injured one, so "RB misses the most games" was wrong as a
+// blanket assumption. This is why RB's replacement rank changed materially
+// once real data replaced the guess — see claude.md for the honest before/
+// after comparison and the caveat about what this curve does and doesn't
+// measure (season-end finish rank blends injury attrition with committee/
+// opportunity share, especially at RB — it is NOT a pure health/availability
+// measure, just the closest real proxy available without deeper play-by-play
+// data).
+function gamesPlayedAt(pos, rank) {
+  const curve = GAMES_PLAYED_CURVE[pos];
+  const idx = Math.min(curve.length, Math.max(1, Math.round(rank))) - 1;
+  return curve[idx];
+}
 
 // REPLACEMENT_RANK[pos] = how many players deep (by projected points) you
 // have to go at that position before you hit "replacement level" for this
 // league's exact shape. Computed once from league math above — this number
 // itself is static, but WHICH player sits at that depth is not (see
 // buildBeerValues below, which recomputes live off the current draft state).
+//
+// Games-played now varies BY rank (the curve above), not a single constant,
+// which makes this circular — the answer depends on which games-played
+// value you look up, which depends on the answer. Solved by iterating a
+// few times: start from a reasonable guess, look up games-played AT that
+// depth, recompute the depth, repeat until it stops moving (in practice
+// this converges in 2-3 iterations since the curve is smooth, not a cliff).
 function computeReplacementRanks() {
   const flexSlotsTotal = LEAGUE_SETTINGS.flexSlots * LEAGUE_SETTINGS.teams;
   const ranks = {};
@@ -2047,7 +2070,12 @@ function computeReplacementRanks() {
     const base = (LEAGUE_SETTINGS.starters[pos] || 0) * LEAGUE_SETTINGS.teams;
     const flexShare = Math.round(flexSlotsTotal * (FLEX_SHARE[pos] || 0));
     const starterSlots = base + flexShare;
-    ranks[pos] = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / AVG_GAMES_PLAYED[pos]));
+    let rank = 20; // starting guess, refined below
+    for (let i = 0; i < 5; i++) {
+      const gamesPlayed = gamesPlayedAt(pos, rank);
+      rank = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / gamesPlayed));
+    }
+    ranks[pos] = rank;
   });
   return ranks;
 }
