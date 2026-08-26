@@ -2510,6 +2510,66 @@ function findNearMatchOrphans(canonicalName, canonicalPos, sources, merges = {})
   return matches;
 }
 
+// Finds pairs of DIFFERENT player identities (post-merge) that look like the
+// same real person under two different name spellings — same last name +
+// first initial + position, the same fallback rule findNearMatchOrphans and
+// matchPick already trust elsewhere. Added 2026-08-27 after a real gap was
+// found live: findOrphans (above) only ever flags a name that appears in
+// EXACTLY ONE source, so it's blind to a name variant that happens to be
+// used by TWO OR MORE sources at once (e.g. two different creators who both
+// abbreviate "Puka Nacua" as "P. Nacua") — that variant looks like a fully
+// corroborated, legitimate player to findOrphans, not a lone anomaly, even
+// though it's really the same person as "Puka Nacua" sitting in a separate
+// row. This scans every DISTINCT identity actually on the board (not just
+// single-source orphans), so it catches that case too.
+//
+// Ambiguity-safety, same discipline as findNearMatchOrphans: a pair is only
+// reported when it's a TRUE MUTUAL match — each side's own name search finds
+// the other as its one and only candidate. A one-directional match (e.g.
+// "Jaylen Gibbs" and "Jahmyr Gibbs" would both separately look like a match
+// for "J. Gibbs", but "J. Gibbs" itself can't tell which) is deliberately
+// left alone rather than guessed.
+function findPossibleDuplicates(sources, merges = {}) {
+  const enabled = usableSources(sources).filter((s) => s.enabled);
+  const byPos = {}; // pos -> Map<key, {key,name,pos}>, one entry per distinct post-merge identity
+  enabled.forEach((src) => {
+    src.players.forEach((p) => {
+      if (!p.pos) return;
+      const key = applyMerge(playerKey(p.name, p.pos), merges);
+      if (!byPos[p.pos]) byPos[p.pos] = new Map();
+      if (!byPos[p.pos].has(key)) byPos[p.pos].set(key, { key, name: p.name, pos: p.pos });
+    });
+  });
+
+  const pairs = [];
+  Object.values(byPos).forEach((posMap) => {
+    const entries = [...posMap.values()];
+    // Each entry's own single unique near-match candidate, if any — same
+    // rule as findNearMatchOrphans, applied within this one position's pool.
+    const candidateOf = new Map(); // key -> the one other key it looks like, or absent if none/ambiguous
+    entries.forEach((a) => {
+      const normA = norm(a.name);
+      const lastA = normA.split(" ").slice(-1)[0];
+      const firstA = normA.charAt(0);
+      const matches = entries.filter(
+        (b) => b.key !== a.key && norm(b.name).endsWith(" " + lastA) && norm(b.name).charAt(0) === firstA
+      );
+      if (matches.length === 1) candidateOf.set(a.key, matches[0].key);
+    });
+    const seen = new Set();
+    entries.forEach((a) => {
+      const bKey = candidateOf.get(a.key);
+      if (!bKey || candidateOf.get(bKey) !== a.key) return; // require a true mutual match, not one-directional
+      const pairId = [a.key, bKey].sort().join("~~");
+      if (seen.has(pairId)) return;
+      seen.add(pairId);
+      const b = entries.find((e) => e.key === bKey);
+      pairs.push({ keyA: a.key, nameA: a.name, keyB: b.key, nameB: b.name, pos: a.pos });
+    });
+  });
+  return pairs;
+}
+
 // ---------- BEER / VBD (backlog #8) ----------
 // Value-Based Drafting, BEER (man-games) baseline. See claude.md for the full
 // writeup, including why BEER (not VOLS/BEER+) is the target and what's

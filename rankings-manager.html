@@ -618,6 +618,29 @@ tr.avoidRow { background: var(--red-a12); }
       </div>
     </div>
 
+    <!-- Possible duplicates (added 2026-08-27) — Unmatched above only ever
+         catches a name that appears in EXACTLY ONE source (findOrphans). A
+         real gap found live: two DIFFERENT sources can both independently
+         abbreviate the same player the same way ("P. Nacua"), which looks
+         fully corroborated to that detector, not a lone anomaly — so it
+         never showed up in Unmatched at all, even though it's really a
+         duplicate of "Puka Nacua" sitting in its own row. This is a
+         dedicated detector for exactly that (findPossibleDuplicates,
+         shared.js) — defaults open (unlike Unmatched/Merged) since this is
+         actual board-correctness noise, not a rare safety net. -->
+    <div class="pageSection">
+      <div id="dupesSection" style="display:none">
+        <div id="dupesHeader" class="banner">
+          <div class="l">
+            <span class="tag">Possible duplicates</span>
+            <span class="txt" id="dupesCount"></span>
+          </div>
+          <span class="caret" id="dupesToggle">▾</span>
+        </div>
+        <div id="dupesList" class="bannerBody" style="display:none"></div>
+      </div>
+    </div>
+
     <!-- Merged players (added 2026-08-27) — there was no way to see or undo a
          merge once made (via the MERGE button above, or the right-click
          "merge near matches" menu on the table below) short of editing

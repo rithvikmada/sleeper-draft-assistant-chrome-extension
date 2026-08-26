@@ -65,7 +65,7 @@ for (const file of ["rankings.js", "fp-rankings.js", "games-played-data.js", "sh
 const NAMES = [
   "parseRankings", "buildConsensus", "buildAdpConsensus", "buildValueComparison",
   "validateParsedSource", "usableSources", "median", "norm", "playerKey", "esc",
-  "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans",
+  "makeSource", "makeAdpSource", "makeEchoGuard", "findOrphans", "findNearMatchOrphans", "findPossibleDuplicates",
   "normalizeTierLabel", "TIER_ORDER", "RANKINGS", "FP_RANKINGS",
   "buildBeerValues", "REPLACEMENT_RANK", "LEAGUE_SETTINGS", "buildTeamPositionRanks", "buildTeamOverallRanks",
   "injuryBadge", "INJURY_META",
@@ -79,7 +79,7 @@ const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
   parseRankings, buildConsensus, buildAdpConsensus, buildValueComparison,
   validateParsedSource, usableSources, median, norm, playerKey, esc,
-  makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans,
+  makeSource, makeAdpSource, makeEchoGuard, findOrphans, findNearMatchOrphans, findPossibleDuplicates,
   normalizeTierLabel, TIER_ORDER, RANKINGS, FP_RANKINGS,
   buildBeerValues, REPLACEMENT_RANK, LEAGUE_SETTINGS, buildTeamPositionRanks, buildTeamOverallRanks,
   injuryBadge, INJURY_META,
@@ -302,6 +302,49 @@ const mk = (id, name, arr) =>
   ]);
   const ambMatches = findNearMatchOrphans("Bijan Robinson", "RB", [ambiguous], {});
   eq(ambMatches.length, 0, "two same-initial same-lastname RBs in one source -> zero matches, not a guess");
+}
+
+// ============================================================
+// findPossibleDuplicates — found live: TWO sources independently abbreviating
+// the same player the same way ("P. Nacua") is invisible to findOrphans
+// (which only ever flags a name used by exactly ONE source), since neither
+// side looks like a lone single-source anomaly. This is the dedicated
+// detector for that case.
+// ============================================================
+
+{
+  // The exact real scenario this was built from: "Puka Nacua" (used by two
+  // sources) and "P. Nacua" (used by two DIFFERENT sources) — neither name
+  // variant is a single-source orphan, so findOrphans finds nothing here.
+  const srcA = mk("a", "A", [{ name: "Puka Nacua", team: "LAR", pos: "WR", tier: "", rank: 2 }]);
+  const srcB = mk("b", "B", [{ name: "Puka Nacua", team: "LAR", pos: "WR", tier: "", rank: 3 }]);
+  const srcC = mk("c", "C", [{ name: "P. Nacua", team: "LAR", pos: "WR", tier: "", rank: 4 }]);
+  const srcD = mk("d", "D", [{ name: "P. Nacua", team: "LAR", pos: "WR", tier: "", rank: 4 }]);
+  eq(Object.keys(findOrphans([srcA, srcB, srcC, srcD], {})).length, 0,
+    "findOrphans sees nothing wrong — both name variants are used by 2 sources each, neither looks like a lone anomaly");
+  const dupes = findPossibleDuplicates([srcA, srcB, srcC, srcD], {});
+  eq(dupes.length, 1, "findPossibleDuplicates catches the real duplicate findOrphans misses");
+  ok(
+    (dupes[0].nameA === "Puka Nacua" && dupes[0].nameB === "P. Nacua") ||
+    (dupes[0].nameA === "P. Nacua" && dupes[0].nameB === "Puka Nacua"),
+    "the reported pair is the two Nacua variants"
+  );
+
+  // Ambiguity safety: a THIRD same-initial same-lastname player breaks the
+  // mutual match and must be skipped, not guessed — same discipline as
+  // findNearMatchOrphans.
+  const srcE = mk("e", "E", [{ name: "Jaylen Gibbs", team: "DET", pos: "RB", tier: "", rank: 40 }]);
+  const srcF = mk("f", "F", [{ name: "Jahmyr Gibbs", team: "DET", pos: "RB", tier: "", rank: 1 }]);
+  const srcG = mk("g", "G", [{ name: "J. Gibbs", team: "DET", pos: "RB", tier: "", rank: 1 }]);
+  const ambDupes = findPossibleDuplicates([srcE, srcF, srcG], {});
+  eq(ambDupes.length, 0,
+    "J. Gibbs is ambiguous between Jahmyr and Jaylen Gibbs -> no pair reported, not a guess");
+
+  // Already merged -> not reported again as a "possible" duplicate (it's a
+  // confirmed one already, shown in the separate Merged Players list).
+  const merged = { [playerKey("P. Nacua", "WR")]: playerKey("Puka Nacua", "WR") };
+  eq(findPossibleDuplicates([srcA, srcC], merged).length, 0,
+    "a pair already resolved via K_MERGES doesn't show up as a possible duplicate too");
 }
 
 // ============================================================

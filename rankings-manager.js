@@ -517,6 +517,53 @@ $("orphansHeader").addEventListener("click", () => {
   renderOrphans();
 });
 
+// ---------- possible duplicates (added 2026-08-27) ----------
+// Unmatched Players above only ever catches a name that appears in EXACTLY
+// ONE source (findOrphans) — it's blind to two DIFFERENT sources that both
+// happen to abbreviate the same player the same way ("P. Nacua" used by two
+// different creators), since that variant looks fully corroborated, not a
+// lone anomaly. Real gap, found live. findPossibleDuplicates (shared.js)
+// scans every distinct identity actually on the board for a mutual
+// last-name+first-initial+position match, regardless of how many sources
+// back each side. Defaults OPEN (unlike Unmatched/Merged, which default
+// collapsed) — this is board-correctness noise a user should see right
+// away, not a rare safety net to tuck away.
+let dupesCollapsed = false;
+function renderPossibleDuplicates() {
+  const pairs = findPossibleDuplicates(sources, merges);
+  if (!pairs.length) { $("dupesSection").style.display = "none"; return; }
+  $("dupesSection").style.display = "block";
+  $("dupesCount").textContent = `${pairs.length} pair${pairs.length === 1 ? "" : "s"}`;
+  $("dupesList").innerHTML = pairs.map((p, i) => `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <span style="flex:1">${esc(p.nameA)} <span style="color:var(--dim)">and</span> ${esc(p.nameB)} <span style="color:var(--dim)">(${esc(p.pos)})</span> — likely the same player</span>
+      <button data-dupe="${i}" class="mergeBtn" style="padding:3px 8px;font-size:10px">MERGE</button>
+    </div>`).join("");
+  $("dupesList").style.display = dupesCollapsed ? "none" : "block";
+  $("dupesToggle").textContent = dupesCollapsed ? "▸" : "▾";
+  document.querySelectorAll("[data-dupe]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const p = pairs[Number(btn.dataset.dupe)];
+      // Keep whichever name has no abbreviation-looking period and is
+      // longer as canonical — a reasonable default, not load-bearing, since
+      // either direction produces a working merge; the display name just
+      // reads better this way in practice ("Puka Nacua", not "P. Nacua").
+      const aLooksFull = !p.nameA.includes(".") && p.nameA.length >= p.nameB.length;
+      const canonical = aLooksFull ? p : { keyA: p.keyB, nameA: p.nameB, keyB: p.keyA, nameB: p.nameA };
+      const next = { ...merges };
+      next[canonical.keyB] = canonical.keyA;
+      merges = next;
+      echo.write(K_MERGES, () => saveMerges(merges)).catch(reportSaveFailure("merges"));
+      toast(`Merged "${canonical.nameB}" into "${canonical.nameA}".`);
+      renderAll();
+    });
+  });
+}
+$("dupesHeader").addEventListener("click", () => {
+  dupesCollapsed = !dupesCollapsed;
+  renderPossibleDuplicates();
+});
+
 // ---------- merged players (added 2026-08-27) ----------
 // Both merge paths above (the orphans list's MERGE button, and the
 // right-click "merge near matches" menu on the table) had no way to UNDO a
@@ -719,6 +766,7 @@ function renderAll() {
     renderSourceBar();
     renderTable(rows);
     renderOrphans();
+    renderPossibleDuplicates();
     renderMerged();
   } catch (e) {
     // Same reasoning as panel.js's renderAll: fail legibly and leave a way
