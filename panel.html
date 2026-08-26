@@ -427,6 +427,13 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
   padding: 2px 7px; margin-left: 4px;
 }
 .btn.full { width: 100%; }
+.rbIntervalRow { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-subtle); }
+/* .rbGapInput is applied straight to the <input> (no wrapping container like
+   the rest of .input2's usage), so its own text styling is set explicitly
+   here rather than relying on the ".input2 input" descendant rule, which
+   would never match an element that has no children. */
+.rbGapInput { width: 44px; flex: none; text-align: center; padding: 0 4px; color: var(--text-primary); font: var(--type-ui); font-size: var(--text-sm); }
+.rbGapDash { color: var(--text-muted); }
 .rosterSummary { display: flex; gap: 4px; padding: 2px 2px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border-subtle); }
 .rosterSummary .sItem { flex: 1; text-align: center; }
 .rosterSummary .sItem .sPos { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em; margin-bottom: 3px; }
@@ -830,14 +837,16 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
           </div>
         </div>
         <!-- EXPERIMENTAL, for fun only — sends a random trash-talk message
-             into Sleeper's draft chat every few picks. Zero signal, zero
-             effect on rankings/consensus/anything this tool actually
-             computes. Only meaningful (and only shown) once Draft actions is
-             on, same gating as the fields above — see K_RAGEBAIT_ENABLED in
-             panel.js and "Rage bait mode" in claude.md. -->
+             into Sleeper's draft chat every 10-13 picks by default (the
+             interval is user-adjustable, see the Manage popover). Zero
+             signal, zero effect on rankings/consensus/anything this tool
+             actually computes. Only meaningful (and only shown) once Draft
+             actions is on, same gating as the fields above — see
+             K_RAGEBAIT_ENABLED in panel.js and "Rage bait mode" in
+             claude.md. -->
         <div class="switchField" id="rageBaitField" style="display:none">
           <span class="fieldLabel">Rage bait mode</span>
-          <button id="rageBaitToggle" class="switchTrack" role="switch" aria-checked="false" data-tip="Sends a random message into Sleeper's draft chat every few picks, just to mess with your leaguemates. For fun only — no real signal."><span class="switchThumb"></span></button>
+          <button id="rageBaitToggle" class="switchTrack" role="switch" aria-checked="false" data-tip="Sends a random message into Sleeper's draft chat every 10–13 picks (by default), just to mess with your leaguemates. For fun only — no real signal."><span class="switchThumb"></span></button>
         </div>
         <!-- Collapsed to one row — "Manage" opens #rageBaitPopover (a sibling
              of #settingsPanel, positioned off the Manage button) rather than
@@ -872,6 +881,13 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
       <div class="queueHeader rbPopHeader">
         <span>Rage bait messages <button type="button" id="rageBaitResetBtn" class="infoBtn" aria-label="Reset to the default list" data-tip="Reset to the default list">↺</button></span>
         <button type="button" id="rageBaitPopoverClose" class="iconBtn2 rbPopClose" aria-label="Close"></button>
+      </div>
+      <div class="rbIntervalRow">
+        <span class="fieldLabel">Trigger every</span>
+        <input id="rageBaitMinGap" type="number" min="1" max="99" class="input2 sm rbGapInput" data-tip="Minimum picks between messages" />
+        <span class="rbGapDash">–</span>
+        <input id="rageBaitMaxGap" type="number" min="1" max="99" class="input2 sm rbGapInput" data-tip="Maximum picks between messages" />
+        <span class="fieldLabel">picks</span>
       </div>
       <div id="rageBaitMessagesList" class="rbMsgList"></div>
       <button type="button" id="rageBaitAddBtn" class="btn secondary sm full" data-tip="Add another message to the pool">+ Add message</button>
@@ -949,6 +965,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
     </div>
   </div>
   <script src="rankings.js"></script>
+  <script src="games-played-data.js"></script>
   <script src="shared.js"></script>
   <script src="panel.js"></script>
 </body>

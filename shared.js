@@ -67,6 +67,10 @@ const K_INJURIES = "playerInjuries"; // { updatedAt, injuries: { playerKey: {sta
                                      // walks. See INJURY_META/injuryBadge below.
 const K_RAGEBAIT_ENABLED  = "rageBaitEnabled";  // bool — master on/off, only meaningful when Draft actions is also on
 const K_RAGEBAIT_MESSAGES = "rageBaitMessages"; // string[] — the pool a random message gets picked from; falls back to DEFAULT_RAGE_BAIT_MESSAGES when empty/unset
+const K_RAGEBAIT_MIN_GAP  = "rageBaitMinGap";    // number — min picks between auto-fires, user-adjustable in the Manage popover
+const K_RAGEBAIT_MAX_GAP  = "rageBaitMaxGap";    // number — max picks between auto-fires
+const RAGEBAIT_MIN_GAP_DEFAULT = 10;
+const RAGEBAIT_MAX_GAP_DEFAULT = 13;
 
 // For-fun only — no signal, no effect on rankings/consensus/anything else this
 // tool computes. Sent verbatim into Sleeper's draft chat (see "Rage bait mode"
@@ -496,6 +500,163 @@ function validateParsedSource(players, warnings = []) {
       (warnings.length ? " " + warnings.join(" ") : ""),
   };
 }
+
+// ---------- AI ranking/ADP source converter (skill + standalone prompt) ----------
+// Every ranking/ADP source imported into this tool goes through parseRankings()
+// above, and real-world exports vary wildly (multiple tabs, no combined rank,
+// letter tiers vs numeric vs none, team/bye baked into the name cell, K/DST
+// rows that need dropping). Rather than teach every user that shape by hand,
+// this is a single canonical set of conversion instructions, offered two ways
+// from the Rankings Manager UI (see rankings-manager.js's
+// downloadConverterSkill()/copyConverterPrompt()):
+//   - a real Claude Code skill (SKILL.md) a Claude Code user drops into
+//     .claude/skills/ so Claude can do the conversion inside a coding session
+//   - a standalone prompt (plain .md) for pasting into any chat (claude.ai,
+//     ChatGPT, etc.) alongside the raw export, for non-Claude-Code users
+// Both share the same body text (CONVERTER_INSTRUCTIONS_MD below) so the
+// actual rules can't drift between the two surfaces — only the wrapper
+// (skill frontmatter vs. a plain instruction preamble) differs.
+//
+// Deliberately self-contained, no repo data: a fresh install of this
+// extension ships with zero ranking/ADP sources (only the live Sleeper ADP
+// API), so unlike the in-session conversion process this project's own dev
+// history used (cross-referencing rankings.js/fp-rankings.js for abbreviated
+// names), neither of these can assume any bundled name data exists to check
+// against. Ambiguous/abbreviated names are flagged in the output for the
+// user to resolve after import via the Rankings Manager's right-click
+// "merge near matches" (see claude.md's Rankings Manager architecture
+// section) instead.
+const CONVERTER_INSTRUCTIONS_MD = `## What this does
+
+Turns a raw fantasy football rankings or ADP export — pasted text, a copied
+table, a CSV in a different shape, whatever you have — into a clean CSV file
+ready to import into 4th&Go's Rankings Manager ("+ ADD SOURCE" / "+ ADD ADP
+SOURCE").
+
+## Output format
+
+Produce a CSV with this exact header row, in this column order:
+
+Rank,Name,Team,Position,Tier
+
+- **Rank** — required. The player's rank *within this export*. If the export
+  has no numeric rank column at all, number rows in the order they appear.
+- **Name** — required. Full player name only. If the export bakes team and/or
+  bye week into the name cell (e.g. "Jahmyr Gibbs DET (6)" or "Tyreek Hill FA
+  ()"), strip that off — output just "Jahmyr Gibbs".
+- **Team** — the player's NFL team abbreviation if the export has one.
+  Leave blank if it doesn't; never guess one.
+- **Position** — QB, RB, WR, or TE only. **Drop every K and DST/DEF row
+  entirely** — don't include them in the output at all. If a cell has a
+  positional-tier suffix like "RB1" or "WR12", output just the base position
+  ("RB", "WR") — the number is rank information, not part of the position.
+- **Tier** — only include this column if the source export actually has tier
+  information. If it has none, omit the Tier column entirely (don't invent
+  tiers). Tiers can be numeric (1 = best) or letters (S,A,B,C,...,O, S = best)
+  — either works, output whatever scheme the source itself uses, don't
+  convert one to the other.
+
+Always include a header row. Use plain comma-separated values, one player per
+row, no extra commentary rows mixed into the CSV itself.
+
+## Common shapes you'll see, and how to handle each
+
+- **Combined rankings export, one player per row, one overall rank column** —
+  the easy case. Map columns straight across.
+- **Multiple side-by-side tables, one per position, each with its OWN 1..N
+  rank and no combined/overall rank anywhere** (common for free creator
+  guides — a "QB1-20" list, "RB1-19" list, etc., with no way to compare a QB
+  to an RB). Do NOT invent a combined overall rank by interleaving them or
+  guessing positional value — that would silently corrupt this tool's cross-
+  position ranking math. Instead output each position's own 1..N rank as the
+  Rank column exactly as given, and **tell the user explicitly, outside the
+  CSV, that this is a position-only source** — they need to check the
+  "Position-only source" box when importing it (this tool has a dedicated,
+  safe way to handle exactly this shape).
+- **Multi-analyst combined table** (one row per player, one rank column PER
+  analyst, "-" or blank meaning that analyst didn't rank them, often an
+  average/consensus column too). If asked to extract ONE specific analyst as
+  its own source, use ONLY that analyst's column — never the average/
+  consensus column (this tool computes its own blend across whatever sources
+  get imported; pre-blending here would double-count that analyst's opinion).
+  Drop any row where that analyst's cell is "-"/blank from that analyst's CSV.
+- **Multiple tabs/sheets in one paste** — treat each tab as a separate
+  source/CSV unless told otherwise; don't merge them into one file.
+- **No position column at all** — if you can determine each player's real
+  position from context (a section header, common knowledge is NOT enough —
+  only use what's actually in the export), fill it in. If you genuinely can't
+  tell, say so plainly rather than guessing; a row with no position imports
+  as inert (it won't rank, tier, or show up anywhere) if left blank, so it's
+  safer to flag it than fabricate a guess that's wrong.
+- **Abbreviated or initial-only first names** ("K. Gainwell", "J. Chase") —
+  keep the name exactly as given in the CSV; do not expand it from your own
+  knowledge (a guess here can silently attach the wrong real player). Instead
+  list every such name in the "Needs review" section below, so the user can
+  fix it after import using the Rankings Manager's right-click "merge near
+  matches" feature.
+
+## What NOT to do
+
+- Don't fabricate a player, a team, a position, or a tier that isn't actually
+  present in the source.
+- Don't average/blend multiple analysts' opinions into one number yourself —
+  this tool already does that blending across whatever sources you import.
+- Don't reorder or renumber a positional-only export into a fake combined
+  rank.
+- Don't silently drop players you're unsure about — flag them instead (see
+  below) so the user can decide.
+
+## Output shape — always give back both parts
+
+1. The CSV itself, in its own fenced code block, ready to copy-paste into
+   the Rankings Manager's "…or paste rows here" box (or save as a .csv and
+   use the upload field).
+2. A short plain-text summary immediately after it:
+   - How many players were parsed, and the position breakdown.
+   - Whether this is a normal or position-only source (and therefore whether
+     the user needs to check that box on import).
+   - A "Needs review" list of any abbreviated/ambiguous names, or anything
+     you weren't confident about, with the row context — empty/omit this
+     list if there's nothing to flag.
+
+If the source clearly isn't a fantasy football rankings/ADP export at all
+(e.g. it's prose, a webpage's unrelated content, or has no players in it),
+say so instead of forcing something into the CSV format.`;
+
+// Wrapping the shared body in a real Claude Code skill (SKILL.md format —
+// YAML frontmatter + instructions) vs. a standalone prompt preamble for
+// pasting into any chat. Keep both thin wrappers — the actual rules only
+// live in CONVERTER_INSTRUCTIONS_MD above.
+const RANKING_CONVERTER_SKILL_MD = `---
+name: rankings-csv-converter
+description: Converts a raw fantasy football rankings or ADP export (any layout — multiple tabs, no combined rank, letter or numeric tiers, no tiers at all) into a clean CSV ready to import into 4th&Go's Rankings Manager. Use whenever the user pastes or uploads a rankings/ADP export and wants it turned into an importable CSV.
+---
+
+# Rankings/ADP CSV converter
+
+You are helping the user convert a raw fantasy football rankings or ADP
+export — from any site or creator, in whatever shape it's in — into a CSV
+file for 4th&Go's Rankings Manager. The user will provide the raw export
+(pasted text, an uploaded file, or a screenshot transcribed to text) in their
+next message, or has already included it above.
+
+${CONVERTER_INSTRUCTIONS_MD}
+`;
+
+const RANKING_CONVERTER_PROMPT_MD = `# Rankings/ADP CSV converter
+
+I have a raw fantasy football rankings or ADP export (pasted below, or in an
+attached file) that I want turned into a CSV I can import into my draft
+board tool. Please convert it following these exact rules.
+
+${CONVERTER_INSTRUCTIONS_MD}
+
+---
+
+Here is my raw export:
+
+[PASTE YOUR RANKINGS/ADP EXPORT HERE]
+`;
 
 // A stored source whose `players` is missing or isn't an array used to throw
 // straight out of buildConsensus ("Cannot read properties of undefined"), and
@@ -1863,22 +2024,45 @@ const SEASON_GAMES = 17;
 // The "man-games" piece of BEER: converts "how many starter-slots does the
 // league need" into "how many players deep do you actually need to draft to
 // cover a full season," by dividing total starter man-games needed by the
-// average games a rostered player around that depth actually plays. Starters
-// alone undercount replacement depth — byes, injuries, and in-season bench
-// churn pull more than just the nominal starter count into starting lineups
-// over a season. Single blended constant per position (not split into a
-// separate starter-tier/replacement-tier number) — simple and defensible,
-// not exotic, per the reasoning logged when this was built. QBs miss the
-// fewest games (least contact, backups rarely needed); RBs miss the most
-// (workload + committee/injury risk); WR/TE land in between. Revisit these
-// against real injury-rate data if replacement ranks ever look badly off.
-const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5 };
+// average games a rostered player around THAT DEPTH actually plays.
+// Starters alone undercount replacement depth — byes, injuries, and
+// in-season bench churn pull more than just the nominal starter count into
+// starting lineups over a season.
+//
+// Used to be one guessed flat constant per position (QB 14, RB 11.5, WR/TE
+// 13.5) — replaced (2026-08-25) with GAMES_PLAYED_CURVE (games-played-data.js),
+// a real games-played-by-finish-rank curve built from 3 seasons of Sleeper's
+// own stats (see build-games-played-data.js). Real data overturned part of
+// the original guess: QB's curve drops off steeply (a rank-40 QB is almost
+// always a backup who only played because a starter got hurt, averaging
+// ~7 games), but RB/WR/TE stay much flatter through rank 60 (~14-15 games)
+// than assumed — a mid/low-rank RB is usually a healthy committee/timeshare
+// player, not an injured one, so "RB misses the most games" was wrong as a
+// blanket assumption. This is why RB's replacement rank changed materially
+// once real data replaced the guess — see claude.md for the honest before/
+// after comparison and the caveat about what this curve does and doesn't
+// measure (season-end finish rank blends injury attrition with committee/
+// opportunity share, especially at RB — it is NOT a pure health/availability
+// measure, just the closest real proxy available without deeper play-by-play
+// data).
+function gamesPlayedAt(pos, rank) {
+  const curve = GAMES_PLAYED_CURVE[pos];
+  const idx = Math.min(curve.length, Math.max(1, Math.round(rank))) - 1;
+  return curve[idx];
+}
 
 // REPLACEMENT_RANK[pos] = how many players deep (by projected points) you
 // have to go at that position before you hit "replacement level" for this
 // league's exact shape. Computed once from league math above — this number
 // itself is static, but WHICH player sits at that depth is not (see
 // buildBeerValues below, which recomputes live off the current draft state).
+//
+// Games-played now varies BY rank (the curve above), not a single constant,
+// which makes this circular — the answer depends on which games-played
+// value you look up, which depends on the answer. Solved by iterating a
+// few times: start from a reasonable guess, look up games-played AT that
+// depth, recompute the depth, repeat until it stops moving (in practice
+// this converges in 2-3 iterations since the curve is smooth, not a cliff).
 function computeReplacementRanks() {
   const flexSlotsTotal = LEAGUE_SETTINGS.flexSlots * LEAGUE_SETTINGS.teams;
   const ranks = {};
@@ -1886,7 +2070,12 @@ function computeReplacementRanks() {
     const base = (LEAGUE_SETTINGS.starters[pos] || 0) * LEAGUE_SETTINGS.teams;
     const flexShare = Math.round(flexSlotsTotal * (FLEX_SHARE[pos] || 0));
     const starterSlots = base + flexShare;
-    ranks[pos] = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / AVG_GAMES_PLAYED[pos]));
+    let rank = 20; // starting guess, refined below
+    for (let i = 0; i < 5; i++) {
+      const gamesPlayed = gamesPlayedAt(pos, rank);
+      rank = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / gamesPlayed));
+    }
+    ranks[pos] = rank;
   });
   return ranks;
 }

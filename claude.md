@@ -46,6 +46,13 @@ K/DST rows are dropped everywhere a source is parsed or fetched.
 - `build-fp-source.js` — one-off regeneration script (not extension code).
   Usage: `node build-fp-source.js` after replacing the source CSV. Not a live
   test suite — see Testing below.
+- `games-played-data.js` — real historical games-played-by-finish-rank
+  curves per position (`GAMES_PLAYED_CURVE`), auto-generated from 3 seasons
+  of Sleeper's own stats by `build-games-played-data.js`. Feeds the BEER
+  man-games replacement calc — see the "BEER / VBD" section below for the
+  full writeup, including the real (and somewhat surprising) finding this
+  data surfaced. Re-run the build script (updating `SEASONS`) once a new
+  NFL season completes to roll the 3-year window forward.
 - `4thGo-feature-backlog.md` — the actual backlog, with sequencing notes. Don't
   re-derive priorities from scratch; read that file. Note: some items (ADP
   endpoint, VORP) are now unblocked (see Feature backlog section below).
@@ -784,16 +791,71 @@ hit replacement level) from this league's real settings
    this was picked as reasonable and defensible, not exotic, per the build
    prompt's own instruction.
 2. Man-games: `REPLACEMENT_RANK[pos] = ceil(starterSlots × 17 games /
-   AVG_GAMES_PLAYED[pos])`. `AVG_GAMES_PLAYED` is one blended constant per
-   position (QB 14, RB 11.5, WR 13.5, TE 13.5) — QBs miss the fewest games
-   (least contact, backups rarely needed mid-season), RBs miss the most
-   (workload + committee/injury risk), WR/TE in between. This is what
-   converts "how many starters does the league need" into "how many players
-   deep you actually have to draft to cover a full season" — starters alone
-   undercount replacement depth since byes/injuries/in-season churn pull
-   bench players into starting lineups.
-   Resulting depths for this league's exact settings (locked in as a
-   regression check in `test.js`): **QB13, RB43, WR37, TE16.**
+   gamesPlayedAt(pos, rank))`. This is what converts "how many starters does
+   the league need" into "how many players deep you actually have to draft
+   to cover a full season" — starters alone undercount replacement depth
+   since byes/injuries/in-season churn pull bench players into starting
+   lineups.
+
+**Games-played is now REAL historical data, not a guess (upgraded
+2026-08-25) — read this before touching `AVG_GAMES_PLAYED`, which no longer
+exists.** The original build used one hand-guessed constant per position
+(QB 14, RB 11.5, WR/TE 13.5), explicitly logged at the time as "a reasonable
+estimate, not fit to real injury data." That honesty prompted the user to
+ask directly whether we could get real data instead of guessing — the answer
+was yes, and it changed a real assumption that turned out to be wrong.
+
+- **Source**: `build-games-played-data.js` fetches 3 seasons
+  (2022-2024, re-run and update `SEASONS` to roll the window forward each
+  year) from Sleeper's public `/stats/nfl/{year}` endpoint — same domain,
+  no new host permission. Each row carries both `gp` (real games played)
+  AND `pos_rank_ppr` (that player's actual season-END finish rank by total
+  PPR points) — so bucketing by real historical performance tier needs no
+  separate historical-ADP source, just this one endpoint.
+- **Output**: `games-played-data.js` (checked in, auto-generated — don't
+  hand-edit) holds `GAMES_PLAYED_CURVE[pos]`, a 60-deep array where index
+  `i` = the real average games played by players who finished that season
+  ranked `i+1` at that position, smoothed across a ±4-rank window and
+  averaged over the 3 seasons. Loaded before `shared.js` in both
+  `panel.html` and `rankings-manager.html`, and in `test.js`'s loader —
+  same pattern as `rankings.js`/`fp-rankings.js`.
+- **The real, honest finding this surfaced — the original per-position
+  guess was WRONG in its own terms, not just imprecise:** the assumption
+  had been "RBs miss the most games" (workload/injury risk) with QB missing
+  the fewest. Real data shows the opposite shape: QB's curve drops off
+  steeply by rank (a rank-40 QB averages ~7 games — because a backup QB
+  only accumulates value by starting when the incumbent gets hurt, so low
+  QB rank near-perfectly correlates with missed time), while RB stays
+  comparatively flat even out to rank 60 (~14-15 games) — a low-rank RB is
+  usually a healthy committee/timeshare back who just doesn't get enough
+  touches to score well, not someone who's injured. **Games played and
+  fantasy production are different things at RB, conflated at QB.** This
+  is exactly the kind of wrong-but-plausible-sounding assumption that
+  motivated getting real data in the first place — it would never have
+  been caught by reasoning about it harder, only by measuring it.
+- **What this data does NOT prove — stated plainly, not glossed over.**
+  Bucketing by season-END finish rank measures "how many games did players
+  who ended up around this production tier play," which blends TRUE
+  injury/availability with committee/opportunity-share effects (especially
+  at RB, per the finding above). It is the closest real proxy available
+  without deeper play-by-play/snap-share data, not a pure health measure.
+  It's also still just 3 seasons of NFL-wide noise, not a large sample —
+  treat the resulting `REPLACEMENT_RANK` numbers as "a real, defensible
+  estimate," not as ground truth.
+- **The circularity, and how it's resolved**: games-played now varies BY
+  the very rank `REPLACEMENT_RANK` is trying to compute (deeper picks play
+  fewer games), so a single division no longer works. `computeReplacementRanks()`
+  solves this by iterating: start from a guess (rank 20), look up
+  games-played at that depth via `gamesPlayedAt(pos, rank)`, recompute the
+  depth from that, repeat 5 times. The curve is smooth (no cliffs), so this
+  converges in 2-3 iterations in practice — verified in `test.js`.
+- **Resulting depths for this league's exact settings changed materially
+  once real data replaced the guess** (also a locked-in regression check in
+  `test.js` — expected to shift again whenever the curve is regenerated for
+  a new season, that's not a bug): **QB11, RB34, WR32, TE14** — all
+  shallower than the old guessed depths (QB13, RB43, WR37, TE16), because
+  real games-played at those depths is generally higher than the old
+  constants assumed, especially at RB.
 
 **Live recompute — no new polling mechanism, reuses the existing pick-sync
 plumbing exactly as the build prompt required.** `REPLACEMENT_RANK[pos]`
@@ -1537,6 +1599,23 @@ leaguemates during a live draft.
   real signal; keep it that way unless asked otherwise. Range was widened
   from an initial 3-7 to 10-13 picks on direct feedback (fires too often at
   the tighter gap).
+- **Interval is user-adjustable (2026-08-25), not just a hardcoded default.**
+  `rageBaitMinGap`/`rageBaitMaxGap` (module-level in `panel.js`, persisted as
+  `K_RAGEBAIT_MIN_GAP`/`K_RAGEBAIT_MAX_GAP`) feed `rageBaitRandomGap()`
+  instead of the old hardcoded `10 + Math.floor(Math.random()*4)` — two
+  small number inputs (`#rageBaitMinGap`/`#rageBaitMaxGap`) sit at the top of
+  the Manage popover, above the message list, defaulting to
+  `RAGEBAIT_MIN_GAP_DEFAULT`/`RAGEBAIT_MAX_GAP_DEFAULT` (10/13, `shared.js`).
+  Both inputs clamp on change (min floors at 1; max floors at whatever min
+  currently is) so the range can never invert or go non-positive, which
+  `rageBaitRandomGap()`'s spread math assumes. Changing either value also
+  resets `rageBaitNextAt` immediately, same as flipping the mode on/off does
+  — otherwise a narrower range typed in mid-countdown wouldn't actually
+  apply until the OLD (wider) countdown finished first, which would read as
+  the setting not having taken effect. The toggle's own tooltip text in
+  Settings was updated from a vague "every few picks" to the actual default
+  ("every 10–13 picks (by default)") once the interval became something a
+  user might actually go looking to change.
 - **Never fires immediately after the user's own pick** (direct requirement,
   not a guess) — a rage bait message landing right after your own pick reads
   as mocking yourself, not your leaguemates. `maybeFireRageBait(newPickTotal,
@@ -1696,6 +1775,51 @@ two related tools for this — use the right one:
     caught nothing wrong for Boone/Smyth but is cheap insurance every time.
   - Drop K/DST rows, same as every other ranking import (see CSV parser notes
     in the ADP section above) — this project's league has none.
+
+**Correction (2026-08-25): `ranking-source-normalizer-prompt.md` referenced
+above was never actually a tracked file in this repo** — it was described in
+this doc as existing but doesn't (confirmed by a filesystem check). The
+in-app tool built the same day (next section) is its real replacement, built
+from scratch rather than recovered.
+
+### In-app AI converter — "⬇ DOWNLOAD AI SKILL" / "⧉ COPY AI PROMPT" (added 2026-08-25)
+The Rankings Manager now generates both artifacts above directly in the UI,
+next to "+ ADD SOURCE" (`rankings-manager.js`'s `downloadConverterSkill()`/
+`copyConverterPrompt()`), instead of relying on a hand-maintained standalone
+file that (per the correction above) never actually existed in the repo:
+- **⬇ DOWNLOAD AI SKILL** — downloads a real Claude Code `SKILL.md` (YAML
+  frontmatter + instructions) for a user to drop into
+  `.claude/skills/rankings-csv-converter/SKILL.md` in any Claude Code project,
+  so Claude can do this conversion as a normal skill invocation.
+- **⧉ COPY AI PROMPT** — copies a standalone prompt (paste-into-any-chat
+  format: claude.ai, ChatGPT, etc., with a `[PASTE YOUR RANKINGS/ADP EXPORT
+  HERE]` placeholder at the end) to the clipboard, falling back to a `.md`
+  download if clipboard access fails in that context. For non-Claude-Code
+  users.
+- **Both share one body of rules, `CONVERTER_INSTRUCTIONS_MD` in
+  `shared.js`** — the skill and the prompt are just two different thin
+  wrappers (frontmatter vs. a chat preamble) around the identical
+  instructions, specifically so the two can't drift apart the way a
+  hand-maintained standalone file and an in-session process could.
+- **Deliberately has NO access to this repo's bundled name data
+  (`rankings.js`/`fp-rankings.js`), unlike the in-session process documented
+  above** — direct requirement: a fresh install of this extension ships with
+  zero ranking/ADP sources (only the live Sleeper ADP API), so a
+  cross-reference against this project's own bundled rankings would be
+  cross-referencing data a real end user's copy doesn't have and shouldn't
+  ship with. Both the skill and the prompt instead tell the AI to leave
+  abbreviated/ambiguous names exactly as given and list them in a "Needs
+  review" section of its output, for the user to resolve after import via
+  the Rankings Manager's existing right-click "merge near matches" feature
+  (see Rankings Manager architecture above) — same fix path, just applied by
+  the end user afterward instead of by Claude during the conversion itself.
+- **Output format matches `parseRankings()` exactly**: `Rank,Name,Team,
+  Position,Tier` header, K/DST rows dropped, embedded team/bye stripped from
+  the name cell, Tier column omitted entirely (not left blank) when the
+  source has no tier data, and explicit handling for position-only sources
+  (own within-position rank as `Rank`, plus an instruction to check that
+  import checkbox) and multi-analyst tables (one analyst's own column only,
+  never a pre-blended average).
 
 ## Testing
 **`test.js` is a real, committed regression suite now (added in the

@@ -89,6 +89,9 @@ function renderSourceBar() {
     `<button class="alt" id="fetchStatsBtn" title="Auto-fetch the board's stat columns (projected volume + prior-season target share/air yards/red-zone targets) from Sleeper's public API — same domain, no login">⟳ FETCH STATS</button>` +
     `<button class="alt" id="addAdpBtn">+ ADD ADP SOURCE</button>` +
     `<button class="alt" id="addSrcBtn">+ ADD SOURCE</button>` +
+    `<span style="width:1px;height:16px;background:var(--line2);margin:0 2px"></span>` +
+    `<button class="alt" id="downloadSkillBtn" title="Download a Claude Code skill (SKILL.md) that converts any raw rankings/ADP export into an importable CSV — drop it in .claude/skills/">⬇ DOWNLOAD AI SKILL</button>` +
+    `<button class="alt" id="copyPromptBtn" title="Copy a standalone prompt (for claude.ai, ChatGPT, etc.) that does the same CSV conversion — paste your raw export after it">⧉ COPY AI PROMPT</button>` +
     (soloSource ? `<button class="alt" id="showAllBtn">↺ SHOW ALL SOURCES</button>` : "");
 
   bar.querySelectorAll("[data-toggleadp]").forEach((el) => {
@@ -160,7 +163,49 @@ function renderSourceBar() {
   $("fetchSleeperAdpBtn").addEventListener("click", fetchSleeperAdp);
   $("fetchProjectionsBtn").addEventListener("click", fetchProjections);
   $("fetchStatsBtn").addEventListener("click", fetchSleeperStats);
+  $("downloadSkillBtn").addEventListener("click", downloadConverterSkill);
+  $("copyPromptBtn").addEventListener("click", copyConverterPrompt);
   if ($("showAllBtn")) $("showAllBtn").addEventListener("click", () => { soloSource = null; renderAll(); });
+}
+
+// Both buttons wrap the shared CONVERTER_INSTRUCTIONS_MD body (shared.js) —
+// see that file's comment for why the rules live in one place. The skill
+// download is for Claude Code users (drop the file into .claude/skills/
+// <name>/SKILL.md); the copy button is for everyone else (paste into any
+// chat alongside the raw export). Neither depends on this repo's bundled
+// name data — a fresh install ships with zero ranking sources, so the
+// conversion has to work standalone.
+function downloadConverterSkill() {
+  const blob = new Blob([RANKING_CONVERTER_SKILL_MD], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "SKILL.md";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast("Downloaded SKILL.md — save it as .claude/skills/rankings-csv-converter/SKILL.md in a Claude Code project to use it");
+}
+
+async function copyConverterPrompt() {
+  try {
+    await navigator.clipboard.writeText(RANKING_CONVERTER_PROMPT_MD);
+    toast("Prompt copied — paste it into a chat (with your raw export) to convert a source");
+  } catch (err) {
+    // Clipboard permission can fail in some contexts — fall back to a
+    // downloadable .md so the user still gets the content either way.
+    const blob = new Blob([RANKING_CONVERTER_PROMPT_MD], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rankings-csv-converter-prompt.md";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast("Couldn't copy to clipboard — downloaded the prompt as a .md file instead", true);
+  }
 }
 
 // Auto-fetch live PPR ADP straight from Sleeper's own public API.

@@ -267,12 +267,19 @@ function currentRageBaitMessages() {
   return rageBaitMessages.length ? rageBaitMessages : DEFAULT_RAGE_BAIT_MESSAGES;
 }
 // Random pick-count threshold — reset after every fire so the next one lands
-// a fresh random 10-13 picks later, not on a fixed cadence (a fixed N would get
+// a fresh random gap later, not on a fixed cadence (a fixed N would get
 // obvious/annoying fast; that's the whole point of "every once in a random
-// few picks" from the original ask).
+// few picks" from the original ask). The gap itself defaults to 10-13 picks
+// but is user-adjustable (K_RAGEBAIT_MIN_GAP/K_RAGEBAIT_MAX_GAP, editable in
+// the Manage popover) — rageBaitMinGap/rageBaitMaxGap hold whatever's
+// currently set, loaded at init and updated live from the popover's inputs.
 let rageBaitNextAt = null;
+let rageBaitMinGap = RAGEBAIT_MIN_GAP_DEFAULT;
+let rageBaitMaxGap = RAGEBAIT_MAX_GAP_DEFAULT;
 function rageBaitRandomGap() {
-  return 10 + Math.floor(Math.random() * 4); // 10..13 picks
+  const lo = Math.max(1, rageBaitMinGap || RAGEBAIT_MIN_GAP_DEFAULT);
+  const hi = Math.max(lo, rageBaitMaxGap || RAGEBAIT_MAX_GAP_DEFAULT);
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
 }
 // Session-only (not persisted) — tracks whether the Test button has fired at
 // least once THIS window session, so the very first test always says
@@ -2493,6 +2500,33 @@ $("rageBaitResetBtn").addEventListener("click", () => {
   toast("Reset to the default rage bait messages.");
 });
 
+// User-adjustable trigger interval — defaults to 10-13 picks
+// (RAGEBAIT_MIN_GAP_DEFAULT/RAGEBAIT_MAX_GAP_DEFAULT, shared.js) but can be
+// widened/narrowed here. Clamped so min is always >=1 and max is always
+// >=min, since rageBaitRandomGap()'s Math.random() spread would otherwise go
+// negative or degenerate. Changing either value re-rolls rageBaitNextAt
+// immediately (same as toggling the mode on) so a new interval takes effect
+// on the very next check rather than only after the current countdown
+// finishes with the OLD range.
+function persistRageBaitGap() {
+  chrome.storage.local.set({ [K_RAGEBAIT_MIN_GAP]: rageBaitMinGap, [K_RAGEBAIT_MAX_GAP]: rageBaitMaxGap });
+  rageBaitNextAt = null;
+}
+$("rageBaitMinGap").addEventListener("change", () => {
+  const v = Math.max(1, Math.round(Number($("rageBaitMinGap").value)) || RAGEBAIT_MIN_GAP_DEFAULT);
+  rageBaitMinGap = v;
+  if (rageBaitMaxGap < rageBaitMinGap) rageBaitMaxGap = rageBaitMinGap;
+  $("rageBaitMinGap").value = rageBaitMinGap;
+  $("rageBaitMaxGap").value = rageBaitMaxGap;
+  persistRageBaitGap();
+});
+$("rageBaitMaxGap").addEventListener("change", () => {
+  const v = Math.max(1, Math.round(Number($("rageBaitMaxGap").value)) || RAGEBAIT_MAX_GAP_DEFAULT);
+  rageBaitMaxGap = Math.max(v, rageBaitMinGap);
+  $("rageBaitMaxGap").value = rageBaitMaxGap;
+  persistRageBaitGap();
+});
+
 // Same flip-above/below-and-clamp positioning as the Roster/Sleeper queue
 // popovers (openRosterPopover) — the message list can run to a dozen-plus
 // rows, so it needs the same "flip upward near the bottom of the window"
@@ -2508,6 +2542,8 @@ function onRageBaitPopoverOutsideClick(e) {
 }
 function openRageBaitPopover() {
   renderRageBaitMessagesList();
+  $("rageBaitMinGap").value = rageBaitMinGap;
+  $("rageBaitMaxGap").value = rageBaitMaxGap;
   const panel = $("rageBaitPopover");
   const btn = $("rageBaitManageBtn");
   panel.hidden = false;
@@ -2638,13 +2674,15 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   sleeperIds = await loadSleeperIdMap();
   injuries = await loadInjuries();
   injuriesUpdatedAt = await loadInjuriesUpdatedAt();
-  const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT, K_RAGEBAIT_ENABLED, K_RAGEBAIT_MESSAGES]);
+  const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT, K_RAGEBAIT_ENABLED, K_RAGEBAIT_MESSAGES, K_RAGEBAIT_MIN_GAP, K_RAGEBAIT_MAX_GAP]);
   sleeperQueueKeys = qv[K_SLEEPER_QUEUE] || [];
   sleeperWriteEnabled = !!qv[K_SLEEPER_WRITE_ENABLED];
   sleeperSkipDraftConfirmDraftId = qv[K_SLEEPER_SKIP_CONFIRM] || null;
   sleeperDoubleClickDraft = qv[K_SLEEPER_DBLCLICK_DRAFT] !== false; // defaults true — only an explicit false turns it off
   rageBaitEnabled = !!qv[K_RAGEBAIT_ENABLED];
   rageBaitMessages = Array.isArray(qv[K_RAGEBAIT_MESSAGES]) ? qv[K_RAGEBAIT_MESSAGES] : [];
+  rageBaitMinGap = Number.isFinite(qv[K_RAGEBAIT_MIN_GAP]) ? qv[K_RAGEBAIT_MIN_GAP] : RAGEBAIT_MIN_GAP_DEFAULT;
+  rageBaitMaxGap = Number.isFinite(qv[K_RAGEBAIT_MAX_GAP]) ? qv[K_RAGEBAIT_MAX_GAP] : RAGEBAIT_MAX_GAP_DEFAULT;
   $("sleeperWriteToggle").classList.toggle("on", sleeperWriteEnabled);
   $("sleeperWriteToggle").setAttribute("aria-checked", String(sleeperWriteEnabled));
   $("sleeperTokenField").style.display = sleeperWriteEnabled ? "" : "none";
