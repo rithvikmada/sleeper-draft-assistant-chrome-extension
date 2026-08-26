@@ -1077,6 +1077,27 @@ function modeTier(votes) {
 // windowed/clustering approach (treating nearby-but-not-identical boundaries
 // as the same cliff) might fix that properly, but needs real design work
 // before trying again — don't re-attempt the naive exact-pair version.
+//
+// TIER_DEPTH_GAMMA (2026-08-27) — the equal-width bucketing above (plain
+// `floor(depth * n)`) produces occasional huge combined-board tiers in
+// practice: depth is `rank / that source's own max rank`, and when several
+// sources with very different coverage (one ranks 150 players, another 450)
+// get median-blended, the resulting depth values for hundreds of players
+// often clump rather than spread evenly across 0..1 — an equal-width bucket
+// sitting in a dense clump just sweeps up everyone in it. Rather than switch
+// to equal-COUNT buckets (which would force every tier to the same size
+// regardless of whether the data actually clusters that way, erasing real
+// cliffs), depth is warped through `depth ** TIER_DEPTH_GAMMA` before
+// bucketing. With gamma < 1, this stretches the resolution across LOW depth
+// (the top of the draft, where per-source tier opinions are most granular
+// and real cliffs matter most) and compresses it across HIGH depth (deep
+// bench, where sources agree the least and blended depth is mushiest) — so
+// early tiers are deliberately narrow and late tiers are deliberately wide,
+// by design, rather than a huge late tier being an accident of where depth
+// values happened to bunch up. 0.6 is a judgment call, not derived from
+// data — tune it if early tiers still feel too coarse or too thin in
+// practice.
+const TIER_DEPTH_GAMMA = 0.6;
 function assignBlendedTiers(sortedRows) {
   let running = 0;
   sortedRows.forEach((r) => {
@@ -1087,7 +1108,8 @@ function assignBlendedTiers(sortedRows) {
   });
   const n = TIER_ORDER.length;
   sortedRows.forEach((r) => {
-    const idx = Math.min(Math.floor(r._depthEff * n), n - 1);
+    const warped = Math.pow(r._depthEff, TIER_DEPTH_GAMMA);
+    const idx = Math.min(Math.floor(warped * n), n - 1);
     r.tier = TIER_ORDER[idx];
     delete r._depthEff;
   });
