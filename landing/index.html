@@ -597,6 +597,15 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
   </div>
 </footer>
 
+<!-- Gumroad's overlay script — once loaded, it intercepts clicks on any
+     link pointing at a Gumroad product on this page and opens checkout as
+     a modal directly here, instead of navigating away to gumroad.com. The
+     `?wanted=true` on our buy links stays in place as a graceful fallback:
+     if this script fails to load (blocked, offline), the plain link still
+     goes straight to Gumroad's own checkout instead of dead-ending on
+     their product page. -->
+<script src="https://gumroad.com/js/gumroad.js"></script>
+
 <script>
 // ---------- Install link config ----------
 // Swap this ONE line when the Chrome Web Store listing goes live — every
