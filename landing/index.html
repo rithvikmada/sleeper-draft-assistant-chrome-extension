@@ -393,7 +393,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
           <span class="trafficDot"></span><span class="trafficDot"></span><span class="trafficDot"></span>
           <span class="liveTag"><span class="pulse"></span> LIVE — SYNCED</span>
         </div>
-        <img class="boardShot" src="assets/screenshot-board.png" alt="4th&amp;Go board mid-draft, showing tiered rankings, Best Picks, and BEER value" loading="eager">
+        <img class="boardShot" src="assets/screenshot-board.png?v=2" alt="4th&amp;Go board mid-draft, showing tiered rankings, Best Picks, and BEER value" loading="eager">
       </div>
     </div>
   </div>
@@ -417,7 +417,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
     <div class="featGrid">
       <div class="featCard wide">
         <div class="featMock">
-          <img class="featShot" src="assets/screenshot-beer.png" alt="BEER value grid showing the best available player by position">
+          <img class="featShot" src="assets/screenshot-beer.png?v=2" alt="BEER value grid showing the best available player by position">
         </div>
         <div class="featBody">
           <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
@@ -468,7 +468,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 
       <div class="featCard wide">
         <div class="featMock">
-          <img class="featShot" src="assets/screenshot-adpvalue.png" alt="ADP value delta showing a real discount versus baseline rankings">
+          <img class="featShot" src="assets/screenshot-adpvalue.png?v=2" alt="ADP value delta showing a real discount versus baseline rankings">
         </div>
         <div class="featBody">
           <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div>
@@ -489,7 +489,7 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
         <p class="sectionSub">Drag and drop players into your own ranked list, break it into tiers by hand, and start from a blank Sleeper-ADP board or any source you've already imported — headshots, stat columns, and all, right alongside the same live data the tier board uses.</p>
       </div>
       <div class="creatorShotWrap">
-        <img class="creatorShot" src="assets/screenshot-creator.png" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns" loading="eager">
+        <img class="creatorShot" src="assets/screenshot-creator.png?v=2" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns" loading="eager">
       </div>
     </div>
   </div>
@@ -584,6 +584,15 @@ footer{ border-top:1px solid var(--line); padding:28px 0 0; }
 <script src="https://gumroad.com/js/gumroad.js"></script>
 
 <script>
+// ---------- Asset cache-busting ----------
+// GitHub Pages sits behind a CDN, and browsers cache images aggressively —
+// after replacing an asset file (e.g. re-cropping a screenshot) under the
+// SAME filename, viewers can keep seeing the old bytes for a while. Every
+// screenshot <img> src above carries a "?v=N" query param specifically so
+// a content change forces a fresh fetch. Bump every "?v=N" in this file by
+// one whenever an existing asset filename's content changes (a brand new
+// filename doesn't need this, only an overwrite of one already deployed).
+
 // ---------- Install link config ----------
 // Swap this ONE line when the Chrome Web Store listing goes live — every
 // "Install extension" link on the page (desktop + mobile nav) reads from
