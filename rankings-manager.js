@@ -23,6 +23,30 @@ let projMap = {};        // playerKey -> projected PPR points, for the VALUE (BE
 let sortByValue = false; // click the VALUE column header to toggle sorting the table by it
 const echo = makeEchoGuard(); // per-key — saving sources must not swallow a live pick update (see shared.js)
 
+// ---------- Rankings Creator state ----------
+let activeTab = "sources"; // "sources" | "creator" — which top-level tab is showing
+let customBoards = [];     // array of board objects — see shared.js's loadCustomBoards for the shape
+let activeBoardId = null;
+let playerStats = {};      // playerKey -> {basic:[...], options:{id:{...}}} — same shape/source as the board's stat columns
+let sleeperIds = {};        // playerKey -> Sleeper's own numeric player_id (headshots), loaded from K_SLEEPER_IDS
+let creatorVisibleStats = { ...DEFAULT_VISIBLE_STATS }; // shares K_STAT_PREFS with the board — same picker, same prefs
+let creatorSearch = "";
+let creatorPosFilter = "ALL"; // ALL/QB/RB/WR/TE — a VIEW filter on the one combined order, not a second ranking (see renderCreatorList)
+let creatorSelectedKey = null; // clicking a row brings that position's stat group forward, same as the board
+// Custom pointer-driven drag — NOT native HTML5 drag-and-drop. The native
+// dragstart/dragover/drop API was tried first and was genuinely bad here:
+// the browser owns the drag image and its position, dragover delivery is
+// throttled/coalesced by the browser rather than tracking the pointer 1:1,
+// and there's an unavoidable frame or more of latency between the cursor
+// and the ghost — reported directly as "not sticky, not addictive," and
+// confirmed by the Apple/Emil design-eng principles this was checked
+// against afterward: direct manipulation requires the dragged element to
+// track the pointer with zero added latency, which native HTML5 DnD simply
+// cannot give you. Pointer Events + a raw `transform: translateY()` set on
+// every pointermove (no CSS transition on the dragged row itself) does.
+let crSort = null; // active list-reorder drag, or null — see startListDrag
+let crGhost = null; // active pool→list placement drag, or null — see startPoolDrag
+
 // ---------- derived draft state ----------
 function takenMap() {
   const m = new Map();
@@ -49,8 +73,17 @@ function reportSaveFailure(what) {
 function renderSyncLine() {
   const n = draft.picks.length;
   $("syncLine").textContent = draft.draftId
-    ? `SYNCED · DRAFT ${draft.draftId} · ${n} PICK${n === 1 ? "" : "S"} OFF THE BOARD`
-    : "NOT SYNCED — OPEN THE BOARD WINDOW (TOOLBAR ICON) AND HIT SYNC";
+    ? `Synced · Draft ${draft.draftId} · ${n} pick${n === 1 ? "" : "s"} off the board`
+    : "Not synced — open the board window and hit sync";
+  $("syncPill").classList.toggle("off", !draft.draftId);
+}
+
+// Two-letter tag shown in a chip's swatch when the source has no uploaded
+// icon — first letter of up to the first two words of the name ("Fantasy
+// Flock Rankings" -> "FF", "Sleeper Live ADP" -> "SL"), purely decorative.
+function sourceInitials(name) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map((w) => w[0]).join("") || "?").toUpperCase();
 }
 
 function renderSourceBar() {
@@ -58,41 +91,38 @@ function renderSourceBar() {
   const chips = sources.map((s) => {
     const solo = soloSource === s.id;
     const cls = `chip${s.enabled ? "" : " disabled"}${solo ? " solo" : ""}`;
-    const edit = `<span class="edit-src" data-edit="${esc(s.id)}" title="Edit this source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const edit = `<span class="edit-src" data-edit="${esc(s.id)}" title="Edit this source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;color:var(--text-disabled)">✎</span>`;
     const del = s.undeletable ? "" : `<span class="x" data-del="${esc(s.id)}" title="Remove source">✕</span>`;
     const swatch = s.icon
-      ? `<img src="${esc(s.icon)}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
-      : `<span class="sw" style="background:${esc(s.color)}"></span>`;
+      ? `<span class="sw"><img src="${esc(s.icon)}" /></span>`
+      : `<span class="sw" style="background:${esc(s.color)}">${esc(sourceInitials(s.name))}</span>`;
     const posOnlyBadge = s.positionOnly ? `<span style="color:var(--dim);font-size:9px;margin-left:3px" title="Position-only — reference column, doesn't affect blended rank/tier">POS</span>` : "";
     return `<span class="${cls}" data-toggle="${esc(s.id)}" title="Click to enable/disable · double-click to isolate">
-      ${swatch}${esc(s.name)}${posOnlyBadge}${edit}
-      <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
+      ${swatch}<span>${esc(s.name)}</span>${posOnlyBadge}<span class="ct">${s.players.length}</span>${edit}${del}</span>`;
   }).join("");
 
   const adpChips = adpSources.map((s) => {
     const cls = `chip${s.enabled ? "" : " disabled"}`;
-    const edit = `<span class="edit-src" data-editadp="${esc(s.id)}" title="Edit this ADP source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;margin-left:4px;opacity:0.6">✎</span>`;
+    const edit = `<span class="edit-src" data-editadp="${esc(s.id)}" title="Edit this ADP source · ${esc(formatLastUpdated(s.importedAt))}" style="cursor:pointer;color:var(--text-disabled)">✎</span>`;
     const del = `<span class="x" data-deladp="${esc(s.id)}" title="Remove ADP source">✕</span>`;
     const swatch = s.icon
-      ? `<img src="${esc(s.icon)}" style="width:9px;height:9px;border-radius:2px;object-fit:cover" />`
-      : `<span class="sw" style="background:${esc(s.color)}"></span>`;
+      ? `<span class="sw"><img src="${esc(s.icon)}" /></span>`
+      : `<span class="sw" style="background:${esc(s.color)}">${esc(sourceInitials(s.name))}</span>`;
     return `<span class="${cls}" data-toggleadp="${esc(s.id)}" title="Click to enable/disable — each enabled ADP source gets its own column, and the value/reach meter blends whichever are on">
-      ${swatch}${esc(s.name)}${edit}
-      <span style="color:var(--dim)">${s.players.length}</span>${del}</span>`;
+      ${swatch}<span>${esc(s.name)}</span><span class="ct">${s.players.length}</span>${edit}${del}</span>`;
   }).join("");
 
-  bar.innerHTML = chips +
-    `<span style="width:1px;height:16px;background:var(--line2);margin:0 2px"></span>` +
-    adpChips +
-    `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ FETCH SLEEPER ADP</button>` +
-    `<button class="alt" id="fetchProjectionsBtn" title="Auto-fetch season point projections from the same Sleeper API, used to compute the BEER column">⟳ FETCH PROJECTIONS</button>` +
-    `<button class="alt" id="fetchStatsBtn" title="Auto-fetch the board's stat columns (projected volume + prior-season target share/air yards/red-zone targets) from Sleeper's public API — same domain, no login">⟳ FETCH STATS</button>` +
-    `<button class="alt" id="addAdpBtn">+ ADD ADP SOURCE</button>` +
-    `<button class="alt" id="addSrcBtn">+ ADD SOURCE</button>` +
-    `<span style="width:1px;height:16px;background:var(--line2);margin:0 2px"></span>` +
-    `<button class="alt" id="downloadSkillBtn" title="Download a Claude Code skill (SKILL.md) that converts any raw rankings/ADP export into an importable CSV — drop it in .claude/skills/">⬇ DOWNLOAD AI SKILL</button>` +
-    `<button class="alt" id="copyPromptBtn" title="Copy a standalone prompt (for claude.ai, ChatGPT, etc.) that does the same CSV conversion — paste your raw export after it">⧉ COPY AI PROMPT</button>` +
-    (soloSource ? `<button class="alt" id="showAllBtn">↺ SHOW ALL SOURCES</button>` : "");
+  bar.innerHTML = chips + adpChips +
+    `<span class="chipAdd" id="addAdpBtn">+ Add ADP source</span>` +
+    `<span class="chipAdd" id="addSrcBtn">+ Add source</span>` +
+    `<div class="toolRow">` +
+    `<button class="alt" id="fetchSleeperAdpBtn" title="Auto-fetch live PPR ADP straight from Sleeper's own public API (api.sleeper.app/projections) — no login, same domain this extension already talks to">⟳ Fetch Sleeper ADP</button>` +
+    `<button class="alt" id="fetchProjectionsBtn" title="Auto-fetch season point projections from the same Sleeper API, used to compute the BEER column">⟳ Fetch projections</button>` +
+    `<button class="alt" id="fetchStatsBtn" title="Auto-fetch the board's stat columns (projected volume + prior-season target share/air yards/red-zone targets) from Sleeper's public API — same domain, no login">⟳ Fetch stats</button>` +
+    `<button class="alt" id="downloadSkillBtn" title="Download a Claude Code skill (SKILL.md) that converts any raw rankings/ADP export into an importable CSV — drop it in .claude/skills/">⬇ Download AI skill</button>` +
+    `<button class="alt" id="copyPromptBtn" title="Copy a standalone prompt (for claude.ai, ChatGPT, etc.) that does the same CSV conversion — paste your raw export after it">⧉ Copy AI prompt</button>` +
+    (soloSource ? `<button class="alt" id="showAllBtn">↺ Show all sources</button>` : "") +
+    `</div>`;
 
   bar.querySelectorAll("[data-toggleadp]").forEach((el) => {
     el.addEventListener("click", (e) => {
@@ -353,9 +383,11 @@ function renderTable(rows) {
       ? `<span class="tierChip" style="background:${TIER_COLORS[r.tier]}">${esc(r.tier)}</span>` : "";
     const flag = flags[r.key];
     const rowFlagClass = flag === "favorite" ? " favRow" : flag === "avoid" ? " avoidRow" : "";
-    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pname="${esc(r.name)}" data-ppos="${esc(r.pos)}">
+    return `<tr class="${t ? "gone" : ""} ${t && t.byMe ? "mine" : ""}${rowFlagClass}" data-pos="${esc(r.pos)}" data-pname="${esc(r.name)}" data-ppos="${esc(r.pos)}">
       <td class="l" style="color:var(--dim)">${i + 1}</td>
-      <td class="l nm" title="Right-click to find &amp; merge near-match orphans">${flagBadge(flag)}${esc(r.name)} ${injuryBadge(injuries[r.key], { useTitle: true })} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</td>
+      <td class="l nm" title="Right-click to find &amp; merge near-match orphans">
+        <span class="avatarNameRow">${avatarHtml(r.key, r.name, r.pos, r.team, "sm", sleeperIds)}<span>${flagBadge(flag)}${esc(r.name)} ${injuryBadge(injuries[r.key], { useTitle: true })} ${t && t.pickNo ? `<span style="color:var(--dim);font-size:10px">pk ${t.pickNo}</span>` : ""}</span></span>
+      </td>
       <td><span class="posChip" style="color:${c.text};background:${c.bg};border-color:${c.border}">${esc(r.pos)}</span></td>
       <td>${tier}</td>
       <td style="color:var(--text)">${r.consensus?.toFixed(1) ?? "—"}</td>
@@ -443,7 +475,7 @@ function renderOrphans() {
   $("orphansSection").style.display = "block";
   const totalKept = orphanList.reduce((n, [, keys]) => n + keys.length, 0);
   const hidden = totalRaw - totalKept;
-  $("orphansCount").textContent = `(${totalKept}${hidden ? ` · ${hidden} below rank ${ORPHAN_RANK_LIMIT} hidden` : ""})`;
+  $("orphansCount").textContent = `${totalKept} player${totalKept === 1 ? "" : "s"}${hidden ? ` · ${hidden} below rank ${ORPHAN_RANK_LIMIT} hidden` : ""}`;
 
   if (!orphanList.length) {
     // The empty state doubles as the only visible advertisement that the
@@ -977,6 +1009,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes[K_FLAGS] && !echo.isEcho(K_FLAGS)) {
     flags = await loadFlags();
     renderAll();
+    if (activeTab === "creator") renderCreator();
   }
   if (changes[K_MERGES] && !echo.isEcho(K_MERGES)) {
     merges = await loadMerges();
@@ -990,7 +1023,754 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
     injuries = await loadInjuries();
     renderAll();
   }
+  if (changes[K_STATS]) {
+    playerStats = await loadPlayerStats();
+    if (activeTab === "creator") renderCreator();
+  }
+  if (changes[K_SLEEPER_IDS]) {
+    sleeperIds = await loadSleeperIdMap();
+    if (activeTab === "creator") renderCreator();
+  }
+  if (changes[K_STAT_PREFS]) {
+    creatorVisibleStats = await loadStatPrefs();
+    if (activeTab === "creator") renderCreator();
+  }
+  if (changes[K_CUSTOM_BOARDS] && !echo.isEcho(K_CUSTOM_BOARDS)) {
+    customBoards = await loadCustomBoards();
+    if (!customBoards.find((b) => b.id === activeBoardId)) activeBoardId = sortedBoards()[0] ? sortedBoards()[0].id : null;
+    if (activeTab === "creator") renderCreator();
+  }
 });
+
+// ---------- top-level tab switching ----------
+$("tabSourcesBtn").addEventListener("click", () => switchTab("sources"));
+$("tabCreatorBtn").addEventListener("click", () => switchTab("creator"));
+function switchTab(tab) {
+  activeTab = tab;
+  $("tabSourcesBtn").classList.toggle("active", tab === "sources");
+  $("tabCreatorBtn").classList.toggle("active", tab === "creator");
+  $("sourcesTab").style.display = tab === "sources" ? "" : "none";
+  $("creatorTab").style.display = tab === "creator" ? "" : "none";
+  // "Save to draft board" (Creator tab) writes into `sources` while the
+  // Sources tab's DOM is stale/hidden — re-render on switching back to it
+  // rather than only on the next storage event, so a just-saved board shows
+  // up immediately instead of needing an unrelated change to trigger a redraw.
+  if (tab === "sources") renderAll();
+  if (tab === "creator") renderCreator();
+}
+
+// ============================================================
+// Rankings Creator — drag-and-drop custom rankings, direction B (ranked
+// list + tier bands) from the mockup review. Base can be "no base" (every
+// QB/RB/WR/TE Sleeper knows, in live ADP order — built from the same
+// fetchSleeperAdpPlayers() the board's ADP column already uses) or any
+// existing ranking source (built-in or imported) — see claude.md's
+// "Rankings Creator" section for the full design writeup.
+// ============================================================
+
+function getActiveBoard() {
+  return customBoards.find((b) => b.id === activeBoardId) || null;
+}
+async function persistCustomBoards() {
+  await echo.write(K_CUSTOM_BOARDS, () => saveCustomBoards(customBoards)).catch(reportSaveFailure("your custom board"));
+}
+
+// ADP-only players carry no team (fetchSleeperAdpPlayers only returns
+// name/pos/rank) — backfilled here from whatever imported ranking sources
+// already have team on file, same join key (playerKey) everything else
+// uses. Best-effort: a player absent from every source just shows no team
+// badge, same fallback avatarHtml already handles for an unmatched player.
+function teamLookupFromSources() {
+  const m = new Map();
+  sources.forEach((s) => s.players.forEach((p) => {
+    if (p.team && !m.has(playerKey(p.name, p.pos))) m.set(playerKey(p.name, p.pos), p.team);
+  }));
+  return m;
+}
+
+// Builds a fresh board's starting universe + order from its base. `baseId`
+// is either "adp" (no base — every player, live Sleeper ADP order, single
+// tier) or a ranking source id (that source's own rank/tier order, same as
+// how it already reads everywhere else in this app).
+async function buildBoardFromBase(baseId) {
+  const players = {};
+  let order = [];
+  let breaks = [];
+  if (baseId === "adp" || !baseId) {
+    const teamByKey = teamLookupFromSources();
+    let adpPlayers = [];
+    try { adpPlayers = await fetchSleeperAdpPlayers(); } catch (e) {
+      toast(`Couldn't fetch Sleeper ADP for a fresh base: ${e.message}`, true);
+    }
+    adpPlayers.sort((a, b) => a.rank - b.rank);
+    adpPlayers.forEach((p) => {
+      const key = playerKey(p.name, p.pos);
+      if (players[key]) return; // a source can carry the same player twice (e.g. a data-entry dupe) — first occurrence wins, rather than double-booking a slot in `order`
+      players[key] = { name: p.name, team: teamByKey.get(key) || "", pos: p.pos };
+      order.push(key);
+    });
+  } else {
+    const src = sources.find((s) => s.id === baseId);
+    if (src) {
+      const withRank = src.players.filter((p) => p.pos && isFinite(Number(p.rank)));
+      withRank.sort((a, b) => Number(a.rank) - Number(b.rank));
+      let lastTier = null;
+      withRank.forEach((p) => {
+        const key = playerKey(p.name, p.pos);
+        if (players[key]) { lastTier = p.tier; return; }
+        players[key] = { name: p.name, team: p.team || "", pos: p.pos };
+        order.push(key);
+        if (p.tier != null && p.tier !== "" && lastTier !== null && String(p.tier) !== String(lastTier)) breaks.push(key);
+        lastTier = p.tier;
+      });
+    }
+  }
+  return { players, order, breaks };
+}
+
+async function createBoard() {
+  const base = await buildBoardFromBase("adp");
+  const board = {
+    id: `board_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: "New Custom Board",
+    updatedAt: Date.now(),
+    baseId: "adp",
+    ...base,
+  };
+  customBoards = [...customBoards, board];
+  activeBoardId = board.id;
+  await persistCustomBoards();
+  renderCreator();
+}
+
+// A full clone under a new id — the obvious "try a variant without losing
+// the original" move once you're iterating on a real board (e.g. start a
+// WR-heavy build off an existing QB-heavy one), which previously meant
+// rebuilding from a base again and redoing every manual tweak by hand.
+async function duplicateActiveBoard() {
+  const board = getActiveBoard();
+  if (!board) return;
+  const copy = {
+    ...board,
+    id: `board_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: `${board.name} (copy)`,
+    updatedAt: Date.now(),
+    players: JSON.parse(JSON.stringify(board.players)),
+    order: [...board.order],
+    breaks: [...board.breaks],
+  };
+  customBoards = [...customBoards, copy];
+  activeBoardId = copy.id;
+  await persistCustomBoards();
+  renderCreator();
+  toast(`Duplicated — "${copy.name}"`);
+}
+
+async function deleteActiveBoard() {
+  const board = getActiveBoard();
+  if (!board) return;
+  const confirmed = await showConfirm(`Delete "${board.name}"?`, "This custom board will be permanently deleted. This can't be undone.", "DELETE");
+  if (!confirmed) return;
+  customBoards = customBoards.filter((b) => b.id !== board.id);
+  activeBoardId = sortedBoards()[0] ? sortedBoards()[0].id : null;
+  await persistCustomBoards();
+  renderCreator();
+}
+
+// One-step undo for "Reset from base" specifically — the single most
+// destructive button in the Creator (it wipes every manual placement/tier
+// edit with only a confirm dialog standing in the way). A confirm warns you
+// once; this actually gives the mistake back. Deliberately in-memory only
+// (not persisted) and scoped to the ONE most recent reset — this isn't a
+// general undo history, just real insurance on the one action that needed it.
+let crUndoSnapshot = null;
+let crUndoTimer = null;
+const CR_UNDO_TIMEOUT_MS = 12000;
+function showUndoBar(text) {
+  clearTimeout(crUndoTimer);
+  $("crUndoText").textContent = text;
+  $("crUndoBar").style.display = "flex";
+  crUndoTimer = setTimeout(hideUndoBar, CR_UNDO_TIMEOUT_MS);
+}
+function hideUndoBar() {
+  clearTimeout(crUndoTimer);
+  $("crUndoBar").style.display = "none";
+  crUndoSnapshot = null;
+}
+async function undoLastReset() {
+  if (!crUndoSnapshot) return;
+  const board = customBoards.find((b) => b.id === crUndoSnapshot.boardId);
+  if (board) {
+    board.baseId = crUndoSnapshot.baseId;
+    board.players = crUndoSnapshot.players;
+    board.order = crUndoSnapshot.order;
+    board.breaks = crUndoSnapshot.breaks;
+    board.updatedAt = Date.now();
+    activeBoardId = board.id;
+    await persistCustomBoards();
+    renderCreator();
+    toast("Reset undone.");
+  }
+  hideUndoBar();
+}
+
+async function resetActiveBoardFromBase() {
+  const board = getActiveBoard();
+  if (!board) return;
+  const baseId = $("crBaseSelect").value || "adp";
+  const confirmed = await showConfirm(
+    "Reset from base?",
+    "This replaces every player, rank, and tier in this board with the selected base's own order. Any manual placement you've done will be lost. (You'll get a short window to undo it.)",
+    "RESET"
+  );
+  if (!confirmed) return;
+  crUndoSnapshot = {
+    boardId: board.id, baseId: board.baseId,
+    players: JSON.parse(JSON.stringify(board.players)), order: [...board.order], breaks: [...board.breaks],
+  };
+  const base = await buildBoardFromBase(baseId);
+  board.baseId = baseId;
+  board.players = base.players;
+  board.order = base.order;
+  board.breaks = base.breaks;
+  board.updatedAt = Date.now();
+  await persistCustomBoards();
+  renderCreator();
+  showUndoBar(`Reset from ${baseId === "adp" ? "Sleeper ADP" : (sources.find((s) => s.id === baseId) || {}).name || "base"}.`);
+}
+
+// Writes the board out as a normal ranking source — makeSource/saveSources,
+// same shape every other source uses, so it shows up in the board window
+// immediately with zero new schema. Re-saving the same board updates that
+// source in place (fixed id `custom_<boardId>`) instead of duplicating it.
+async function saveBoardToSource() {
+  const board = getActiveBoard();
+  if (!board) return;
+  if (!board.order.length) { toast("Nothing placed yet — drag at least one player into the list first.", true); return; }
+  const players = boardToSourcePlayers(board);
+  const id = `custom_${board.id}`;
+  const existing = sources.find((s) => s.id === id);
+  const src = makeSource(board.name || "Custom Board", players, {
+    id, color: existing ? existing.color : SOURCE_PALETTE[sources.length % SOURCE_PALETTE.length],
+    enabled: existing ? existing.enabled : true,
+  });
+  sources = [...sources.filter((s) => s.id !== id), src];
+  await persistSources();
+  toast(`Saved — "${board.name}" is now a ranking source (${players.length} players), live in the board window.`);
+}
+
+// Mirrors the board's own effectiveStatPos() (panel.js): a selected player
+// still wins outright, but absent one, filtering to a single position now
+// brings that position's stat group forward too — direct request, matching
+// how the board already does this for its own position filter buttons.
+function crEffectiveStatPos() {
+  const board = getActiveBoard();
+  if (board && creatorSelectedKey) {
+    const p = board.players[creatorSelectedKey];
+    if (p && POSITIONS.includes(p.pos)) return p.pos;
+  }
+  return POSITIONS.includes(creatorPosFilter) ? creatorPosFilter : null;
+}
+
+// Most-recently-edited first — with more than a couple of boards, "the one
+// I was working on yesterday" used to mean scanning a plain insertion-order
+// list with no dates shown anywhere. Doesn't mutate `customBoards` itself
+// (nothing else should care about array order, only this display and the
+// "pick a default" fallbacks below, which now both go through this).
+function sortedBoards() {
+  return [...customBoards].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+// "2h ago" / "3d ago" style — used only for the board dropdown's relative
+// dates, doesn't need to be more precise than that.
+function formatRelativeTime(ts) {
+  if (!ts) return "";
+  const sec = Math.max(0, (Date.now() - ts) / 1000);
+  if (sec < 60) return "just now";
+  const min = sec / 60;
+  if (min < 60) return `${Math.floor(min)}m ago`;
+  const hr = min / 60;
+  if (hr < 24) return `${Math.floor(hr)}h ago`;
+  const day = hr / 24;
+  if (day < 30) return `${Math.floor(day)}d ago`;
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function renderCreatorToolbar() {
+  const select = $("crBoardSelect");
+  select.innerHTML = sortedBoards().map((b) => `<option value="${esc(b.id)}"${b.id === activeBoardId ? " selected" : ""}>${esc(b.name)} — ${esc(formatRelativeTime(b.updatedAt))}</option>`).join("")
+    || `<option value="">No boards yet</option>`;
+  const baseSelect = $("crBaseSelect");
+  const board = getActiveBoard();
+  const options = [`<option value="adp">No base — Sleeper ADP order</option>`]
+    .concat(sources.map((s) => `<option value="${esc(s.id)}"${board && board.baseId === s.id ? " selected" : ""}>${esc(s.name)}</option>`));
+  baseSelect.innerHTML = options.join("");
+  if (board) baseSelect.value = board.baseId || "adp";
+  $("crBoardName").value = board ? board.name : "";
+  $("crBoardName").disabled = !board;
+  $("crDuplicateBoardBtn").disabled = !board;
+  $("crDeleteBoardBtn").disabled = !board;
+  $("crResetBaseBtn").disabled = !board;
+  $("crSaveBtn").disabled = !board;
+  $("crBaseMeta").innerHTML = board
+    ? `${board.order.length.toLocaleString()} <small>/ ${Object.keys(board.players).length.toLocaleString()}</small>`
+    : "0";
+}
+
+function crPoolRows(board) {
+  const q = creatorSearch.toLowerCase();
+  const placed = new Set(board.order);
+  return Object.keys(board.players)
+    .filter((k) => !placed.has(k))
+    .map((k) => board.players[k])
+    .filter((p) => creatorPosFilter === "ALL" || p.pos === creatorPosFilter)
+    .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.team || "").toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderCreatorPool() {
+  const board = getActiveBoard();
+  const pool = $("crPool");
+  if (!board) { pool.innerHTML = ""; return; }
+  const rows = crPoolRows(board);
+  $("crPoolCount").textContent = rows.length;
+  pool.innerHTML = rows.length
+    ? rows.map((p) => {
+        const key = playerKey(p.name, p.pos);
+        const t = posTint(p.pos);
+        return `<div class="crPoolRow" data-key="${esc(key)}">
+          <span class="crName2">${flagBadge(flags[key])}${esc(p.name)}</span>
+          <span class="crPosTag" style="background:${t.bg};color:${t.fg}">${esc(p.pos)}</span>
+        </div>`;
+      }).join("")
+    : `<div class="crEmptyPool">${board.order.length ? "No matches" : "Nothing here"}</div>`;
+
+  pool.querySelectorAll(".crPoolRow").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => startPoolDrag(e, el));
+  });
+}
+
+// Dragging a player OUT of the pool and into the ranked list. Simpler than
+// the in-list reorder below (startListDrag) — a floating ghost tracks the
+// pointer 1:1 (still zero-latency direct manipulation, just without the
+// live sibling-shifting choreography, since there's no "original slot" in
+// the list to open a gap from) and on release, hit-tests against the
+// currently-rendered list rows to find where it landed.
+function startPoolDrag(e, rowEl) {
+  if (e.button !== undefined && e.button !== 0) return;
+  e.preventDefault();
+  const key = rowEl.dataset.key;
+  const rect = rowEl.getBoundingClientRect();
+  const ghost = rowEl.cloneNode(true);
+  ghost.className = "crPoolRow crDragGhost";
+  ghost.style.width = `${rect.width}px`;
+  document.body.appendChild(ghost);
+  crGhost = { key, ghost, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top };
+  positionGhost(e);
+  rowEl.style.opacity = "0.35";
+  document.body.style.cursor = "grabbing";
+  window.addEventListener("pointermove", onPoolDragMove);
+  window.addEventListener("pointerup", endPoolDrag, { once: true });
+}
+function positionGhost(e) {
+  crGhost.ghost.style.left = `${e.clientX - crGhost.offsetX}px`;
+  crGhost.ghost.style.top = `${e.clientY - crGhost.offsetY}px`;
+}
+function onPoolDragMove(e) {
+  if (!crGhost) return;
+  positionGhost(e);
+  highlightDropRow(e.clientX, e.clientY);
+}
+// Finds whichever .crRow the pointer is currently over (if any) and shows
+// the same before/after indicator the old native-drag version used —
+// reused visual language, just driven by hit-testing instead of dragover.
+let crHoverRow = null;
+function highlightDropRow(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const row = el && el.closest ? el.closest(".crRow") : null;
+  if (crHoverRow && crHoverRow !== row) crHoverRow.classList.remove("dropBefore", "dropAfter");
+  crHoverRow = row;
+  if (row) {
+    const rect = row.getBoundingClientRect();
+    const before = y < rect.top + rect.height / 2;
+    row.classList.toggle("dropBefore", before);
+    row.classList.toggle("dropAfter", !before);
+  }
+}
+function clearHoverRow() {
+  if (crHoverRow) { crHoverRow.classList.remove("dropBefore", "dropAfter"); crHoverRow = null; }
+}
+function endPoolDrag(e) {
+  window.removeEventListener("pointermove", onPoolDragMove);
+  document.body.style.cursor = "";
+  if (!crGhost) return;
+  const { key, ghost } = crGhost;
+  ghost.remove();
+  const poolEl = findPoolRowEl(key);
+  if (poolEl) poolEl.style.opacity = "";
+  const board = getActiveBoard();
+  const dropRow = crHoverRow;
+  clearHoverRow();
+  crGhost = null;
+  if (!board) return;
+  if (dropRow) {
+    const rect = dropRow.getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    moveKeyTo(board, key, dropRow.dataset.key, before);
+    persistCustomBoards();
+    renderCreator();
+  } else if (document.elementFromPoint(e.clientX, e.clientY)?.closest("#crListWrap")) {
+    // Dropped inside the list area but not on any specific row (past the
+    // last one, or into an empty list) — append to the end, same fallback
+    // the native-drag version had for "past the last row."
+    let order = board.order.filter((k) => k !== key);
+    order.push(key);
+    board.order = order;
+    board.updatedAt = Date.now();
+    persistCustomBoards();
+    renderCreator();
+  }
+  // Dropped anywhere else (back over the rail, off the page) — no-op, the
+  // player simply stays unplaced.
+}
+function findPoolRowEl(key) {
+  return [...$("crPool").querySelectorAll(".crPoolRow")].find((el) => el.dataset.key === key);
+}
+
+
+// Renders the ranked list as: a tier divider before the first player of
+// every tier (including tier 1, so the tier you're looking at is always
+// labeled), player rows, and a hoverable "+ add tier break" gap between any
+// two adjacent players that aren't already a tier boundary.
+//
+// Position filter (ALL/QB/RB/WR/TE, `creatorPosFilter`) is a VIEW on the
+// same single combined `order`/`breaks` — not a second parallel ranking.
+// Filtering to RB shows only RB rows, in their existing combined-order
+// positions, so re-ranking within that view (drag one RB above another)
+// moves them in the real combined order too — your positional and overall
+// rankings can never drift apart because there's only ever one list. Tier
+// numbers shown while filtered are each row's real global tier (computed
+// over the FULL order, same as unfiltered) — informational context, since a
+// hidden player of another position may have started a tier in between two
+// visible rows. Tier editing (add-break/merge) is only offered when
+// unfiltered, since "the gap between these two visible RBs" isn't the same
+// thing as "adjacent in the real list" once other positions are hidden —
+// letting edits happen there would silently do something other than what a
+// user watching only RBs would expect.
+function renderCreatorList() {
+  const board = getActiveBoard();
+  const listWrap = $("crListWrap");
+  const list = $("crList");
+  const statOrder = statGroupOrder(crEffectiveStatPos());
+  $("crStatHead").innerHTML = renderStatHeaderGroups(statOrder, creatorVisibleStats);
+  $("crStatHead").style.width = `${statGroupLayout(statOrder, creatorVisibleStats).totalWidth}px`;
+  if (!board) { list.innerHTML = ""; listWrap.classList.remove("empty"); return; }
+  listWrap.classList.toggle("empty", board.order.length === 0);
+  if (!board.order.length) { list.innerHTML = ""; return; }
+
+  const breakSet = new Set(board.breaks || []);
+  const statWidth = statGroupLayout(statOrder, creatorVisibleStats).totalWidth;
+  const filtered = creatorPosFilter !== "ALL";
+  const q = creatorSearch.trim().toLowerCase();
+  const searching = !!q;
+  // Tier editing (add-break/merge) needs true list adjacency to mean what it
+  // says — same reasoning as the position filter above, and search narrows
+  // the visible rows the exact same way, so it gets the same restriction.
+  const restrictEditing = filtered || searching;
+  let tier = 1;
+  let shownAny = false;
+  const parts = [];
+  const visibleOrder = []; // keys in the order they're actually rendered — used for the ▲▼ move buttons' boundary checks
+  board.order.forEach((key, i) => {
+    if (i > 0 && breakSet.has(key)) tier++;
+    const p = board.players[key] || {};
+    if (filtered && p.pos !== creatorPosFilter) return;
+    if (searching && !(p.name.toLowerCase().includes(q) || (p.team || "").toLowerCase().includes(q))) return;
+    if (!shownAny || breakSet.has(key)) {
+      parts.push(`<div class="crTierDivider" data-tier="${tier}">
+        <span class="crTline"></span>
+        <span class="crTierLabel"><span class="crTierDot" style="background:${TIER_COLORS[tier] || "#4A4A4A"}"></span>TIER ${tier}${!restrictEditing && i > 0 && breakSet.has(key) ? `<span class="crTierMerge" data-tiermerge="${esc(key)}" title="Merge into the tier above">✕</span>` : ""}</span>
+        <span class="crTline"></span>
+      </div>`);
+    } else if (!restrictEditing) {
+      parts.push(`<div class="crAddBreakGap" data-add="${esc(key)}"><span class="crAddBreakLine"></span><button class="crAddBreakBtn" data-add-btn="${esc(key)}">+ tier break</button></div>`);
+    }
+    shownAny = true;
+    const t = posTint(p.pos);
+    const visIdx = visibleOrder.length; // 0-based position among rows actually rendered, before this key is pushed
+    visibleOrder.push(key);
+    parts.push(`<div class="crRow${key === creatorSelectedKey ? " selected" : ""}" data-key="${esc(key)}">
+      <span class="crRank">${i + 1}</span>
+      <span class="crMoveBtns">
+        <button class="crMoveBtn" data-move="${esc(key)}" data-dir="up" title="Move up" ${visIdx === 0 ? "disabled" : ""}>▲</button>
+        <button class="crMoveBtn" data-move="${esc(key)}" data-dir="down" title="Move down">▼</button>
+      </span>
+      <span class="crGrip">⋮⋮</span>
+      <span class="crRowMain">
+        ${avatarHtml(key, p.name, p.pos, p.team, "sm", sleeperIds)}
+        <span class="crRowName">${flagBadge(flags[key])}${esc(p.name)}${p.team ? `<span class="crTeam">${esc(p.team)}</span>` : ""}</span>
+        <span class="crRowPos" style="background:${t.bg};color:${t.fg}">${esc(p.pos)}</span>
+      </span>
+      <span class="crStatBlock" style="width:${statWidth}px">${renderStatGroups({ key, pos: p.pos }, playerStats, statOrder, creatorVisibleStats)}</span>
+      <span class="crRowRemove" data-remove="${esc(key)}" title="Remove from board">✕</span>
+    </div>`);
+  });
+  const emptyMsg = searching
+    ? "No placed players match your search."
+    : `No ${esc(creatorPosFilter)} players placed yet.`;
+  list.innerHTML = shownAny ? parts.join("") : `<div class="crEmptyPool" style="padding:30px 4px">${emptyMsg}</div>`;
+  // The last visible row's "down" button can't be known as disabled while
+  // building it (its own index doesn't know the final count yet) — patched
+  // in once the full list exists. list.lastElementChild is always that
+  // row's div: tier dividers/add-break gaps only ever appear BEFORE a row.
+  if (shownAny) {
+    const lastDown = list.lastElementChild.querySelector('.crMoveBtn[data-dir="down"]');
+    if (lastDown) lastDown.disabled = true;
+  }
+
+  list.querySelectorAll("[data-move]").forEach((el) => {
+    el.addEventListener("click", (e) => { e.stopPropagation(); moveAdjacent(el.dataset.move, el.dataset.dir); });
+  });
+  list.querySelectorAll(".crRow").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => armListDrag(e, el));
+  });
+  list.querySelectorAll("[data-remove]").forEach((el) => {
+    el.addEventListener("click", (e) => { e.stopPropagation(); removeFromBoard(el.dataset.remove); });
+  });
+  list.querySelectorAll("[data-tiermerge]").forEach((el) => {
+    el.addEventListener("click", (e) => { e.stopPropagation(); mergeTierUp(el.dataset.tiermerge); });
+  });
+  list.querySelectorAll("[data-add-btn]").forEach((el) => {
+    el.addEventListener("click", (e) => { e.stopPropagation(); addBreakBefore(el.dataset.addBtn); });
+  });
+}
+
+// The drag handle used to be just the small ⋮⋮ grip icon — a real mouse
+// drag missed it entirely in testing (landed on plain row whitespace a few
+// pixels off and just started a native text-selection instead). The whole
+// row is the handle now, which needs a movement-threshold "arming" step
+// first (Apple's hysteresis guidance: require a few pixels of movement
+// before committing to a gesture) — otherwise a plain click-to-select
+// (toggling a row's stat-group focus, see effectiveStatPos) would
+// immediately register as a zero-distance drag instead. Below the
+// threshold on release, it's a click; above it, it becomes a real drag,
+// continuing smoothly from the ORIGINAL pointerdown position (not the
+// point where the threshold was crossed) so there's no visible jump.
+const DRAG_ARM_THRESHOLD = 4;
+function armListDrag(e, rowEl) {
+  if (e.button !== undefined && e.button !== 0) return;
+  if (e.target.closest(".crMoveBtns, .crRowRemove")) return; // those have their own click handlers
+  const startX = e.clientX, startY = e.clientY;
+  let engaged = false;
+  function onArmedMove(ev) {
+    if (Math.abs(ev.clientY - startY) > DRAG_ARM_THRESHOLD || Math.abs(ev.clientX - startX) > DRAG_ARM_THRESHOLD) {
+      engaged = true;
+      window.removeEventListener("pointermove", onArmedMove);
+      window.removeEventListener("pointerup", onArmedUp);
+      beginListDrag(e, rowEl);
+    }
+  }
+  function onArmedUp() {
+    window.removeEventListener("pointermove", onArmedMove);
+    window.removeEventListener("pointerup", onArmedUp);
+    if (!engaged) {
+      creatorSelectedKey = creatorSelectedKey === rowEl.dataset.key ? null : rowEl.dataset.key;
+      renderCreatorList();
+    }
+  }
+  window.addEventListener("pointermove", onArmedMove);
+  window.addEventListener("pointerup", onArmedUp, { once: true });
+}
+
+// In-list reorder — direct 1:1 pointer tracking (Apple/Emil "direct
+// manipulation": the dragged row's transform is set straight from the
+// pointer position every move, with NO css transition on the row itself,
+// so there's zero added latency between finger/cursor and row). Other rows
+// between the drag's start and current position get a live "make room"
+// shift (translateY by one row-height, WITH a short eased transition —
+// that's a system-driven consequence of the gesture, not something the
+// user is directly moving, so easing there is correct and expected, the
+// same way a real stack of cards settles when you slide one out).
+// `e` here is the ORIGINAL pointerdown event (see armListDrag above), not
+// whatever move event crossed the arm threshold — startY has to anchor to
+// where the pointer actually went down, or the row would visibly jump by
+// the threshold distance the instant the drag engages.
+function beginListDrag(e, rowEl) {
+  const list = $("crList");
+  const rowEls = [...list.querySelectorAll(".crRow")];
+  const startIndex = rowEls.indexOf(rowEl);
+  const rect = rowEl.getBoundingClientRect();
+  const rowHeight = rect.height + parseFloat(getComputedStyle(rowEl).marginBottom || "0");
+  crSort = { key: rowEl.dataset.key, rowEl, rowEls, startIndex, currentIndex: startIndex, startY: e.clientY, rowHeight };
+  rowEl.classList.add("grabbed");
+  rowEl.style.zIndex = "50";
+  rowEls.forEach((el) => { if (el !== rowEl) el.classList.add("shifting"); });
+  document.body.style.cursor = "grabbing";
+  window.addEventListener("pointermove", onListDragMove);
+  window.addEventListener("pointerup", endListDrag, { once: true });
+  window.addEventListener("pointercancel", endListDrag, { once: true });
+}
+function onListDragMove(e) {
+  if (!crSort) return;
+  const dy = e.clientY - crSort.startY;
+  crSort.rowEl.style.transform = `translateY(${dy}px)`;
+  const rawIndex = crSort.startIndex + Math.round(dy / crSort.rowHeight);
+  const newIndex = Math.max(0, Math.min(crSort.rowEls.length - 1, rawIndex));
+  if (newIndex !== crSort.currentIndex) {
+    crSort.currentIndex = newIndex;
+    applyListShifts();
+  }
+  // Dragging up past the top of the list, onto the rail — offer removal,
+  // same as the old native-drag version's "drop on the pool" behavior.
+  const overRail = document.elementFromPoint(e.clientX, e.clientY)?.closest(".crRail");
+  crSort.rowEl.classList.toggle("overRail", !!overRail);
+}
+function applyListShifts() {
+  const { rowEls, startIndex, currentIndex, rowHeight } = crSort;
+  rowEls.forEach((el, i) => {
+    if (el === crSort.rowEl) return;
+    let shift = 0;
+    if (startIndex < currentIndex && i > startIndex && i <= currentIndex) shift = -rowHeight;
+    else if (startIndex > currentIndex && i >= currentIndex && i < startIndex) shift = rowHeight;
+    el.style.transform = shift ? `translateY(${shift}px)` : "";
+  });
+}
+function endListDrag(e) {
+  if (!crSort) return;
+  window.removeEventListener("pointermove", onListDragMove);
+  document.body.style.cursor = "";
+  const { key, rowEl, rowEls, startIndex, currentIndex } = crSort;
+  const overRail = rowEl.classList.contains("overRail");
+  rowEls.forEach((el) => { el.classList.remove("shifting"); el.style.transform = ""; });
+  rowEl.classList.remove("grabbed", "overRail");
+  rowEl.style.zIndex = "";
+  crSort = null;
+  if (overRail) { removeFromBoard(key); return; }
+  if (currentIndex === startIndex) return; // no real move — nothing to persist, no re-render needed
+  const board = getActiveBoard();
+  if (!board) return;
+  const originalKeys = rowEls.map((el) => el.dataset.key);
+  const targetKey = originalKeys[currentIndex];
+  const before = currentIndex < startIndex;
+  moveKeyTo(board, key, targetKey, before);
+  persistCustomBoards();
+  renderCreator();
+}
+
+function addBreakBefore(key) {
+  const board = getActiveBoard();
+  if (!board) return;
+  const breaks = new Set(board.breaks || []);
+  breaks.add(key);
+  board.breaks = [...breaks];
+  board.updatedAt = Date.now();
+  persistCustomBoards();
+  renderCreatorList();
+  renderCreatorToolbar();
+}
+function mergeTierUp(key) {
+  const board = getActiveBoard();
+  if (!board) return;
+  board.breaks = (board.breaks || []).filter((k) => k !== key);
+  board.updatedAt = Date.now();
+  persistCustomBoards();
+  renderCreatorList();
+  renderCreatorToolbar();
+}
+function removeFromBoard(key) {
+  const board = getActiveBoard();
+  if (!board) return;
+  board.order = board.order.filter((k) => k !== key);
+  board.breaks = (board.breaks || []).filter((k) => k !== key);
+  board.updatedAt = Date.now();
+  persistCustomBoards();
+  renderCreator();
+}
+// Shared by both drags (startPoolDrag/endPoolDrag, startListDrag/endListDrag)
+// and the ▲▼ move buttons (moveAdjacent) below — all of them are really the
+// same operation, "put `key` immediately before/after `targetKey` in the
+// combined order," just triggered differently. Tier breaks are keyed by
+// player identity (see shared.js), so they follow whichever player carries
+// them automatically; nothing here needs to touch `breaks` except when the
+// moved player itself owns one, which just moves with it, which is the
+// correct behavior — "this player starts a new tier" should travel with the
+// player, not stay pinned to a now-meaningless list position. Doesn't
+// persist/re-render itself so callers can batch that with whatever else
+// they need to update.
+function moveKeyTo(board, key, targetKey, before) {
+  let order = board.order.filter((k) => k !== key);
+  const targetIdx = order.indexOf(targetKey);
+  const insertIdx = targetIdx === -1 ? order.length : (before ? targetIdx : targetIdx + 1);
+  order.splice(insertIdx, 0, key);
+  board.order = order;
+  board.updatedAt = Date.now();
+}
+
+// One-click reorder — the same "move up/down one slot" affordance the
+// Sleeper queue popover already has (panel.js's queueMoveBtn), requested
+// directly as an easier alternative to dragging for a small nudge. Moves
+// relative to the CURRENTLY VISIBLE neighbor (respecting the position
+// filter), not the raw global neighbor, so it's consistent with how
+// dragging within a filtered view already behaves — see the position-filter
+// reasoning above renderCreatorList.
+function moveAdjacent(key, dir) {
+  const board = getActiveBoard();
+  if (!board) return;
+  const visible = board.order.filter((k) => {
+    const p = board.players[k];
+    return p && (creatorPosFilter === "ALL" || p.pos === creatorPosFilter);
+  });
+  const idx = visible.indexOf(key);
+  if (idx === -1) return;
+  const targetIdx = dir === "up" ? idx - 1 : idx + 1;
+  if (targetIdx < 0 || targetIdx >= visible.length) return;
+  moveKeyTo(board, key, visible[targetIdx], dir === "up");
+  persistCustomBoards();
+  renderCreator();
+}
+
+function renderCreator() {
+  const board = getActiveBoard();
+  $("crEmptyState").style.display = board ? "none" : "";
+  $("crMain").style.display = board ? "" : "none";
+  renderCreatorToolbar();
+  $("crPosTabs").querySelectorAll(".crPosTab").forEach((el) => el.classList.toggle("active", el.dataset.pos === creatorPosFilter));
+  if (!board) return;
+  renderCreatorPool();
+  renderCreatorList();
+}
+
+$("crPosTabs").querySelectorAll(".crPosTab").forEach((el) => {
+  el.addEventListener("click", () => {
+    creatorPosFilter = el.dataset.pos;
+    renderCreator();
+  });
+});
+$("crNewBoardBtn").addEventListener("click", createBoard);
+$("crDuplicateBoardBtn").addEventListener("click", duplicateActiveBoard);
+$("crDeleteBoardBtn").addEventListener("click", deleteActiveBoard);
+$("crUndoBtn").addEventListener("click", undoLastReset);
+$("crResetBaseBtn").addEventListener("click", resetActiveBoardFromBase);
+$("crSaveBtn").addEventListener("click", saveBoardToSource);
+$("crBoardSelect").addEventListener("change", () => { activeBoardId = $("crBoardSelect").value; creatorSelectedKey = null; hideUndoBar(); renderCreator(); });
+$("crBoardName").addEventListener("input", () => {
+  const board = getActiveBoard();
+  if (!board) return;
+  board.name = $("crBoardName").value;
+  board.updatedAt = Date.now();
+  persistCustomBoards();
+  renderCreatorToolbar();
+});
+// One search box for the whole board now, not just the unplaced rail —
+// direct bug report: moving a player to unplaced and searching for them to
+// place them back only ever searched the pool, so a placed player (the
+// common "where did they go" case) was simply unfindable. Filters both
+// lists off the same `creatorSearch` state.
+$("crSearch").addEventListener("input", () => { creatorSearch = $("crSearch").value; renderCreatorPool(); renderCreatorList(); });
+// Dragging a list row onto the rail to remove it is handled inline inside
+// startListDrag/endListDrag (the "overRail" check) — no separate listener
+// needed here, unlike the old native-drag version which needed #crPool's
+// own drop handler since native dragover/drop only fire on the element
+// actually under the cursor.
 
 // ---------- seed built-in sources ----------
 // Re-seed FantasyPros' player list from fp-rankings.js on every load, same as
@@ -1027,7 +1807,17 @@ async function ensureBuiltinSources() {
   injuries = await loadInjuries();
   const v = await chrome.storage.local.get([K_ROSTER]);
   if (draft.myRosterId == null && v[K_ROSTER] != null) draft.myRosterId = Number(v[K_ROSTER]);
+  // Loaded before the first renderAll() so the Sources table's row avatars
+  // (added alongside the Rankings Creator redesign) have real headshot ids
+  // on the very first paint instead of falling back to initials until an
+  // unrelated re-render happens to fire.
+  sleeperIds = await loadSleeperIdMap();
   renderAll();
+
+  customBoards = await loadCustomBoards();
+  activeBoardId = sortedBoards()[0] ? sortedBoards()[0].id : null; // open the most recently edited board by default
+  playerStats = await loadPlayerStats();
+  creatorVisibleStats = await loadStatPrefs();
 
   // Silent background refresh, same pattern as ADP/stat auto-fetches.
   autoRefreshProjections().then((map) => {
@@ -1035,6 +1825,11 @@ async function ensureBuiltinSources() {
   });
   // Same silent auto-refresh as the board window's init (shared.js) — covers
   // the case where the Manager tab is opened on its own, not just via the
-  // board's "Manager" button.
-  autoRefreshAdpAndStats();
+  // board's "Manager" button. Also feeds the Rankings Creator's stat
+  // columns/headshots, so run it regardless of which tab is showing first.
+  autoRefreshAdpAndStats().then(async () => {
+    playerStats = await loadPlayerStats();
+    sleeperIds = await loadSleeperIdMap();
+    if (activeTab === "creator") renderCreator();
+  });
 })();
