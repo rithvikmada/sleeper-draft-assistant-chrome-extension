@@ -55,7 +55,7 @@ const sandbox = {
   chrome: { storage: { local: { get: async () => ({}), set: async () => {} } } },
 };
 vm.createContext(sandbox);
-for (const file of ["rankings.js", "fp-rankings.js", "shared.js"]) {
+for (const file of ["rankings.js", "fp-rankings.js", "games-played-data.js", "shared.js"]) {
   vm.runInContext(fs.readFileSync(path.join(REPO, file), "utf8"), sandbox, { filename: file });
 }
 // Top-level `const`/`let` inside a vm-executed script do NOT become
@@ -73,6 +73,7 @@ const NAMES = [
   "applySyncedLeagueSettings", "computeReplacementRanks", "activePositions",
   "SCORING_FORMATS", "applySyncedScoringFormat", "setScoringFormatOverride",
   "scoringPtsField", "scoringAdpField",
+  "gamesPlayedAt", "GAMES_PLAYED_CURVE",
 ];
 const exported = vm.runInContext(`({ ${NAMES.join(", ")} })`, sandbox);
 const {
@@ -86,6 +87,7 @@ const {
   scoringPtsField, scoringAdpField,
   POSITIONS, CORE_POSITIONS, BEER_POSITIONS, buildPositionRankValueMap,
   applySyncedLeagueSettings, computeReplacementRanks, activePositions,
+  gamesPlayedAt, GAMES_PLAYED_CURVE,
 } = exported;
 
 const mk = (id, name, arr) =>
@@ -350,6 +352,42 @@ const mk = (id, name, arr) =>
 }
 
 // ============================================================
+// GAMES_PLAYED_CURVE / gamesPlayedAt — the real historical games-played
+// data (build-games-played-data.js) that replaced the old guessed
+// AVG_GAMES_PLAYED constants. Sanity checks on the bundled data + lookup,
+// not on the real-world numbers themselves (those are expected to shift
+// whenever the curve is regenerated for a new season).
+// ============================================================
+
+{
+  // K added alongside K/DST support (2026-08-26) — same real-data pipeline
+  // as QB/RB/WR/TE, not a guess (see build-games-played-data.js). DEF is
+  // deliberately not in this list and never will be — see BEER_POSITIONS.
+  ["QB", "RB", "WR", "TE", "K"].forEach((pos) => {
+    ok(Array.isArray(GAMES_PLAYED_CURVE[pos]) && GAMES_PLAYED_CURVE[pos].length >= 60,
+      `${pos} has a real games-played curve with real depth`);
+    GAMES_PLAYED_CURVE[pos].forEach((v, i) => {
+      ok(v > 0 && v <= 17, `${pos} curve value at rank ${i + 1} (${v}) is a plausible games-played number (0-17)`);
+    });
+  });
+  eq(gamesPlayedAt("QB", 1), GAMES_PLAYED_CURVE.QB[0], "gamesPlayedAt(pos, 1) reads the curve's first entry");
+  eq(gamesPlayedAt("QB", 1000), GAMES_PLAYED_CURVE.QB[GAMES_PLAYED_CURVE.QB.length - 1],
+    "a rank beyond the curve's real depth clamps to the last (deepest) real data point rather than throwing or guessing further");
+  // The real, honest finding from building this (see claude.md): QBs decay
+  // steeply in games-played by rank (backups only play when a starter is
+  // hurt), while RBs stay comparatively flat even at replacement depth (a
+  // low-rank RB is usually a healthy committee back, not an injured one).
+  ok(GAMES_PLAYED_CURVE.QB[0] - GAMES_PLAYED_CURVE.QB[39] > GAMES_PLAYED_CURVE.RB[0] - GAMES_PLAYED_CURVE.RB[39],
+    "QB's games-played drop-off from rank 1 to rank 40 is steeper than RB's, matching the real finding this build surfaced");
+  // K's real finding, found extending this to K/DST support: kickers play
+  // almost every game through roughly the top 30 (streaming/committee
+  // kickers are rare at the top), then fall off a cliff much sharper than
+  // any other position — a real result, not assumed going in.
+  ok(GAMES_PLAYED_CURVE.K[0] - GAMES_PLAYED_CURVE.K[39] > GAMES_PLAYED_CURVE.QB[0] - GAMES_PLAYED_CURVE.QB[39],
+    "K's games-played drop-off from rank 1 to rank 40 is even steeper than QB's");
+}
+
+// ============================================================
 // buildBeerValues — BEER/VBD (backlog #8). This league's exact settings
 // (10 teams, 1QB/2RB/2WR/1TE/2FLEX) via LEAGUE_SETTINGS drive
 // REPLACEMENT_RANK — checking the derived numbers against hand math catches
@@ -360,21 +398,32 @@ const mk = (id, name, arr) =>
 
 {
   eq(LEAGUE_SETTINGS.teams, 10, "league settings: 10 teams");
-  // QB: 1 starter x 10 teams, no flex share = 10 slots x 17 games / 14 avg
-  // games played = ceil(12.14) = 13.
-  eq(REPLACEMENT_RANK.QB, 13, "QB replacement rank matches the hand-worked man-games math");
-  // RB: (2 starters x 10) + round(20 flex x 0.45) = 20+9 = 29 slots x 17 / 11.5
-  // = ceil(42.87) = 43.
-  eq(REPLACEMENT_RANK.RB, 43, "RB replacement rank matches the hand-worked man-games math");
-  // WR: same 29 slots x 17 / 13.5 = ceil(36.5) = 37.
-  eq(REPLACEMENT_RANK.WR, 37, "WR replacement rank matches the hand-worked man-games math");
-  // TE: (1 x 10) + round(20 x 0.10) = 10+2 = 12 slots x 17 / 13.5 = ceil(15.1) = 16.
-  eq(REPLACEMENT_RANK.TE, 16, "TE replacement rank matches the hand-worked man-games math");
+  // These used to be one hand-worked division per position against a flat
+  // guessed games-played constant. Since 2026-08-25, games-played varies BY
+  // RANK (GAMES_PLAYED_CURVE, from real Sleeper season data — see
+  // build-games-played-data.js), and REPLACEMENT_RANK is solved iteratively
+  // against that curve (computeReplacementRanks, shared.js) rather than by
+  // one division. So these are now regression pins against the CURVE DATA
+  // ITSELF, not a hand-workable formula — if the bundled games-played-data.js
+  // is ever regenerated (a new season rolls into the 3-year window), these
+  // numbers are EXPECTED to move and should be updated to match, not treated
+  // as a bug. What this test actually protects against is a silent break in
+  // the iterative solve or the curve lookup (e.g. an off-by-one on rank
+  // indexing), not "did the real-world number change."
+  eq(REPLACEMENT_RANK.QB, 11, "QB replacement rank matches the iterative solve against the real games-played curve");
+  eq(REPLACEMENT_RANK.RB, 34, "RB replacement rank matches the iterative solve against the real games-played curve");
+  eq(REPLACEMENT_RANK.WR, 32, "WR replacement rank matches the iterative solve against the real games-played curve");
+  eq(REPLACEMENT_RANK.TE, 14, "TE replacement rank matches the iterative solve against the real games-played curve");
+  // K, added for K/DST support — same iterative solve, same real curve,
+  // just no flex share (K is never flex-eligible): 1 starter x 10 teams =
+  // 10 slots x 17 games, converged against K's own real games-played curve.
+  eq(REPLACEMENT_RANK.K, 11, "K replacement rank matches the iterative solve against its own real games-played curve");
+  ok(REPLACEMENT_RANK.DEF === undefined, "REPLACEMENT_RANK still never has a DEF entry — DEF doesn't participate in BEER at all");
 }
 
 {
-  // 50 QBs, descending projection, no one drafted — replacement is the 13th
-  // best (REPLACEMENT_RANK.QB), so QB1's value is points(1) - points(13).
+  // 50 QBs, descending projection, no one drafted — replacement is the
+  // REPLACEMENT_RANK.QB-th best, so QB1's value is points(1) - points(that rank).
   const rows = [];
   const projMap = {};
   for (let i = 1; i <= 50; i++) {
@@ -384,23 +433,24 @@ const mk = (id, name, arr) =>
     projMap[key] = 400 - i * 5; // strictly descending
   }
   const { values } = buildBeerValues(rows, projMap, new Set());
+  const repRank = REPLACEMENT_RANK.QB;
   const p1 = playerKey("QB Player 1", "QB");
-  const p13 = playerKey("QB Player 13", "QB");
-  eq(values.get(p1), projMap[p1] - projMap[p13], "QB1's value is its own points minus the 13th-best available QB's points");
-  eq(values.get(p13), 0, "the replacement player itself always values at exactly 0");
+  const pRep = playerKey(`QB Player ${repRank}`, "QB");
+  eq(values.get(p1), projMap[p1] - projMap[pRep], "QB1's value is its own points minus the replacement-rank QB's points");
+  eq(values.get(pRep), 0, "the replacement player itself always values at exactly 0");
 
   // Live recompute: draft off the top 5 QBs. The replacement player is still
-  // "13th best AVAILABLE," which is now the players's original rank 18 (5
-  // taken + 13 deep from there) — replacement level should get worse (lower
-  // points), which means QB1's value should go UP relative to the undrafted
-  // pool, matching "the best available replacement gets worse as players at
-  // that position get drafted" from the build prompt.
+  // "replacement-rank-th best AVAILABLE," which is now that many spots
+  // deeper into the original list — replacement level should get worse
+  // (lower points), which means QB1's value should go UP relative to the
+  // undrafted pool, matching "the best available replacement gets worse as
+  // players at that position get drafted" from the build prompt.
   const takenTop5 = new Set(Array.from({ length: 5 }, (_, i) => playerKey(`QB Player ${i + 1}`, "QB")));
   const rowsAfter = rows.filter((r) => !takenTop5.has(r.key));
   const { values: valuesAfter } = buildBeerValues(rowsAfter, projMap, new Set());
   const p6 = playerKey("QB Player 6", "QB"); // now the best available QB
-  const p18 = playerKey("QB Player 18", "QB"); // now the 13th-best available QB
-  eq(valuesAfter.get(p6), projMap[p6] - projMap[p18], "after 5 QBs are drafted, replacement level is recomputed off the 13th-best AVAILABLE QB");
+  const pRepAfter = playerKey(`QB Player ${5 + repRank}`, "QB"); // now the replacement-rank-th best available QB
+  eq(valuesAfter.get(p6), projMap[p6] - projMap[pRepAfter], "after 5 QBs are drafted, replacement level is recomputed off the replacement-rank-th best AVAILABLE QB");
   ok(valuesAfter.get(p6) > values.get(playerKey("QB Player 6", "QB")), "the same player's value rises once shallower players ahead of them are drafted off, since replacement level degraded");
 }
 

@@ -508,7 +508,7 @@ function bestAvailable() {
 // starters (LEAGUE_SETTINGS.starters) + this team's share of its own 2 FLEX
 // spots (using the same FLEX_SHARE ratios as the league-wide replacement
 // calc, rounded) + 1 bench buffer. Documented assumption, not derived, same
-// as FLEX_SHARE/AVG_GAMES_PLAYED — revisit if it feels off in practice.
+// as FLEX_SHARE/GAMES_PLAYED_CURVE — revisit if it feels off in practice.
 const TEAM_TARGET_SLOTS = { QB: 2, RB: 4, WR: 4, TE: 2 };
 // Each pick beyond target multiplies the crown-selection score by 0.6 —
 // not a hard cutoff, so a truly exceptional value can still win the crown,

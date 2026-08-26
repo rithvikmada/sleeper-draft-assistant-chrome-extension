@@ -2548,27 +2548,49 @@ const SEASON_GAMES = 17;
 // The "man-games" piece of BEER: converts "how many starter-slots does the
 // league need" into "how many players deep do you actually need to draft to
 // cover a full season," by dividing total starter man-games needed by the
-// average games a rostered player around that depth actually plays. Starters
-// alone undercount replacement depth — byes, injuries, and in-season bench
-// churn pull more than just the nominal starter count into starting lineups
-// over a season. Single blended constant per position (not split into a
-// separate starter-tier/replacement-tier number) — simple and defensible,
-// not exotic, per the reasoning logged when this was built. QBs miss the
-// fewest games (least contact, backups rarely needed); RBs miss the most
-// (workload + committee/injury risk); WR/TE land in between. Revisit these
-// against real injury-rate data if replacement ranks ever look badly off.
-// K (added for K/DST support) is set even higher than QB — kickers are
-// rarely benched for performance and see the least streaming/committee
-// churn of any position — a judgment call, not derived, same spirit as the
-// rest of this table; revisit if it ever looks off. DEF has no entry at all
-// and deliberately never will: see REPLACEMENT_RANK below for why a team
-// defense doesn't fit this man-games model in the first place.
-const AVG_GAMES_PLAYED = { QB: 14, RB: 11.5, WR: 13.5, TE: 13.5, K: 16 };
+// average games a rostered player around THAT DEPTH actually plays.
+// Starters alone undercount replacement depth — byes, injuries, and
+// in-season bench churn pull more than just the nominal starter count into
+// starting lineups over a season.
+//
+// Used to be one guessed flat constant per position (QB 14, RB 11.5, WR/TE
+// 13.5) — replaced (2026-08-25) with GAMES_PLAYED_CURVE (games-played-data.js),
+// a real games-played-by-finish-rank curve built from 3 seasons of Sleeper's
+// own stats (see build-games-played-data.js). Real data overturned part of
+// the original guess: QB's curve drops off steeply (a rank-40 QB is almost
+// always a backup who only played because a starter got hurt, averaging
+// ~7 games), but RB/WR/TE stay much flatter through rank 60 (~14-15 games)
+// than assumed — a mid/low-rank RB is usually a healthy committee/timeshare
+// player, not an injured one, so "RB misses the most games" was wrong as a
+// blanket assumption. This is why RB's replacement rank changed materially
+// once real data replaced the guess — see claude.md for the honest before/
+// after comparison and the caveat about what this curve does and doesn't
+// measure (season-end finish rank blends injury attrition with committee/
+// opportunity share, especially at RB — it is NOT a pure health/availability
+// measure, just the closest real proxy available without deeper play-by-play
+// data).
+//
+// K (added for K/DST support, 2026-08-26) uses this exact same real-data
+// pipeline, not a guess — confirmed live that Sleeper's stats endpoint
+// carries the same gp/pos_rank_ppr fields for kickers, so
+// build-games-played-data.js just fetches K alongside QB/RB/WR/TE. The real
+// curve shows something a flat guess never would have: kickers play almost
+// every game through roughly the top 30 (16-17), then fall off a cliff
+// (streaming/committee kickers barely play at all) — a much sharper cutoff
+// than any other position. DEF has no entry here and never will: see
+// BEER_POSITIONS below for why a team defense doesn't fit this man-games
+// model in the first place.
+function gamesPlayedAt(pos, rank) {
+  const curve = GAMES_PLAYED_CURVE[pos];
+  const idx = Math.min(curve.length, Math.max(1, Math.round(rank))) - 1;
+  return curve[idx];
+}
 
 // Every position BEER's replacement-level math actually applies to — every
 // CORE_POSITIONS entry plus K (added for K/DST support: kickers are
 // individual players who can be benched/injured/have byes, so the same
-// man-games replacement model reasonably applies). DEF is deliberately
+// man-games replacement model reasonably applies, now backed by K's own
+// real games-played curve above rather than a guess). DEF is deliberately
 // excluded, permanently: a team defense is a fixed 32-entity pool with no
 // waiver-replenishment churn the way an individual player has, so "how many
 // man-games deep before you hit replacement level" isn't a coherent question
@@ -2584,6 +2606,13 @@ const BEER_POSITIONS = [...CORE_POSITIONS, "K"];
 // applySyncedLeagueSettings) — the depth itself is a function of league
 // shape, but WHICH player sits at that depth is not (see buildBeerValues
 // below, which recomputes live off the current draft state).
+//
+// Games-played varies BY rank (the curve above), not a single constant,
+// which makes this circular — the answer depends on which games-played
+// value you look up, which depends on the answer. Solved by iterating a
+// few times: start from a reasonable guess, look up games-played AT that
+// depth, recompute the depth, repeat until it stops moving (in practice
+// this converges in 2-3 iterations since the curve is smooth, not a cliff).
 function computeReplacementRanks() {
   const flexSlotsTotal = LEAGUE_SETTINGS.flexSlots * LEAGUE_SETTINGS.teams;
   const ranks = {};
@@ -2591,7 +2620,12 @@ function computeReplacementRanks() {
     const base = (LEAGUE_SETTINGS.starters[pos] || 0) * LEAGUE_SETTINGS.teams;
     const flexShare = Math.round(flexSlotsTotal * (FLEX_SHARE[pos] || 0));
     const starterSlots = base + flexShare;
-    ranks[pos] = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / AVG_GAMES_PLAYED[pos]));
+    let rank = 20; // starting guess, refined below
+    for (let i = 0; i < 5; i++) {
+      const gamesPlayed = gamesPlayedAt(pos, rank);
+      rank = Math.max(1, Math.ceil((starterSlots * SEASON_GAMES) / gamesPlayed));
+    }
+    ranks[pos] = rank;
   });
   return ranks;
 }
