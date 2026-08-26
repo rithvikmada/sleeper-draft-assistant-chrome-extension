@@ -461,6 +461,26 @@ body[data-popout] .queuePopover {
    this popover) replaced an earlier inline-per-row version after direct
    feedback that a dozen-plus messages made Settings scroll too long. */
 .rageBaitPopover { width: 420px; max-height: 420px; }
+
+/* Feedback popover (added 2026-08-26) — same queuePopover chrome as the
+   others, own width/inner layout. */
+.fbPopover { width: 320px; display: flex; flex-direction: column; gap: 10px; }
+.fbTypeRow { width: 100%; }
+.fbTypeRow .seg { flex: 1; text-align: center; }
+.fbTextarea {
+  width: 100%; min-height: 96px; resize: vertical; padding: 8px 10px; box-sizing: border-box;
+  border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-input, var(--ink-800));
+  color: var(--text-primary); font: var(--type-ui); font-size: var(--text-sm);
+}
+.fbTextarea:focus { outline: none; border-color: var(--border-accent); box-shadow: var(--ring-focus); }
+.fbTextarea::placeholder { color: var(--text-disabled); }
+.fbAttachRow { display: flex; align-items: center; gap: 8px; }
+.fbAttachCount { font: var(--type-ui); font-size: var(--text-xs); color: var(--text-muted); }
+.fbAttachList { display: flex; flex-direction: column; gap: 4px; }
+.fbAttachItem { display: flex; align-items: center; gap: 6px; font: var(--type-ui); font-size: var(--text-xs); color: var(--text-secondary); background: var(--ink-800); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 4px 8px; }
+.fbAttachItem .fbAttachName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fbAttachItem .fbAttachRemove { cursor: pointer; color: var(--text-muted); font-weight: 700; }
+.fbAttachItem .fbAttachRemove:hover { color: var(--red-500); }
 .rbPopHeader { display: flex; align-items: center; justify-content: space-between; }
 .rbPopClose { width: 22px; height: 22px; }
 .rbPopClose::before { content: ""; display: block; width: 11px; height: 11px; background: currentColor;
@@ -759,6 +779,13 @@ body[data-popout] .queuePopover {
 .testStatus.ok { color: var(--green-500); }
 .testStatus.err { color: var(--red-500); }
 
+/* Full-app license lock (added 2026-08-26) — covers the entire window,
+   z-index above everything else here, until a valid key unlocks it. */
+.licenseLock { position: fixed; inset: 0; z-index: 500; background: var(--surface-base); display: flex; align-items: center; justify-content: center; }
+.licenseLock[hidden] { display: none; }
+.licenseLockCard { width: 300px; display: flex; flex-direction: column; gap: 12px; padding: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-menu); }
+.licenseLockCopy { font: var(--type-ui); font-size: var(--text-sm); color: var(--text-muted); margin: 0; line-height: 1.4; }
+
 /* EXPERIMENTAL (queue/draft-write branch) — themed replacement for
    window.confirm() on the "draft this player now" action, specifically so
    it can carry a "don't show this again" checkbox (a native confirm() has
@@ -813,6 +840,20 @@ body[data-popout] .queuePopover {
 </style>
 </head>
 <body>
+  <!-- Full-app license lock (added 2026-08-26). Covers the whole window
+       until a valid key is entered — nothing behind it is usable (board,
+       Manager link, everything) until isLicensed() is true. See claude.md's
+       licensing section: paid, all-or-nothing, no freemium tier. -->
+  <div id="licenseLock" class="licenseLock" hidden>
+    <div class="licenseLockCard">
+      <span class="brand2">4th<span class="amp">&amp;</span>Go</span>
+      <p class="licenseLockCopy">A license key is required to use this extension. Purchase one, then enter it below to unlock the board.</p>
+      <div class="input2"><input id="lockLicenseInput" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" /></div>
+      <button id="lockActivateBtn" class="btn primary" style="width:100%">Activate</button>
+      <span id="lockLicenseStatus" class="testStatus"></span>
+    </div>
+  </div>
+
   <div id="header">
     <div class="headTop">
       <div class="brandRow">
@@ -823,6 +864,7 @@ body[data-popout] .queuePopover {
         <button id="openManager" class="btn outline" data-tip="Open the Rankings Manager">Manager</button>
         <button id="themeToggleBtn" class="iconBtn2" data-tip="Switch between dark and light" aria-label="Toggle theme"></button>
         <button id="statusBtn" class="iconBtn2" data-tip="Sleeper connection &amp; source freshness at a glance" aria-label="Status"></button>
+        <button id="sendFeedbackBtn" class="iconBtn2" data-tip="Send feedback, a bug report, or a feature request" aria-label="Send Feedback"></button>
         <button id="settingsBtn" class="iconBtn2" data-tip="Show/hide setup &amp; sync settings" aria-label="Settings"></button>
       </div>
     </div>
@@ -846,6 +888,18 @@ body[data-popout] .queuePopover {
         <div class="fieldRow">
           <button id="connectBtn" class="btn primary" style="flex:1">Sync</button>
           <button id="stopBtn" class="btn danger" style="display:none;flex:1">Stop</button>
+        </div>
+        <!-- License status readout only — activation happens at the
+             full-app #licenseLock screen before this UI is ever reachable
+             (see claude.md's licensing section). This just shows the active
+             key and lets you deactivate/switch keys. -->
+        <div class="field" id="licenseField">
+          <span class="fieldLabel">License key</span>
+          <div class="fieldRow" style="align-items:center">
+            <div class="input2" style="flex:1"><input id="licenseInput" disabled autocomplete="off" /></div>
+            <button id="licenseActivateBtn" class="btn secondary sm">Deactivate</button>
+          </div>
+          <span id="licenseStatus" class="testStatus"></span>
         </div>
         <!-- EXPERIMENTAL (queue/draft-write branch). Off by default — the
              board's normal experience (rows, flag button, everything else)
@@ -938,6 +992,30 @@ body[data-popout] .queuePopover {
       </div>
       <div id="rageBaitMessagesList" class="rbMsgList"></div>
       <button type="button" id="rageBaitAddBtn" class="btn secondary sm full" data-tip="Add another message to the pool">+ Add message</button>
+    </div>
+    <!-- Feedback popover (added 2026-08-26) — drops down from the header's
+         mail icon button, no mailto redirect. "Send" posts to a form-relay
+         service (FormSubmit) rather than opening an email client, so this
+         needs a Send Feedback field in PRIVACY.md disclosing that. -->
+    <div id="feedbackPopover" class="queuePopover fbPopover" hidden>
+      <div class="queueHeader">
+        <span>Send feedback</span>
+        <button type="button" id="feedbackPopoverClose" class="iconBtn2 rbPopClose" aria-label="Close"></button>
+      </div>
+      <div class="segmented fbTypeRow" id="feedbackTypeRow">
+        <button type="button" class="seg active" data-type="Bug">Bug</button>
+        <button type="button" class="seg" data-type="Feature request">Feature request</button>
+        <button type="button" class="seg" data-type="Other">Other</button>
+      </div>
+      <textarea id="feedbackMessage" class="fbTextarea" placeholder="What's going on? The more detail, the better."></textarea>
+      <div class="fbAttachRow">
+        <button type="button" id="feedbackAttachBtn" class="btn secondary sm">📎 Attach screenshot(s)</button>
+        <input type="file" id="feedbackFileInput" accept="image/*" multiple hidden />
+        <span id="feedbackAttachCount" class="fbAttachCount"></span>
+      </div>
+      <div id="feedbackAttachList" class="fbAttachList"></div>
+      <button type="button" id="feedbackSendBtn" class="btn primary sm full">Send</button>
+      <span id="feedbackStatus" class="testStatus"></span>
     </div>
     <div id="sourceList"></div>
     <div id="bestPicks"></div>

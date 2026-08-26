@@ -42,6 +42,7 @@ const ICON_SVG = {
   "moon": `<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>`,
   "activity": `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`,
   "minimize-2": `<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>`,
+  "mail": `<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>`,
 };
 function iconDataUri(name) {
   const inner = ICON_SVG[name] || "";
@@ -2652,6 +2653,177 @@ $("statHead").addEventListener("click", (e) => {
   renderBoard();
 });
 
+// ---------- License status readout in Settings (added 2026-08-26) ----------
+// Activation itself happens at the full-app lock screen (showLicenseLock,
+// above) before init() ever gets this far — this field is just a status
+// display + a way to deactivate/switch keys. Deactivating reloads immediately
+// into the lock screen rather than leaving an unlicensed app running.
+function renderLicenseStatus() {
+  const status = $("licenseStatus");
+  status.className = "testStatus ok";
+  status.textContent = "License active.";
+  $("licenseInput").value = "••••-••••-••••-••••";
+  $("licenseInput").disabled = true;
+}
+
+$("licenseActivateBtn").addEventListener("click", async () => {
+  await clearLicenseKey();
+  location.reload();
+});
+
+// ---------- Send Feedback popover (added 2026-08-26, switched to Web3Forms
+// 2026-08-27) ----------
+// Drops down from the header's mail icon, no email client redirect. "Send"
+// posts to Web3Forms (a free form-relay — no backend of our own), which
+// forwards it to the developer's inbox. Only the message text + type + a
+// little diagnostic info (+ any attached screenshots) leaves the browser —
+// see PRIVACY.md for the disclosure this needs once that file exists.
+//
+// FormSubmit was tried first and rejected every real request with
+// {"success":"false","message":"Make sure you open this page through a web
+// server..."} — it hard-blocks any origin that isn't a real http(s) page,
+// which a chrome-extension:// page can never be. Web3Forms is built for
+// exactly this case (static sites/apps/extensions with non-standard
+// origins) and has no such check.
+//
+// SETUP REQUIRED: get a free Access Key at web3forms.com (enter the
+// destination email, they email you the key — it's a public key, safe to
+// ship in client code, it only routes submissions to that inbox) and set
+// WEB3FORMS_ACCESS_KEY below. Until that's set, sends will fail with a
+// clear "not configured" status rather than silently no-opping.
+const WEB3FORMS_ACCESS_KEY = "a0c9d9e3-e88f-4e01-add9-b2d55add4bfb";
+const FEEDBACK_ENDPOINT = "https://api.web3forms.com/submit";
+const FEEDBACK_MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB/file — keep individual images reasonably small
+const FEEDBACK_MAX_FILES = 3;
+let feedbackType = "Bug";
+let feedbackAttachments = []; // File objects picked via #feedbackFileInput
+
+function renderFeedbackAttachments() {
+  $("feedbackAttachCount").textContent = feedbackAttachments.length ? `${feedbackAttachments.length}/${FEEDBACK_MAX_FILES}` : "";
+  $("feedbackAttachList").innerHTML = feedbackAttachments.map((f, i) => `
+    <div class="fbAttachItem">
+      <span class="fbAttachName">${esc(f.name)}</span>
+      <span class="fbAttachRemove" data-idx="${i}">✕</span>
+    </div>
+  `).join("");
+  $("feedbackAttachList").querySelectorAll(".fbAttachRemove").forEach(el => {
+    el.addEventListener("click", () => {
+      feedbackAttachments.splice(Number(el.dataset.idx), 1);
+      renderFeedbackAttachments();
+    });
+  });
+}
+$("feedbackAttachBtn").addEventListener("click", () => $("feedbackFileInput").click());
+$("feedbackFileInput").addEventListener("change", (e) => {
+  const status = $("feedbackStatus");
+  const picked = Array.from(e.target.files || []);
+  for (const f of picked) {
+    if (feedbackAttachments.length >= FEEDBACK_MAX_FILES) {
+      status.className = "testStatus err";
+      status.textContent = `Only up to ${FEEDBACK_MAX_FILES} images at a time.`;
+      break;
+    }
+    if (f.size > FEEDBACK_MAX_FILE_BYTES) {
+      status.className = "testStatus err";
+      status.textContent = `${f.name} is too large (max 5MB).`;
+      continue;
+    }
+    feedbackAttachments.push(f);
+  }
+  e.target.value = ""; // allow picking the same file again after removing it
+  renderFeedbackAttachments();
+});
+
+function closeFeedbackPopover() {
+  $("feedbackPopover").hidden = true;
+  document.removeEventListener("click", onFeedbackPopoverOutsideClick, true);
+}
+function onFeedbackPopoverOutsideClick(e) {
+  if (e.target.closest("#feedbackPopover") || e.target.closest("#sendFeedbackBtn")) return;
+  closeFeedbackPopover();
+}
+function openFeedbackPopover() {
+  $("feedbackStatus").className = "testStatus";
+  $("feedbackStatus").textContent = "";
+  feedbackAttachments = [];
+  renderFeedbackAttachments();
+  const panel = $("feedbackPopover");
+  const btn = $("sendFeedbackBtn");
+  panel.hidden = false;
+  panel.style.top = "";
+  panel.style.bottom = "";
+  const r = btn.getBoundingClientRect();
+  const w = panel.offsetWidth;
+  panel.style.left = `${Math.max(4, Math.min(r.right - w, window.innerWidth - w - 4))}px`;
+  const margin = 8;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  if (spaceBelow >= spaceAbove) panel.style.top = `${r.bottom + 6}px`;
+  else panel.style.bottom = `${window.innerHeight - r.top + 6}px`;
+  setTimeout(() => document.addEventListener("click", onFeedbackPopoverOutsideClick, true), 0);
+}
+$("sendFeedbackBtn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!$("feedbackPopover").hidden) { closeFeedbackPopover(); return; }
+  openFeedbackPopover();
+});
+$("feedbackPopoverClose").addEventListener("click", () => closeFeedbackPopover());
+
+$("feedbackTypeRow").addEventListener("click", (e) => {
+  const seg = e.target.closest(".seg");
+  if (!seg) return;
+  feedbackType = seg.dataset.type;
+  $("feedbackTypeRow").querySelectorAll(".seg").forEach(s => s.classList.toggle("active", s === seg));
+});
+
+$("feedbackSendBtn").addEventListener("click", async () => {
+  const status = $("feedbackStatus");
+  const message = $("feedbackMessage").value.trim();
+  if (!message) {
+    status.className = "testStatus err";
+    status.textContent = "Write a message first.";
+    return;
+  }
+  if (!WEB3FORMS_ACCESS_KEY) {
+    status.className = "testStatus err";
+    status.textContent = "Feedback isn't configured yet — missing Web3Forms access key.";
+    return;
+  }
+  status.className = "testStatus";
+  status.textContent = "Sending...";
+  $("feedbackSendBtn").disabled = true;
+  try {
+    // FormData (multipart) — required for the file attachments, and
+    // Web3Forms accepts it the same as a plain HTML form post would.
+    const form = new FormData();
+    form.append("access_key", WEB3FORMS_ACCESS_KEY);
+    form.append("subject", `4th&Go feedback: ${feedbackType}`);
+    form.append("type", feedbackType);
+    form.append("message", message);
+    form.append("extensionVersion", chrome.runtime.getManifest().version);
+    form.append("userAgent", navigator.userAgent);
+    feedbackAttachments.forEach(f => form.append("attachment", f, f.name));
+    const resp = await fetch(FEEDBACK_ENDPOINT, {
+      method: "POST",
+      headers: { "Accept": "application/json" }, // no Content-Type — browser sets the multipart boundary itself
+      body: form,
+    });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || !data || data.success !== true) throw new Error((data && data.message) || "bad response");
+    status.className = "testStatus ok";
+    status.textContent = "Sent — thanks!";
+    $("feedbackMessage").value = "";
+    feedbackAttachments = [];
+    renderFeedbackAttachments();
+    setTimeout(closeFeedbackPopover, 1200);
+  } catch (e) {
+    status.className = "testStatus err";
+    status.textContent = "Couldn't send — check your connection and try again.";
+  } finally {
+    $("feedbackSendBtn").disabled = false;
+  }
+});
+
 // ---------- EXPERIMENTAL: Sleeper draft-actions on/off toggle ----------
 $("sleeperWriteToggle").addEventListener("click", () => {
   sleeperWriteEnabled = !sleeperWriteEnabled;
@@ -2874,9 +3046,52 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
 });
 
 // ---------- init: restore settings, then load the curated sources ----------
+// ---------- Full-app license lock (added 2026-08-26) ----------
+// Checked before ANYTHING else in init() below — no board, no Manager link,
+// no storage reads beyond the license key itself happen until this passes.
+// All-or-nothing paid unlock, no freemium tier (see claude.md's licensing
+// section). Deliberately reloads the page on successful activation rather
+// than trying to resume init() mid-flight — simplest robust option at this
+// app's size, and it's a one-time cost per install.
+function showLicenseLock() {
+  $("licenseLock").hidden = false;
+}
+function hideLicenseLock() {
+  $("licenseLock").hidden = true;
+}
+$("lockActivateBtn").addEventListener("click", async () => {
+  const status = $("lockLicenseStatus");
+  const btn = $("lockActivateBtn");
+  const raw = $("lockLicenseInput").value;
+  status.className = "testStatus";
+  status.textContent = "Verifying with Gumroad...";
+  btn.disabled = true;
+  const result = await saveLicenseKey(raw);
+  btn.disabled = false;
+  if (!result.valid) {
+    status.className = "testStatus err";
+    status.textContent = result.error;
+    return;
+  }
+  status.className = "testStatus ok";
+  status.textContent = "License valid — loading...";
+  location.reload();
+});
+$("lockLicenseInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("lockActivateBtn").click();
+});
+
 (async function init() {
+  await refreshLicenseCache();
+  if (!isLicensed()) {
+    showLicenseLock();
+    return; // nothing else in this app runs until a valid key is entered
+  }
+  hideLicenseLock();
+
   $("settingsBtn").innerHTML = ico("settings", { size: 15 });
   $("statusBtn").innerHTML = ico("activity", { size: 15 });
+  $("sendFeedbackBtn").innerHTML = ico("mail", { size: 15 });
   $("openManager").innerHTML = ico("external-link", { size: 13 }) + "Manager";
   $("connectBtn").innerHTML = ico("unplug", { size: 13, color: "var(--on-accent)" }) + "Sync";
   $("refreshBtn").innerHTML = ico("rotate-cw", { size: 13 }) + "Refresh now";
@@ -2917,6 +3132,7 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
   sleeperIds = await loadSleeperIdMap();
   injuries = await loadInjuries();
   injuriesUpdatedAt = await loadInjuriesUpdatedAt();
+  renderLicenseStatus(); // license itself was already checked/cached above, this just reflects it in Settings
   const qv = await chrome.storage.local.get([K_SLEEPER_QUEUE, K_SLEEPER_WRITE_ENABLED, K_SLEEPER_SKIP_CONFIRM, K_SLEEPER_DBLCLICK_DRAFT, K_RAGEBAIT_ENABLED, K_RAGEBAIT_MESSAGES, K_RAGEBAIT_MIN_GAP, K_RAGEBAIT_MAX_GAP]);
   sleeperQueueKeys = qv[K_SLEEPER_QUEUE] || [];
   sleeperWriteEnabled = !!qv[K_SLEEPER_WRITE_ENABLED];

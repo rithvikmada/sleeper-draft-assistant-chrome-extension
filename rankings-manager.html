@@ -108,6 +108,18 @@ h2 { font: 700 11px/1 var(--font-body); letter-spacing: var(--tracking-label); t
 .pageSection { margin-bottom: 30px; }
 main.wrap { padding-top: 26px; padding-bottom: 64px; }
 
+/* Full-app license lock (added 2026-08-26) — see panel.html for the twin
+   implementation; covers this whole surface until a valid key unlocks it. */
+.licenseLock { position: fixed; inset: 0; z-index: 500; background: var(--surface-base); display: flex; align-items: center; justify-content: center; }
+.licenseLock[hidden] { display: none; }
+.licenseLockCard { width: 320px; display: flex; flex-direction: column; gap: 12px; padding: 24px; border: 1px solid var(--border-default); border-radius: var(--radius-lg, 10px); background: var(--surface-raised); box-shadow: 0 12px 40px rgba(0,0,0,.3); }
+.licenseLockCard h1, .licenseLockCard span:first-child { font: 700 22px var(--font-body); }
+.licenseLockCopy { font: 500 12.5px/1.4 var(--font-body); color: var(--text-muted, var(--text-disabled)); margin: 0; }
+.licenseLockCard input { padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-default); background: var(--surface-input); color: var(--text-primary); }
+.testStatus { font: 500 11px var(--font-body); color: var(--text-disabled); }
+.testStatus.ok { color: var(--green); }
+.testStatus.err { color: var(--red); }
+
 button {
   background: var(--surface-input); color: var(--text-primary); border: 1px solid var(--border-default);
   border-radius: var(--radius-sm); font: 600 var(--text-xs)/1 var(--font-body); padding: 8px 13px; cursor: pointer;
@@ -540,6 +552,20 @@ tr.avoidRow { background: var(--red-a12); }
 </style>
 </head>
 <body>
+  <!-- Full-app license lock — see panel.html/panel.js for the primary
+       implementation notes. Duplicated here (not shared) since this is a
+       plain script/HTML pair with no shared bootstrap; same isLicensed()/
+       saveLicenseKey() functions from shared.js back both. -->
+  <div id="licenseLock" class="licenseLock" hidden>
+    <div class="licenseLockCard">
+      <span class="brand2">4th<span>&amp;</span>Go</span>
+      <p class="licenseLockCopy">A license key is required to use this extension. Purchase one, then enter it below to unlock the Rankings Manager.</p>
+      <input id="lockLicenseInput" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" />
+      <button id="lockActivateBtn" class="btn">Activate</button>
+      <span id="lockLicenseStatus" class="testStatus"></span>
+    </div>
+  </div>
+
   <header>
     <div class="wrap">
       <div class="headTop">
