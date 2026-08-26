@@ -32,6 +32,9 @@
   --pos-qb:#F4527A; --pos-rb:#35D07F; --pos-wr:#22D3EE; --pos-te:#FF8A3D; --pos-flex:#FFD84D;
   --pos-qb-tint:rgba(244,82,122,.14); --pos-rb-tint:rgba(53,208,127,.14);
   --pos-wr-tint:rgba(34,211,238,.14); --pos-te-tint:rgba(255,138,61,.14);
+  /* Legacy POS_COLORS palette (shared.js) — see rankings-manager.html's copy
+     of this comment for why it's a separate var set from --pos-qb/etc. */
+  --legacy-pos-qb:#F5C242; --legacy-pos-rb:#5FCF8A; --legacy-pos-wr:#5FA8E8; --legacy-pos-te:#E88AC9;
 
   --surface-app:var(--ink-900); --surface-panel:var(--ink-850); --surface-raised:var(--ink-800);
   --surface-row-hover:rgba(255,255,255,.04); --surface-sunken:var(--ink-950);
@@ -77,9 +80,10 @@
 
 /* Light mode — a straight token-swap of the same custom properties dark mode
    defines above (see themeToggleBtn / applyTheme in panel.js). Toggled via
-   [data-theme] on <html>, persisted to chrome.storage (K_THEME). Position
-   colors, signal colors (green/red/cyan/etc), and spacing/type scale are
-   left untouched — only the ink/chalk surface+text tokens actually invert. */
+   [data-theme] on <html>, persisted to chrome.storage (K_THEME). Spacing and
+   type scale are left untouched. Position/signal colors ARE overridden below
+   (added 2026-08-25, accessibility pass) — see that block's own comment for
+   why: the dark-mode hues fail WCAG contrast on a white background. */
 html[data-theme="light"] {
   --ink-950:#FFFFFF; --ink-900:#F7F8F7; --ink-850:#F0F2F0; --ink-800:#E7EAE7; --ink-750:#DEE2DE;
   --ink-700:#D2D7D2; --ink-600:#C2C8C2; --ink-500:#A9B0A8; --ink-400:#848C83; --ink-300:#5C645B;
@@ -104,6 +108,26 @@ html[data-theme="light"] {
      downstream alias would've left the rest still washed out. */
   --chalk-700:#5C4600; --chalk-600:#8A6900; --chalk-500:#B08A00; --chalk-400:#CDA732; --chalk-300:#E4C568;
   --chalk-a12:rgba(176,138,0,.14); --chalk-a24:rgba(176,138,0,.30); --chalk-a40:rgba(176,138,0,.48);
+
+  /* Position + signal colors, same reasoning as the chalk block above: the
+     dark-mode hues (bright pink/green/cyan/orange/violet, tuned to read
+     clearly against near-black) drop to ~1.7–3.3:1 contrast against a white
+     page when used as plain text — the position label on a Best Picks card,
+     "LIVE" status text, a value-delta number, an injury badge — which fails
+     WCAG AA's 4.5:1 body-text minimum across the board, not as an edge case.
+     Each is redefined here as a darker/more-saturated version of the SAME
+     hue (verified ≥4.5:1 against white, most landing 5–6:1) rather than a
+     different color, so it still reads as "that position's color" — same
+     technique as the chalk override, not a new one. Their alpha-tint
+     companions (--pos-*-tint, --*-a12) are intentionally left as the
+     original bright-hue rgba() — those are backgrounds, not text, and stay
+     as a soft wash either way; only the foreground/text role needed
+     changing. Dark mode and rankings-manager.html (no light theme) are both
+     completely unaffected — this block only exists under
+     html[data-theme="light"]. */
+  --pos-qb:#C4265B; --pos-rb:#16794A; --pos-wr:#0B7285; --pos-te:#C25400; --pos-flex:#B08A00;
+  --cyan-500:#0B7285; --green-500:#16794A; --red-500:#C22F2F; --orange-500:#C25400; --violet-500:#6A4FD1;
+  --legacy-pos-qb:#8F6D00; --legacy-pos-rb:#16794A; --legacy-pos-wr:#1D5FA0; --legacy-pos-te:#A83E86;
 
   --on-accent:#1A1400;
 
@@ -355,7 +379,29 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    renderSleeperQueuePopover in panel.js. */
 .queuePopover { position: fixed; z-index: 60; width: 340px; max-height: 420px; overflow-y: auto; background: var(--surface-raised); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-menu); padding: 10px 12px; }
 .queuePopover[hidden] { display: none; }
-.queueHeader { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+
+/* Pop-out mode (added 2026-08-25) — the Roster/Queue dropdowns can pop out
+   into their own small window (panel.html?popout=roster|queue, see
+   initPopoutMode() in panel.js). Rather than a second page, that window is
+   just this page again with everything except the target popover hidden,
+   and that one popover un-floated to fill the whole window. body[data-popout]
+   is only ever set inside that popout window — the normal board window never
+   carries this attribute, so none of this applies there. #toast and
+   #draftConfirmModal stay reachable so a live-picks toast and "Draft on
+   Sleeper?" (from the queue's own draft button) still work while popped out. */
+body[data-popout] { overflow: auto; }
+body[data-popout] > *:not(#header):not(#sleeperQueuePopover):not(#toast):not(#draftConfirmModal) { display: none !important; }
+body[data-popout="roster"] > #header > *:not(#rosterPopover) { display: none !important; }
+body[data-popout="queue"] > #header { display: none !important; }
+body[data-popout="roster"] #sleeperQueuePopover { display: none !important; }
+body[data-popout="queue"] #rosterPopover { display: none !important; }
+body[data-popout] #header { height: 100%; padding: 12px; box-sizing: border-box; overflow-y: auto; }
+body[data-popout] .queuePopover {
+  position: static !important; width: 100% !important; height: 100%; max-height: none !important;
+  box-shadow: none; border: none; border-radius: 0; padding: 0;
+}
+.queueHeader { display: flex; align-items: center; gap: 6px; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+.queueHeader .popoutBtn { margin-left: auto; width: 22px; height: 22px; text-transform: none; letter-spacing: normal; }
 .queueEmpty { font: var(--type-body); font-size: 13px; color: var(--text-muted); }
 .queueList { display: flex; flex-direction: column; gap: 3px; }
 .queueRow { display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 6px; border-radius: var(--radius-sm); cursor: grab; transition: background-color var(--dur-fast) var(--ease-out); }
@@ -414,7 +460,7 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
    button. Collapsing the message list out of #settingsPanel entirely (into
    this popover) replaced an earlier inline-per-row version after direct
    feedback that a dozen-plus messages made Settings scroll too long. */
-.rageBaitPopover { width: 300px; max-height: 420px; }
+.rageBaitPopover { width: 420px; max-height: 420px; }
 .rbPopHeader { display: flex; align-items: center; justify-content: space-between; }
 .rbPopClose { width: 22px; height: 22px; }
 .rbPopClose::before { content: ""; display: block; width: 11px; height: 11px; background: currentColor;
@@ -818,14 +864,6 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
           <span class="fieldLabel">Sleeper token <button type="button" id="sleeperTokenInfo" class="infoBtn" aria-label="How to get your Sleeper token">i</button></span>
           <div class="input2"><input id="sleeperToken" type="password" placeholder="paste for this session" data-tip="From a captured Sleeper request's Authorization header. Kept in memory only — never saved, cleared when this window closes." /></div>
         </div>
-        <!-- EXPERIMENTAL — an extra safeguard on top of the confirm modal,
-             not a replacement for it (see K_SLEEPER_DBLCLICK_DRAFT in
-             panel.js). Defaults on. Only shown once Draft actions is on —
-             it's meaningless otherwise. -->
-        <div class="switchField" id="sleeperDblClickField" style="display:none">
-          <span class="fieldLabel">Double-click to draft</span>
-          <button id="sleeperDblClickToggle" class="switchTrack on" role="switch" aria-checked="true" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too)."><span class="switchThumb"></span></button>
-        </div>
         <!-- EXPERIMENTAL — lets someone confirm their tab/token setup works
              BEFORE a draft starts, when there's nothing safe to test a real
              queue/draft action against yet. See testSleeperConnection in
@@ -835,6 +873,15 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--rin
             <button id="sleeperTestBtn" class="btn secondary" data-tip="Runs a real, harmless check against Sleeper — confirms the tab and token both actually work">Test</button>
             <span id="sleeperTestStatus" class="testStatus"></span>
           </div>
+        </div>
+        <!-- EXPERIMENTAL — an extra safeguard on top of the confirm modal,
+             not a replacement for it (see K_SLEEPER_DBLCLICK_DRAFT in
+             panel.js). Defaults on. Only shown once Draft actions is on —
+             it's meaningless otherwise. Moved below the Test button
+             (2026-08-25, direct request) — was above it before. -->
+        <div class="switchField" id="sleeperDblClickField" style="display:none">
+          <span class="fieldLabel">Double-click to draft</span>
+          <button id="sleeperDblClickToggle" class="switchTrack on" role="switch" aria-checked="true" data-tip="Requires a double-click on a draft button as an extra safeguard, on top of the confirm dialog. Turn off for a single click to draft (still confirms first, unless you've dismissed that too)."><span class="switchThumb"></span></button>
         </div>
         <!-- EXPERIMENTAL, for fun only — sends a random trash-talk message
              into Sleeper's draft chat every 10-13 picks by default (the

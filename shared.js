@@ -36,11 +36,16 @@ const TIER_COLORS = {
   7:"#3A7CA5", 8:"#356E93", 9:"#5B6B8C", 10:"#665C8C", 11:"#7A5C8C", 12:"#8C5C7A",
   13:"#8C5C5C", 14:"#6B5C4A", 15:"#5C5C5C", 16:"#4A4A4A",
 };
+// text values are CSS vars (not literal hex) specifically so panel.html's
+// light theme can substitute higher-contrast versions of this exact palette
+// for text-on-white legibility, without touching rankings-manager.html
+// (which has no light mode and keeps these vars at their default/original
+// hex — see --legacy-pos-* in both files' :root).
 const POS_COLORS = {
-  QB:{ text:"#F5C242", bg:"rgba(245,194,66,.12)", border:"rgba(245,194,66,.35)" },
-  RB:{ text:"#5FCF8A", bg:"rgba(95,207,138,.12)", border:"rgba(95,207,138,.35)" },
-  WR:{ text:"#5FA8E8", bg:"rgba(95,168,232,.12)", border:"rgba(95,168,232,.35)" },
-  TE:{ text:"#E88AC9", bg:"rgba(232,138,201,.12)", border:"rgba(232,138,201,.35)" },
+  QB:{ text:"var(--legacy-pos-qb)", bg:"rgba(245,194,66,.12)", border:"rgba(245,194,66,.35)" },
+  RB:{ text:"var(--legacy-pos-rb)", bg:"rgba(95,207,138,.12)", border:"rgba(95,207,138,.35)" },
+  WR:{ text:"var(--legacy-pos-wr)", bg:"rgba(95,168,232,.12)", border:"rgba(95,168,232,.35)" },
+  TE:{ text:"var(--legacy-pos-te)", bg:"rgba(232,138,201,.12)", border:"rgba(232,138,201,.35)" },
 };
 const POSITIONS = ["QB","RB","WR","TE"];
 
@@ -1427,14 +1432,29 @@ function statGroupLayout(order, visibleStats) {
 // generalized custom tooltip) instead of the native title="" attribute — a
 // browser tooltip can't be styled to match the board and has its own
 // built-in show delay.
-function renderStatHeaderGroups(order, visibleStats) {
+// sortOpts (optional): { sortablePos, sortColumn, sortDir } — when the board
+// is filtered to a single position (QB/RB/WR/TE), that position's OWN stat
+// group becomes clickable-to-sort, same pattern as the Rank/ADP Value/Pos
+// column headers (#colHead .sortCol in panel.js). Deliberately scoped to
+// exactly the filtered position's group, not BASIC or the other 3 groups —
+// those are blank for every visible row while filtered, so sorting by them
+// would be meaningless. Not offered in ALL/RB+WR combined views, where more
+// than one position's data is on screen at once and "sort by this stat"
+// would silently ignore rows from other positions.
+function renderStatHeaderGroups(order, visibleStats, sortOpts) {
   const { widths, offsets } = statGroupLayout(order, visibleStats);
+  const { sortablePos = null, sortColumn = null, sortDir = 1 } = sortOpts || {};
   return STAT_GROUP_SEQUENCE.map((pos) => {
     const color = pos === "BASIC" ? "var(--accent)" : (POS_COLORS && POS_COLORS[pos] ? POS_COLORS[pos].text : "var(--text-primary)");
     const defs = pos === "BASIC" ? STAT_META.BASIC : STAT_OPTION_DEFS[pos].filter((o) => (visibleStats[pos] || []).includes(o.id));
-    const cells = defs.map((m) =>
-      `<span class="statHeadCol" style="color:${color}" data-tip="${esc(m.full)}">${esc(m.label)}</span>`
-    ).join("");
+    const sortableHere = pos !== "BASIC" && pos === sortablePos;
+    const cells = defs.map((m) => {
+      const sortKey = `stat:${pos}:${m.id}`;
+      if (!sortableHere) return `<span class="statHeadCol" style="color:${color}" data-tip="${esc(m.full)}">${esc(m.label)}</span>`;
+      const active = sortColumn === sortKey;
+      const arrow = active ? (sortDir === 1 ? "▲" : "▼") : "";
+      return `<span class="statHeadCol sortCol${active ? " active" : ""}" style="color:${color}" data-tip="Click to sort by ${esc(m.full)}" data-sort="${sortKey}">${esc(m.label)}<span class="sortArrow">${arrow}</span></span>`;
+    }).join("");
     return `<span class="statHeadGroup" data-pos="${esc(pos)}" style="width:${widths[pos]}px;transform:translateX(${offsets[pos]}px)">${cells}</span>`;
   }).join("");
 }

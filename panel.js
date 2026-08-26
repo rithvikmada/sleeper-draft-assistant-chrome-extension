@@ -41,6 +41,7 @@ const ICON_SVG = {
   "sun": `<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>`,
   "moon": `<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>`,
   "activity": `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>`,
+  "minimize-2": `<polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>`,
 };
 function iconDataUri(name) {
   const inner = ICON_SVG[name] || "";
@@ -198,6 +199,19 @@ let visibleStats = { ...DEFAULT_VISIBLE_STATS }; // pos -> [id,...] of currently
 let showTaken = false; // independent toggle, layered on top of posFilter
 let playerSearch = ""; // name/team substring filter, layered on top of posFilter/showTaken
 let currentPickNo = null; // next pick about to happen (picks synced so far + 1) — drives the row's live-ADP blink dot
+
+// ---------- Queue/Roster pop-out windows (added 2026-08-25) ----------
+// "Pop out" on the Roster/Queue dropdown opens that SAME popover in its own
+// small chrome.windows.create popup — deliberately just this page again
+// (panel.html?popout=roster|queue), not a new HTML file. Reusing this file
+// means the popout gets the exact same rendering code, the exact same live
+// Sleeper poll, and the exact same storage listeners as the main board for
+// free — a second hand-written implementation of "render my roster" would
+// be exactly the kind of drift this project's claude.md repeatedly warns
+// about (see avatarHtml/injuryBadge/etc's "one function, called from
+// everywhere" precedent). popoutView is null in the normal board window.
+const popoutView = new URLSearchParams(location.search).get("popout"); // "roster" | "queue" | null
+const K_POPOUT_WINDOWS = "popoutWindowIds"; // chrome.storage.session — { roster: windowId, queue: windowId }
 
 // EXPERIMENTAL (queue/draft-write branch) — see background.js's "Sleeper
 // WRITE actions" section for the actual mechanism (script injection into
@@ -632,7 +646,12 @@ function renderBoard() {
   // position filter, it layers drafted players (crossed out) on top of it.
   const groupOrder = statGroupOrder(effectiveStatPos());
   const statBlockWidth = statGroupLayout(groupOrder, visibleStats).totalWidth;
-  $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats);
+  // Stat-column sorting is only offered when the board is filtered to a
+  // single QB/RB/WR/TE position — not ALL, not any multi-position filter —
+  // since a stat sort only makes sense when every visible row actually has
+  // that stat (see renderStatHeaderGroups in shared.js for the full reasoning).
+  const sortablePos = POSITIONS.includes(posFilter) ? posFilter : null;
+  $("statHead").innerHTML = renderStatHeaderGroups(groupOrder, visibleStats, { sortablePos, sortColumn, sortDir });
   $("statHead").style.width = `${statBlockWidth}px`;
   document.querySelectorAll("#colHead .sortCol").forEach((el) => {
     const active = el.dataset.sort === sortColumn;
@@ -745,6 +764,11 @@ function renderBoard() {
       if (sortColumn === "rank") return r.consensus ?? null;
       if (sortColumn === "value") return valueMap.get(r.key)?.delta ?? null;
       if (sortColumn === "pos") return r.pos || null;
+      if (sortColumn.startsWith("stat:")) {
+        const [, , statId] = sortColumn.split(":");
+        const opt = playerStats[r.key]?.options?.[statId];
+        return opt && typeof opt.value === "number" ? opt.value : null;
+      }
       return null;
     };
     const sorted = [...list].sort((a, b) => {
@@ -947,9 +971,111 @@ function formatDraftPick(pickNo) {
   return { label: `${round}.${String(inRound).padStart(2, "0")}` };
 }
 
+// ---------- Queue/Roster pop-out windows ----------
+// Small header button, included in both renderRosterPopover's and
+// renderSleeperQueuePopover's markup — a pop-out (external-link) icon in the
+// normal board window, a collapse (minimize-2) icon when this IS that
+// popout window (popoutView matches). Delegated click handling (below)
+// covers both, since these buttons live inside innerHTML that gets rebuilt
+// on every render.
+function popoutToggleBtnHtml(view) {
+  if (popoutView === view) {
+    return `<button type="button" class="iconBtn2 popoutBtn" data-popout-collapse aria-label="Collapse back into the board window" data-tip="Collapse back into the board window">${ico("minimize-2", { size: 13 })}</button>`;
+  }
+  return `<button type="button" class="iconBtn2 popoutBtn" data-popout-open="${view}" aria-label="Pop out into its own window" data-tip="Pop out into its own window">${ico("external-link", { size: 13 })}</button>`;
+}
+
+// Called from the MAIN board window only (popoutView is null there) — opens
+// or focuses that view's popout window, reusing this same page with
+// ?popout=roster|queue. Window ids live in chrome.storage.session (K_POPOUT_
+// WINDOWS), same pattern background.js already uses for the main board
+// window itself (K_WINDOW_ID) — session-scoped since a window id from a
+// previous browser session is meaningless.
+async function openPopoutWindow(view) {
+  const { [K_POPOUT_WINDOWS]: ids0 } = await chrome.storage.session.get([K_POPOUT_WINDOWS]);
+  const ids = ids0 || {};
+  if (ids[view]) {
+    try {
+      await chrome.windows.update(ids[view], { focused: true });
+      return;
+    } catch (e) {
+      // Stale id (window closed without background.js catching it, or a
+      // service-worker restart lost the cleanup) — fall through and open a
+      // fresh one instead of silently doing nothing.
+    }
+  }
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL(`panel.html?popout=${view}`),
+    type: "popup",
+    width: 380,
+    height: 640,
+  });
+  ids[view] = win.id;
+  await chrome.storage.session.set({ [K_POPOUT_WINDOWS]: ids });
+}
+
+// Main-window-only: hides a chip button the instant its popout is open
+// elsewhere (so there's never two live copies of the same widget visible at
+// once — the same reasoning the single-board-window architecture already
+// applies to the whole app, see claude.md's "Window architecture"), and
+// force-closes the local floating popover if it happened to be open when
+// the popout appeared. Restores both the moment the popout window closes.
+// Tracked as module-level state (not just "set display:none once") because
+// renderRosterBtn()/renderSleeperQueueBtn() unconditionally reset their
+// button's display on every call (queueing a player, a live pick landing,
+// etc. — see their own comments) — without consulting these flags, the very
+// next such render would silently undo the hide and show a button whose
+// popover is live in another window.
+let rosterPoppedOut = false;
+let queuePoppedOut = false;
+function applyPopoutButtonVisibility(ids) {
+  rosterPoppedOut = !!(ids && ids.roster);
+  queuePoppedOut = !!(ids && ids.queue);
+  $("rosterBtn").style.display = rosterPoppedOut ? "none" : "";
+  if (rosterPoppedOut && !$("rosterPopover").hidden) closeRosterPopover();
+  renderSleeperQueueBtn(); // re-applies sleeperWriteEnabled gating AND the popout hide together, see its own guard
+  if (queuePoppedOut && !$("sleeperQueuePopover").hidden) closeSleeperQueuePopover();
+}
+
+// Runs once, at load, ONLY inside a popout window (popoutView is set). Forces
+// that view's popover permanently open and full-window (see .popoutRoot CSS
+// in panel.html) instead of a floating dropdown, and hides the rest of the
+// board's UI — settings, filters, the tiered board itself — via the
+// body[data-popout] CSS rule. Deliberately does NOT call openRosterPopover()/
+// openSleeperQueuePopover() (their floating-position math and outside-click-
+// to-close listener are meaningless when the popover IS the whole window and
+// never closes on its own) — just renders directly into the existing element
+// and leaves it unhidden for good. Every other renderXPopover() call site
+// already guards on "!panel.hidden" before re-rendering, so leaving it
+// permanently unhidden is also what keeps this window's content live as
+// picks/roster/queue change — no separate popout-specific refresh path needed.
+function initPopoutMode() {
+  document.body.dataset.popout = popoutView;
+  if (popoutView === "roster") {
+    renderRosterPopover();
+    $("rosterPopover").hidden = false;
+  } else if (popoutView === "queue") {
+    renderSleeperQueuePopover();
+    $("sleeperQueuePopover").hidden = false;
+  }
+}
+document.addEventListener("click", (e) => {
+  const openBtn = e.target.closest("[data-popout-open]");
+  if (openBtn) {
+    openPopoutWindow(openBtn.dataset.popoutOpen);
+    if (openBtn.dataset.popoutOpen === "roster") closeRosterPopover();
+    else closeSleeperQueuePopover();
+    return;
+  }
+  if (e.target.closest("[data-popout-collapse]")) {
+    window.close();
+  }
+});
+
 function renderRosterBtn() {
   const n = lastSharedPicks.filter((p) => p.byMe).length;
   $("rosterBtn").textContent = `Roster (${n}) ▾`;
+  $("rosterBtn").style.display = rosterPoppedOut ? "none" : "";
   if (!$("rosterPopover").hidden) renderRosterPopover();
 }
 
@@ -1014,12 +1140,13 @@ function renderRosterPopover() {
   }).join("");
 
   panel.innerHTML = `
-    <div class="queueHeader">My roster (${mine.length}) · slot ${esc(myRosterId)}</div>
+    <div class="queueHeader">My roster (${mine.length}) · slot ${esc(myRosterId)} ${popoutToggleBtnHtml("roster")}</div>
     <div class="rosterSummary">${summaryHtml}</div>
     <div class="rosterList">${rowsHtml}</div>`;
 }
 
 function closeRosterPopover() {
+  if (popoutView === "roster") return; // this IS the roster's own window — it never self-hides
   $("rosterPopover").hidden = true;
   document.removeEventListener("click", onRosterPopoverOutsideClick, true);
 }
@@ -1275,10 +1402,42 @@ function applyManualKeysFromStorage(keys) {
 }
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
+  // Session-scoped: which Roster/Queue pop-out windows are currently open
+  // (see "Queue/Roster pop-out windows" above). Only the MAIN board window
+  // acts on this — a popout window ignores it, it only cares about its own
+  // view. Lets the main window hide a button (and force-close its own local
+  // popover) the instant its pop-out opens elsewhere, and restore it the
+  // instant that window closes, without any direct window-to-window messaging.
+  if (area === "session") {
+    if (!popoutView && changes[K_POPOUT_WINDOWS]) {
+      applyPopoutButtonVisibility(changes[K_POPOUT_WINDOWS].newValue || {});
+    }
+    return;
+  }
   if (area !== "local") return;
   if (changes[K_DRAFT] && !echo.isEcho(K_DRAFT)) {
     const v = changes[K_DRAFT].newValue;
-    if (v) applyManualKeysFromStorage(v.manualKeys);
+    if (v) {
+      applyManualKeysFromStorage(v.manualKeys);
+      // Picks themselves (not just manualKeys) only matter to sync here now
+      // that a Roster pop-out window can exist — it never polls Sleeper
+      // itself (see "Queue/Roster pop-out windows" above), it relies
+      // entirely on the main board window's poll() writing K_DRAFT here.
+      // Harmless no-op for the main window itself: its own writes are
+      // always echo-guarded above, so this only ever fires for a genuinely
+      // external change.
+      if (Array.isArray(v.picks)) {
+        lastSharedPicks = v.picks;
+        renderRosterBtn(); // also re-renders the popover if it's open — see its own guard
+      }
+    }
+  }
+  // Queue pop-out window support, same reasoning as the picks sync just
+  // above — the popped-out queue window needs to see additions/removals/
+  // reorders made from the main board's row buttons, and vice versa.
+  if (changes[K_SLEEPER_QUEUE] && !echo.isEcho(K_SLEEPER_QUEUE)) {
+    sleeperQueueKeys = changes[K_SLEEPER_QUEUE].newValue || [];
+    renderSleeperQueueBtn(); // also re-renders the popover if it's open — see its own guard
   }
   // Curating sources in the manager tab must immediately change what this panel
   // recommends — one source of truth, no manual refresh between the surfaces.
@@ -1793,8 +1952,13 @@ $("statPickerBtn").addEventListener("click", (e) => {
 // it's treated here as replacing Sleeper's queue with our full intended
 // list on every change, which is the safer assumption for a "set" mutation
 // and also naturally supports add/remove with one call.
+// echo-guarded (added alongside the Queue pop-out window) — with a second
+// live window now possible (panel.html?popout=queue reading this same key,
+// see the storage listener below), this write needs to be distinguishable
+// from an external one the same way K_DRAFT/K_FLAGS/etc already are, so this
+// window doesn't redundantly reprocess its own change.
 function saveSleeperQueueKeys() {
-  chrome.storage.local.set({ [K_SLEEPER_QUEUE]: sleeperQueueKeys });
+  echo.write(K_SLEEPER_QUEUE, () => chrome.storage.local.set({ [K_SLEEPER_QUEUE]: sleeperQueueKeys }));
 }
 
 // Local-only cleanup (no mutation pushed to Sleeper) — Sleeper's own server
@@ -1924,7 +2088,7 @@ function moveSleeperQueueItem(key, dir) {
 function renderSleeperQueueBtn() {
   const btn = $("sleeperQueueBtn");
   if (!sleeperWriteEnabled) { btn.style.display = "none"; return; }
-  btn.style.display = "";
+  btn.style.display = queuePoppedOut ? "none" : "";
   btn.textContent = `Queue (${sleeperQueueKeys.length}) ▾`;
   // Keep an already-open popover in sync too — e.g. queueing a player from
   // a board row while the popover happens to be open shouldn't require
@@ -1942,7 +2106,7 @@ function renderSleeperQueueBtn() {
 function renderSleeperQueuePopover() {
   const panel = $("sleeperQueuePopover");
   if (!sleeperQueueKeys.length) {
-    panel.innerHTML = `<div class="queueHeader">Sleeper queue</div><div class="queueEmpty">Empty — use the queue button on any player row to add one.</div>`;
+    panel.innerHTML = `<div class="queueHeader">Sleeper queue ${popoutToggleBtnHtml("queue")}</div><div class="queueEmpty">Empty — use the queue button on any player row to add one.</div>`;
     return;
   }
   const allRows = buildConsensus(activeSources(sources, soloSource), merges);
@@ -1968,10 +2132,11 @@ function renderSleeperQueuePopover() {
       <button class="queueRemoveBtn" data-key="${esc(key)}" aria-label="Remove ${esc(name)} from queue" data-tip="Remove">${ico("circle-x", { size: 15 })}</button>
     </div>`;
   }).join("");
-  panel.innerHTML = `<div class="queueHeader">Sleeper queue (${sleeperQueueKeys.length})</div><div class="queueList">${rowsHtml}</div>`;
+  panel.innerHTML = `<div class="queueHeader">Sleeper queue (${sleeperQueueKeys.length}) ${popoutToggleBtnHtml("queue")}</div><div class="queueList">${rowsHtml}</div>`;
 }
 
 function closeSleeperQueuePopover() {
+  if (popoutView === "queue") return; // this IS the queue's own window — it never self-hides
   $("sleeperQueuePopover").hidden = true;
   document.removeEventListener("click", onSleeperQueuePopoverOutsideClick, true);
 }
@@ -2338,6 +2503,14 @@ document.querySelectorAll(".pf[data-pos]").forEach((btn) => {
     document.querySelectorAll(".pf[data-pos]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     posFilter = btn.dataset.pos;
+    // A stat-column sort only makes sense while filtered to the position it
+    // belongs to (see renderStatHeaderGroups in shared.js) — switching to
+    // ALL, a different position, or a multi-position filter clears it rather
+    // than leaving a "phantom" active sort with no visible arrow anywhere.
+    if (sortColumn && sortColumn.startsWith("stat:") && sortColumn.split(":")[1] !== posFilter) {
+      sortColumn = null;
+      sortDir = 1;
+    }
     renderBoard();
     renderRecommendations(); // Best Picks now filters to posFilter too — see renderRecommendations
   });
@@ -2370,6 +2543,26 @@ document.querySelectorAll("#colHead .sortCol").forEach((el) => {
     }
     renderBoard();
   });
+});
+
+// Stat-column sorting (positional filter only) — same cycle as the block
+// above, but delegated on #statHead's parent since renderBoard() rebuilds
+// the stat header's innerHTML on every render (a one-time queryAll like the
+// block above would only ever bind to the FIRST render's elements).
+$("statHead").addEventListener("click", (e) => {
+  const el = e.target.closest(".statHeadCol.sortCol");
+  if (!el) return;
+  const col = el.dataset.sort;
+  if (sortColumn !== col) {
+    sortColumn = col;
+    sortDir = 1;
+  } else if (sortDir === 1) {
+    sortDir = -1;
+  } else {
+    sortColumn = null;
+    sortDir = 1;
+  }
+  renderBoard();
 });
 
 // ---------- EXPERIMENTAL: Sleeper draft-actions on/off toggle ----------
@@ -2662,6 +2855,19 @@ $("sleeperTokenInfo").addEventListener("click", (e) => {
 
   const tv = await chrome.storage.local.get([K_THEME]);
   applyTheme(tv[K_THEME] || "dark");
+
+  // Queue/Roster pop-out windows — see the "Queue/Roster pop-out windows"
+  // block above for the full mechanism. A popout window forces its one
+  // popover open and hides the rest of the UI (initPopoutMode); the normal
+  // board window instead reads which popouts are currently open elsewhere
+  // so it can hide their trigger buttons from the very first render, not
+  // just once a storage.onChanged event happens to fire later.
+  if (popoutView) {
+    initPopoutMode();
+  } else {
+    const { [K_POPOUT_WINDOWS]: popoutIds } = await chrome.storage.session.get([K_POPOUT_WINDOWS]);
+    applyPopoutButtonVisibility(popoutIds || {});
+  }
 
   // Settings start open so first-run has the draft ID box visible.
   openSettingsPanel();
