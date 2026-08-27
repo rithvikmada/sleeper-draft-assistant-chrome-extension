@@ -382,14 +382,32 @@ async function sendRageBaitMessage(message) {
 // defers to the next new pick that isn't yours — the threshold itself is
 // left untouched, so the fire isn't delayed any further than that one pick.
 function maybeFireRageBait(newPickTotal, newestWasMine) {
-  if (!rageBaitEnabled || !sleeperWriteReady() || !currentDraftId) return;
-  if (rageBaitNextAt == null) { rageBaitNextAt = newPickTotal + rageBaitRandomGap(); return; }
-  if (newPickTotal < rageBaitNextAt) return;
-  if (newestWasMine) return; // try again on the next new pick instead
+  // Diagnostic logging (2026-08-27) — added after auto-fire was reported
+  // broken even after the "my roster" matching fix above, with no visible
+  // way to tell WHY it was skipping from outside a debugger. Every skip
+  // reason now logs once so this is diagnosable from the console (right-
+  // click the board window → Inspect → Console) instead of a silent no-op.
+  if (!rageBaitEnabled) { console.debug("[4th&Go] rage bait: skipped (mode is off)"); return; }
+  if (!sleeperWriteReady()) { console.debug("[4th&Go] rage bait: skipped (Draft actions off or no Sleeper token)"); return; }
+  if (!currentDraftId) { console.debug("[4th&Go] rage bait: skipped (no draft synced)"); return; }
+  if (rageBaitNextAt == null) {
+    rageBaitNextAt = newPickTotal + rageBaitRandomGap();
+    console.debug(`[4th&Go] rage bait: armed, will consider firing at pick #${rageBaitNextAt}`);
+    return;
+  }
+  if (newPickTotal < rageBaitNextAt) {
+    console.debug(`[4th&Go] rage bait: waiting (pick #${newPickTotal}, next check at #${rageBaitNextAt})`);
+    return;
+  }
+  if (newestWasMine) {
+    console.debug(`[4th&Go] rage bait: threshold reached at pick #${newPickTotal} but it was the user's own pick — trying again next pick, not re-rolling`);
+    return; // try again on the next new pick instead
+  }
   rageBaitNextAt = newPickTotal + rageBaitRandomGap();
   const pool = currentRageBaitMessages();
   const message = pool[Math.floor(Math.random() * pool.length)];
-  sendRageBaitMessage(message).then((ok) => { if (ok) console.debug(`[4th&Go] rage bait sent: "${message}"`); });
+  console.debug(`[4th&Go] rage bait: firing at pick #${newPickTotal} — "${message}"`);
+  sendRageBaitMessage(message).then((ok) => { if (ok) console.debug(`[4th&Go] rage bait sent: "${message}"`); else console.debug("[4th&Go] rage bait: send failed"); });
 }
 let sleeperDoubleClickDraft = true;
 function draftTipText() {
