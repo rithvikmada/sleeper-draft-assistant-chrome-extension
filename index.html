@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4th&Go</title>
+<style>
+/* ---------- Design plan ----------
+   Color: committing to one visual world — the app's own dark ink/chalk
+   "war room" palette (already shipped in the extension, see claude.md),
+   not re-invented for marketing. Single-theme by choice, painted explicitly.
+     --ink-950 #070908  --ink-800 #12151A  --ink-700 #1B1F26  --ink-500 #2A2F38
+     --chalk   #FFD84D  (the one accent — everything else stays quiet)
+     --text-hi #F3F5F2  --text-mid #A7AFA9  --text-dim #6E766F
+     signal: --qb #F4527A --rb #35D07F --wr #22D3EE --te #FF8A3D
+   Type: Chivo (display + body) / JetBrains Mono (data, ADP, tiers) — the
+   exact pairing already live in the product, reused rather than swapped for
+   a "marketing" face.
+   Layout: a single-column editorial scroll — hero with the live board demo
+   as its own centerpiece (not a screenshot bolted beside the headline),
+   then a feature run, a Sleeper-compatibility strip, pricing, footer.
+------------------------------------ */
+@import url('https://fonts.googleapis.com/css2?family=Chivo:ital,wght@0,400;0,500;0,700;0,900;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+:root{
+  --ink-950:#070908; --ink-900:#0B0E0C; --ink-800:#12151A; --ink-750:#171B21;
+  --ink-700:#1B1F26; --ink-600:#232830; --ink-500:#2A2F38; --ink-400:#3A4048;
+  --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.14);
+  --chalk:#FFD84D; --chalk-dim:#B99A3B; --chalk-a12: rgba(255,216,77,.12);
+  --text-hi:#F3F5F2; --text-mid:#A7AFA9; --text-dim:#6E766F;
+  --qb:#F4527A; --rb:#35D07F; --wr:#22D3EE; --te:#FF8A3D;
+  --radius-sm:6px; --radius-md:10px; --radius-lg:16px;
+  --shadow-card: 0 20px 60px -20px rgba(0,0,0,.6);
+  --ease-out: cubic-bezier(0.23,1,0.32,1);
+  --font-display: "Chivo", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+*{box-sizing:border-box;}
+html{background:var(--ink-950); scroll-behavior:smooth;}
+/* Anchor targets need this — without it, a jump lands the section's true
+   top flush with the viewport top, but the sticky nav then overlaps the
+   first ~66px of it, which reads as "scrolled too far." */
+#features, #sleeper, #pricing, #faq{ scroll-margin-top:82px; }
+@media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
+body{
+  margin:0; background:var(--ink-950); color:var(--text-hi);
+  font-family:var(--font-display); -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+img,svg{max-width:100%;}
+.wrap{max-width:1120px; margin:0 auto; padding:0 clamp(20px,4vw,48px);}
+a{color:inherit;}
+h1,h2,h3{text-wrap:balance; margin:0;}
+p{margin:0;}
+
+/* ---------- nav ---------- */
+.nav{
+  position:sticky; top:0; z-index:40; backdrop-filter:blur(14px) saturate(140%);
+  background:rgba(7,9,8,.72); border-bottom:1px solid var(--line);
+}
+.navRow{ position:relative; display:flex; align-items:center; justify-content:space-between; height:66px; }
+.brand{ display:flex; align-items:center; gap:9px; font-weight:700; font-size:19px; letter-spacing:-.01em; }
+.brand .amp{ color:var(--chalk); }
+.navLinks{
+  display:flex; align-items:center; gap:32px; position:absolute; left:50%; top:50%;
+  transform:translate(-50%,-50%);
+}
+.navLinks a{
+  font-size:13.5px; color:var(--text-mid); text-decoration:none; transition:color 160ms var(--ease-out);
+}
+.navLinks a:hover{ color:var(--text-hi); }
+.navRight{ display:flex; align-items:center; gap:14px; }
+.navCta{
+  display:inline-flex; align-items:center; gap:8px; background:var(--chalk); color:#1a1400;
+  font-weight:700; font-size:13.5px; padding:9px 16px; border-radius:999px; text-decoration:none;
+  transition:transform 160ms var(--ease-out), background-color 160ms var(--ease-out);
+}
+.navCta:hover{ background:#FFE27A; }
+.navCta:active{ transform:scale(.97); }
+/* Secondary CTA — install link (unpacked/beta today, Chrome Web Store
+   later, see INSTALL_URL in the script below). Outline style on purpose:
+   this is the free/manual path, the gold button is the actual purchase —
+   they shouldn't compete for attention. */
+.navCtaGhost{
+  background:transparent; color:var(--text-hi); border:1px solid var(--line-strong);
+}
+.navCtaGhost:hover{ background:var(--ink-700); }
+.navMenuBtn{ display:none; background:none; border:none; color:var(--text-hi); padding:6px; cursor:pointer; }
+.navMenuBtn svg{ width:22px; height:22px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; }
+@media (max-width:760px){
+  .navLinks{ display:none; }
+  .navRight .navCta{ display:none; }
+  .navMenuBtn{ display:inline-flex; }
+}
+.mobileMenu{
+  display:none; border-top:1px solid var(--line); background:rgba(7,9,8,.97);
+}
+.mobileMenu.open{ display:block; }
+.mobileMenu .wrap{ padding:18px clamp(20px,4vw,48px) 22px; display:flex; flex-direction:column; gap:16px; }
+.mobileMenu a{ font-size:14.5px; color:var(--text-mid); text-decoration:none; }
+.mobileMenu .navCta{ align-self:flex-start; margin-top:6px; }
+
+/* ---------- hero ---------- */
+.hero{ padding:88px 0 0; position:relative; text-align:center; }
+.hero::before{
+  content:""; position:absolute; inset:-160px 0 auto 0; height:640px; z-index:-1; pointer-events:none;
+  background:radial-gradient(50% 55% at 50% 10%, rgba(255,216,77,.14), transparent 70%);
+}
+.eyebrow{
+  display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:12px;
+  letter-spacing:.06em; color:var(--text-mid); background:var(--ink-750);
+  border:1px solid var(--line-strong); padding:7px 14px; border-radius:999px; margin-bottom:28px;
+}
+.eyebrow .dot{ width:6px; height:6px; border-radius:50%; background:var(--rb); box-shadow:0 0 0 3px rgba(53,208,127,.2); flex:none; }
+
+/* Sits above the headline — the "made for Sleeper" trust signal, first
+   thing read on the page. Neutral "S" mark, not Sleeper's actual logo
+   asset (that's their trademark — see landing brief notes). */
+.sleeperLine{
+  display:inline-flex; align-items:center; gap:12px; font-family:var(--font-mono); font-size:14px;
+  font-weight:600; letter-spacing:.03em; color:var(--text-hi); margin-bottom:28px;
+}
+.sleeperMark{ width:40px; height:40px; display:block; flex:none; }
+.sleeperLineDot{ width:3px; height:3px; border-radius:50%; background:var(--text-dim); flex:none; }
+.heroInner{ max-width:760px; margin:0 auto; }
+h1.headline{
+  font-size:clamp(2.6rem, 5.4vw, 4.2rem); line-height:1.04; letter-spacing:-.03em; font-weight:900;
+  background:linear-gradient(180deg, var(--text-hi) 45%, rgba(243,245,242,.55));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+}
+h1.headline .accent{
+  background:none; -webkit-text-fill-color:var(--chalk); color:var(--chalk);
+}
+.subhead{
+  margin:22px auto 0; font-size:17.5px; line-height:1.6; color:var(--text-mid); max-width:44ch;
+}
+.heroActions{ display:flex; align-items:center; justify-content:center; gap:18px; margin-top:34px; flex-wrap:wrap; }
+.btnPrimary{
+  display:inline-flex; align-items:center; gap:10px; background:var(--chalk); color:#1a1400; font-weight:700;
+  font-size:15px; padding:15px 26px; border-radius:12px; text-decoration:none;
+  box-shadow:0 1px 0 rgba(255,255,255,.35) inset, 0 14px 34px -12px rgba(255,216,77,.5);
+  transition:transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
+}
+.btnPrimary:hover{ transform:translateY(-1px) scale(1.02); }
+.btnPrimary:active{ transform:scale(.97); }
+.priceNote{ font-size:13.5px; color:var(--text-dim); }
+.priceNote b{ color:var(--text-hi); font-family:var(--font-mono); font-weight:700; }
+
+.heroStage{ position:relative; max-width:1120px; margin:64px auto 0; padding-bottom:100px; }
+.heroGlow{
+  position:absolute; left:50%; top:-8%; transform:translateX(-50%); width:130%; height:420px; z-index:0;
+  background:radial-gradient(ellipse 60% 60% at 50% 0%, rgba(255,216,77,.16), transparent 65%),
+             radial-gradient(ellipse 45% 50% at 30% 30%, rgba(34,211,238,.08), transparent 70%),
+             radial-gradient(ellipse 45% 50% at 72% 25%, rgba(53,208,127,.08), transparent 70%);
+  filter:blur(2px); pointer-events:none;
+}
+.heroStage .boardShell{ position:relative; z-index:1; text-align:left; }
+
+/* ---------- board demo (the centerpiece) ---------- */
+.boardShell{
+  background:var(--ink-800); border:1px solid var(--line-strong); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card); overflow:hidden; position:relative;
+}
+.boardTop{
+  display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid var(--line);
+  background:var(--ink-750);
+}
+.trafficDot{ width:9px; height:9px; border-radius:50%; background:var(--ink-500); }
+.boardTop .liveTag{
+  margin-left:auto; display:flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px;
+  color:var(--rb); letter-spacing:.04em;
+}
+.boardTop .liveTag .pulse{ width:6px; height:6px; border-radius:50%; background:var(--rb); animation:pulse 1.8s ease-in-out infinite; }
+@keyframes pulse{ 0%,100%{ opacity:1; transform:scale(1);} 50%{ opacity:.4; transform:scale(.7);} }
+.boardShot{ display:block; width:100%; height:auto; }
+@media (prefers-reduced-motion: reduce){ .pulse{ animation:none !important; } }
+
+/* Real product screenshots inside a feature card's mock slot — same frame
+   treatment (radial glow backdrop) the illustrative mono-mocks used, so
+   swapping a card from illustration to a real screenshot doesn't create a
+   visual seam between cards that still use one. */
+.featShot{ width:100%; max-width:360px; border-radius:10px; border:1px solid var(--line-strong); box-shadow:var(--shadow-card); }
+
+/* Rankings Creator showcase — stacked, full-width, same "big screenshot
+   as the centerpiece" treatment the hero uses, not a cramped side-by-side
+   where the actual screenshot ends up small. Copy is centered above,
+   capped to a readable line length; the screenshot below gets the full
+   section width so the tool is actually legible, not a thumbnail. */
+.creatorShowcase{ display:flex; flex-direction:column; align-items:center; text-align:center; }
+.creatorCopy{ max-width:640px; }
+.creatorCopy .sectionTitle{ margin-top:14px; }
+.creatorCopy .sectionSub{ margin-top:14px; }
+.creatorShotWrap{
+  margin-top:40px; width:100%; border-radius:var(--radius-lg); overflow:hidden;
+  border:1px solid var(--line-strong); box-shadow:var(--shadow-card); background:var(--ink-800);
+}
+.creatorShot{ display:block; width:100%; height:auto; }
+
+/* ---------- sleeper strip ---------- */
+.sleeperStrip{
+  border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--ink-900);
+  padding:22px 0;
+}
+.sleeperRow{ display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap; text-align:center; }
+.sleeperBadge{
+  display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:12.5px;
+  color:var(--text-mid); letter-spacing:.02em;
+}
+.sleeperBadge .mark{
+  width:22px; height:22px; border-radius:7px;
+  display:inline-flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; color:#fff;
+}
+.sleeperBadge .mark.logo{ background:none; width:32px; height:32px; }
+.sleeperBadge .mark.logo img{ width:100%; height:100%; display:block; }
+.sleeperBadge:has(.logo){ font-size:14px; font-weight:600; color:var(--text-hi); }
+
+/* ---------- features ---------- */
+.section{ padding:96px 0; }
+.sectionHead{ max-width:640px; margin-bottom:48px; }
+.kicker{ font-family:var(--font-mono); font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--chalk); margin-bottom:14px; }
+h2.sectionTitle{ font-size:clamp(1.7rem,3vw,2.3rem); font-weight:800; letter-spacing:-.02em; }
+.sectionSub{ margin-top:14px; font-size:16px; line-height:1.6; color:var(--text-mid); }
+
+/* Bento grid — 2 large (2/3 width) + 2 standard cards, each led by a small
+   mono "readout" mock specific to that feature (not a generic icon), same
+   idea as the reference bento but the mockups are real 4th&Go mechanics —
+   a sync-timing readout, a value calc, an ADP delta, a drag-reorder mock —
+   not a stock terminal/API demo. */
+.featGrid{ display:grid; grid-template-columns:repeat(3,1fr); grid-auto-rows:1fr; gap:16px; }
+@media (max-width:860px){ .featGrid{ grid-template-columns:repeat(2,1fr); } }
+@media (max-width:600px){ .featGrid{ grid-template-columns:1fr; } }
+.featCard{
+  grid-column:span 1; display:flex; flex-direction:column; min-height:300px; overflow:hidden;
+  background:var(--ink-800); border:1px solid var(--line); border-radius:var(--radius-lg);
+  position:relative; transition:border-color 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+.featCard.wide{ grid-column:span 2; }
+@media (max-width:860px){ .featCard.wide{ grid-column:span 2; } }
+@media (max-width:600px){ .featCard.wide{ grid-column:span 1; } }
+@media (hover:hover) and (pointer:fine){
+  .featCard:hover{ border-color:var(--line-strong); transform:translateY(-2px); }
+  /* Spotlight — a cursor-following radial glow, ::before so it never
+     competes with the card's real content/stacking. --mx/--my are set
+     from pointermove in JS; opacity only turns on while actually hovered,
+     so it costs nothing (no repaint) everywhere else. Fine-pointer/hover
+     gated per the design-review checklist — this is decorative, and
+     decorative motion has no business faking a hover state on touch. */
+  .featCard::before{
+    content:""; position:absolute; inset:0; z-index:0; opacity:0; pointer-events:none;
+    background:radial-gradient(220px circle at var(--mx,50%) var(--my,50%), rgba(255,216,77,.10), transparent 70%);
+    transition:opacity 300ms var(--ease-out);
+  }
+  .featCard:hover::before{ opacity:1; }
+}
+.featMock, .featBody{ position:relative; z-index:1; }
+.featMock{
+  flex:1; display:flex; align-items:center; justify-content:center; padding:26px;
+  background:radial-gradient(120% 100% at 50% 0%, var(--chalk-a12), transparent 60%);
+}
+.featBody{ border-top:1px solid var(--line); padding:20px 22px 22px; }
+.featIcon{
+  width:32px; height:32px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center;
+  background:var(--chalk-a12); color:var(--chalk); margin-bottom:12px;
+}
+.featIcon svg{ width:17px; height:17px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.featCard h3{ font-size:15.5px; font-weight:700; margin-bottom:6px; }
+.featCard p{ font-size:13.5px; line-height:1.6; color:var(--text-mid); }
+
+/* mono mock elements shared across the bento cards */
+.mockPanel{
+  width:100%; max-width:360px; border:1px solid var(--line-strong); border-radius:10px;
+  background:var(--ink-950); font-family:var(--font-mono); font-size:11px; line-height:1.7; overflow:hidden;
+}
+.mockPanel .mockTop{ display:flex; gap:5px; padding:9px 12px; border-bottom:1px solid var(--line); }
+.mockPanel .mockTop i{ width:7px; height:7px; border-radius:50%; background:var(--ink-500); display:block; }
+.mockPanel .mockBody{ padding:13px 14px; color:var(--text-mid); }
+.mockPanel .mockBody .hi{ color:var(--text-hi); }
+.mockRow{ display:flex; justify-content:space-between; gap:10px; }
+.mockRule{ height:1px; background:var(--line); margin:9px 0; }
+.mockOk{ color:var(--rb); }
+
+/* ---------- pricing ---------- */
+.priceCard{
+  background:linear-gradient(160deg, var(--ink-750), var(--ink-800));
+  border:1px solid var(--line-strong); border-radius:var(--radius-lg); padding:48px;
+  display:flex; align-items:center; justify-content:space-between; gap:32px; flex-wrap:wrap;
+  box-shadow:var(--shadow-card);
+}
+.priceLeft h3{ font-size:22px; font-weight:800; }
+.priceLeft p{ margin-top:10px; color:var(--text-mid); font-size:14.5px; max-width:42ch; }
+.priceTag{ font-family:var(--font-mono); font-size:44px; font-weight:700; color:var(--chalk); }
+.priceTag sup{ font-size:18px; top:-1.2em; }
+.priceSub{ font-size:12.5px; color:var(--text-dim); margin-top:2px; }
+
+/* ---------- FAQ (native <details>/<summary> — no JS, works everywhere,
+   accessible by default) ---------- */
+.faqGrid{ display:grid; grid-template-columns: 1fr 300px; gap:40px; align-items:start; }
+@media (max-width:860px){ .faqGrid{ grid-template-columns:1fr; } }
+.faqList{ display:flex; flex-direction:column; gap:10px; }
+.faqSide{ position:sticky; top:100px; }
+@media (max-width:860px){ .faqSide{ position:static; } }
+.faqSideCard{
+  background:linear-gradient(160deg, var(--ink-750), var(--ink-800)); border:1px solid var(--line-strong);
+  border-radius:var(--radius-lg); padding:26px; box-shadow:var(--shadow-card);
+}
+.faqSideCard h3{ font-size:16px; font-weight:800; margin-bottom:16px; }
+.faqSideList{ list-style:none; margin:0 0 22px; padding:0; display:flex; flex-direction:column; gap:12px; }
+.faqSideList li{ display:flex; gap:10px; font-size:13px; line-height:1.55; color:var(--text-mid); }
+.faqSideDot{ width:6px; height:6px; border-radius:50%; background:var(--chalk); margin-top:6px; flex:none; }
+.faqSideCta{ width:100%; justify-content:center; font-size:14px; padding:13px 20px; }
+.faqItem{
+  background:var(--ink-800); border:1px solid var(--line); border-radius:var(--radius-md);
+  padding:4px 20px; transition:border-color 160ms var(--ease-out);
+}
+.faqItem[open]{ border-color:var(--line-strong); }
+.faqItem summary{
+  list-style:none; cursor:pointer; padding:16px 28px 16px 0; position:relative;
+  font-size:15px; font-weight:600; color:var(--text-hi);
+}
+.faqItem summary::-webkit-details-marker{ display:none; }
+.faqItem summary::after{
+  content:"+"; position:absolute; right:0; top:50%; transform:translateY(-50%);
+  font-size:20px; font-weight:400; color:var(--text-dim); transition:transform 200ms var(--ease-out);
+}
+.faqItem[open] summary::after{ content:"–"; }
+.faqAns{ padding:0 0 18px; font-size:14px; line-height:1.65; color:var(--text-mid); max-width:64ch; }
+
+/* ---------- footer ---------- */
+footer{ border-top:1px solid var(--line); padding:28px 0 0; }
+.footRow{ display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--text-dim); padding:0 0 22px; }
+.footRow a{ text-decoration:none; color:var(--text-mid); transition:color 160ms var(--ease-out); }
+.footRow a:hover{ color:var(--text-hi); }
+.footBrand{ font-weight:700; font-size:15px; letter-spacing:-.01em; color:var(--text-hi); }
+.footBrand .amp{ color:var(--chalk); }
+.footLinks{ display:flex; gap:22px; flex-wrap:wrap; }
+.footRowSub{ border-top:1px solid var(--line); padding:18px 0 24px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <div class="wrap navRow">
+    <div class="brand">4th<span class="amp">&amp;</span>Go</div>
+    <div class="navLinks">
+      <a href="#features">Features</a>
+      <a href="#sleeper">Works with Sleeper</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <div class="navRight">
+      <a class="navCta navCtaGhost install-link" href="#" target="_blank" rel="noopener">Install extension</a>
+      <a class="navCta" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Get 4th&amp;Go</a>
+      <button class="navMenuBtn" id="menuBtn" aria-label="Toggle menu" aria-expanded="false">
+        <svg id="menuIconOpen" viewBox="0 0 24 24"><line x1="4" x2="20" y1="7" y2="7"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="17" y2="17"/></svg>
+        <svg id="menuIconClose" viewBox="0 0 24 24" style="display:none"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="mobileMenu" id="mobileMenu">
+    <div class="wrap">
+      <a href="#features">Features</a>
+      <a href="#sleeper">Works with Sleeper</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+      <a class="navCta navCtaGhost install-link" href="#" target="_blank" rel="noopener">Install extension</a>
+      <a class="navCta" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Get 4th&amp;Go</a>
+    </div>
+  </div>
+</div>
+
+<section class="hero">
+  <div class="wrap heroInner">
+    <span class="sleeperLine">
+      <img class="sleeperMark" src="data:image/png;base64,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" alt="" aria-hidden="true">
+      Built for Sleeper Drafts
+    </span>
+    <h1 class="headline">Your board updates itself. <span class="accent">You just draft.</span></h1>
+    <p class="subhead">
+      Import your rankings, sync to your draft, and every pick gets crossed
+      off the moment it happens — no refreshing, no manual tracking.
+    </p>
+    <div class="heroActions">
+      <a class="btnPrimary" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
+      <span class="priceNote">One purchase. <b>No subscription.</b> Yours for every draft after.</span>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="heroStage">
+      <div class="heroGlow" aria-hidden="true"></div>
+      <div class="boardShell">
+        <div class="boardTop">
+          <span class="trafficDot"></span><span class="trafficDot"></span><span class="trafficDot"></span>
+          <span class="liveTag"><span class="pulse"></span> LIVE — SYNCED</span>
+        </div>
+        <img class="boardShot" src="assets/screenshot-board.png?v=2" alt="4th&amp;Go board mid-draft, showing tiered rankings, Best Picks, and BEER value" loading="eager">
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="sleeperStrip" id="sleeper">
+  <div class="wrap sleeperRow">
+    <span class="sleeperBadge"><span class="mark logo"><img src="data:image/png;base64,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" alt=""></span> Auto-detects your open Sleeper draft tab</span>
+    <span class="sleeperBadge"><span class="mark" style="background:linear-gradient(160deg,var(--rb),#1f9a5c)">✓</span> Works in real leagues and mock drafts</span>
+    <span class="sleeperBadge"><span class="mark" style="background:linear-gradient(160deg,var(--chalk),var(--chalk-dim));color:#1a1400">⚡</span> Picks reflected within ~15–20 seconds</span>
+  </div>
+</div>
+
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="sectionHead">
+      <div class="kicker">What's inside</div>
+      <h2 class="sectionTitle">One board. Every edge you'd normally need three tabs for.</h2>
+      <p class="sectionSub">No fluff features — everything here shipped because a real draft, not a spec sheet, asked for it.</p>
+    </div>
+    <div class="featGrid">
+      <div class="featCard wide">
+        <div class="featMock">
+          <img class="featShot" src="assets/screenshot-beer.png?v=2" alt="BEER value grid showing the best available player by position">
+        </div>
+        <div class="featBody">
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div>
+          <h3>Value that updates as the board thins out</h3>
+          <p>Every player scored against the best replacement still on the clock — recalculated live, not a static preseason number.</p>
+        </div>
+      </div>
+
+      <div class="featCard">
+        <div class="featMock">
+          <div class="mockPanel" style="max-width:220px">
+            <div class="mockTop"><i></i><i></i><i></i></div>
+            <div class="mockBody">
+              <div class="mockRow"><span>Flock</span><span>RB4</span></div>
+              <div class="mockRow"><span>FantasyPros</span><span>RB3</span></div>
+              <div class="mockRow"><span>Your CSV</span><span>RB5</span></div>
+              <div class="mockRule"></div>
+              <div class="mockRow hi"><span>Consensus</span><span>RB4</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="featBody">
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h7"/></svg></div>
+          <h3>One tier board, built from your sources</h3>
+          <p>Import as many rankings as you trust — they blend by median into one board, not whichever opinion you happened to open last.</p>
+        </div>
+      </div>
+
+      <div class="featCard">
+        <div class="featMock">
+          <div class="mockPanel">
+            <div class="mockTop"><i></i><i></i><i></i></div>
+            <div class="mockBody">
+              <div class="mockRow"><span class="hi">sync --draft 998271...</span><span class="mockOk">[OK]</span></div>
+              <div class="mockRow"><span>polling Sleeper picks endpoint...</span><span>2.9s</span></div>
+              <div class="mockRow"><span>match: CeeDee Lamb → WR4</span><span>crossed off</span></div>
+              <div class="mockRule"></div>
+              <div class="mockRow hi"><span>● live — 34 picks synced</span><span>age 0s</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="featBody">
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+          <h3>Every pick, crossed off the second it lands</h3>
+          <p>Auto-detects your open Sleeper draft tab and polls live — no refresh button, no manual crossouts, no losing track mid-run.</p>
+        </div>
+      </div>
+
+      <div class="featCard wide">
+        <div class="featMock">
+          <img class="featShot" src="assets/screenshot-adpvalue.png?v=2" alt="ADP value delta showing a real discount versus baseline rankings">
+        </div>
+        <div class="featBody">
+          <div class="featIcon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></div>
+          <h3>See the reach before you make it</h3>
+          <p>A flat pick-count comparison between Sleeper's live ADP and your baseline — green means a discount, red means you're paying up.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" style="padding-top:0">
+  <div class="wrap">
+    <div class="creatorShowcase">
+      <div class="creatorCopy">
+        <div class="kicker">Rankings Creator</div>
+        <h2 class="sectionTitle">Don't like anyone's rankings? Build your own.</h2>
+        <p class="sectionSub">Drag and drop players into your own ranked list, break it into tiers by hand, and start from a blank Sleeper-ADP board or any source you've already imported — headshots, stat columns, and all, right alongside the same live data the tier board uses.</p>
+      </div>
+      <div class="creatorShotWrap">
+        <img class="creatorShot" src="assets/screenshot-creator.png?v=2" alt="Rankings Creator — drag-and-drop custom board with tiers, headshots, and stat columns" loading="eager">
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="pricing" style="padding-top:0">
+  <div class="wrap">
+    <div class="priceCard">
+      <div class="priceLeft">
+        <h3>One price. Every draft.</h3>
+        <p>A single $10 purchase unlocks 4th&amp;Go for good — no subscription, no per-season renewal.</p>
+      </div>
+      <div style="text-align:right">
+        <div class="priceTag"><sup>$</sup>10</div>
+        <div class="priceSub">one-time</div>
+        <a class="btnPrimary" style="margin-top:14px" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="faq" style="padding-top:0">
+  <div class="wrap">
+    <div class="sectionHead" style="margin-bottom:32px">
+      <div class="kicker">Questions</div>
+      <h2 class="sectionTitle">Before you buy</h2>
+    </div>
+    <div class="faqGrid">
+      <div class="faqList">
+        <details class="faqItem" open>
+          <summary>Is this allowed under Sleeper's rules?</summary>
+          <div class="faqAns">Yes. 4th&amp;Go only reads from Sleeper's public draft API — the same data your browser already loads to show you the draft room. It doesn't automate picks unless you explicitly turn on the optional Draft actions feature using your own session, and even then, it's you clicking the button.</div>
+        </details>
+        <details class="faqItem">
+          <summary>Does it work in mock drafts, or only real leagues?</summary>
+          <div class="faqAns">Both. Sleeper's draft API works identically for mock and real drafts, so 4th&amp;Go syncs to either — mock drafts are actually the easiest way to try it out risk-free before your real draft.</div>
+        </details>
+        <details class="faqItem">
+          <summary>What league format is this built for?</summary>
+          <div class="faqAns">A 10-team, full PPR, 1QB/2RB/2WR/1TE/2FLEX league with no kicker or defense — the board, tiers, and value calculations are all tuned around that shape. It'll still track picks and consensus rankings for other formats, but the BEER/VBD replacement-level numbers assume this league shape specifically.</div>
+        </details>
+        <details class="faqItem">
+          <summary>How do I get my license key after buying?</summary>
+          <div class="faqAns">Your license key is generated and delivered automatically right after checkout — no waiting on us. Paste it into the extension's lock screen once, and it's verified and cached locally, so it keeps working offline for every draft after.</div>
+        </details>
+        <details class="faqItem">
+          <summary>Is it a subscription?</summary>
+          <div class="faqAns">No. It's a single $10 purchase that unlocks the extension for good. No renewal, no per-season fee.</div>
+        </details>
+        <details class="faqItem">
+          <summary>Something's not working — how do I reach you?</summary>
+          <div class="faqAns">Use the feedback button built into the extension's header (a mail icon, no email client needed) — it goes straight to the developer. Bug reports and feature requests both welcome.</div>
+        </details>
+      </div>
+
+      <aside class="faqSide">
+        <div class="faqSideCard">
+          <h3>Still deciding?</h3>
+          <ul class="faqSideList">
+            <li><span class="faqSideDot"></span> Instant license delivery — you're drafting in minutes, not waiting on an email</li>
+            <li><span class="faqSideDot"></span> Works fully offline mid-draft, once activated</li>
+            <li><span class="faqSideDot"></span> One purchase, every draft after — no renewal</li>
+          </ul>
+          <a class="btnPrimary faqSideCta" href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Dominate Your Draft →</a>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap footRow">
+    <div class="footBrand">4th<span class="amp">&amp;</span>Go</div>
+    <div class="footLinks">
+      <a href="#features">Features</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://rithmada.gumroad.com/l/fourthandgo?wanted=true" target="_blank" rel="noopener">Purchase on Gumroad ↗</a>
+    </div>
+  </div>
+  <div class="wrap footRow footRowSub">
+    <span>© 2026 4th&amp;Go. Not affiliated with or endorsed by Sleeper.</span>
+  </div>
+</footer>
+
+<!-- Gumroad's overlay script — once loaded, it intercepts clicks on any
+     link pointing at a Gumroad product on this page and opens checkout as
+     a modal directly here, instead of navigating away to gumroad.com. The
+     `?wanted=true` on our buy links stays in place as a graceful fallback:
+     if this script fails to load (blocked, offline), the plain link still
+     goes straight to Gumroad's own checkout instead of dead-ending on
+     their product page. -->
+<script src="https://gumroad.com/js/gumroad.js"></script>
+
+<script>
+// ---------- Asset cache-busting ----------
+// GitHub Pages sits behind a CDN, and browsers cache images aggressively —
+// after replacing an asset file (e.g. re-cropping a screenshot) under the
+// SAME filename, viewers can keep seeing the old bytes for a while. Every
+// screenshot <img> src above carries a "?v=N" query param specifically so
+// a content change forces a fresh fetch. Bump every "?v=N" in this file by
+// one whenever an existing asset filename's content changes (a brand new
+// filename doesn't need this, only an overwrite of one already deployed).
+
+// ---------- Install link config ----------
+// Swap this ONE line when the Chrome Web Store listing goes live — every
+// "Install extension" link on the page (desktop + mobile nav) reads from
+// this constant, so there's only ever one place to update.
+// Beta phase (now): point at a GitHub Release zip of the unpacked extension.
+// Live phase (later): the Chrome Web Store listing URL.
+const INSTALL_URL = "https://github.com/rithvikmada/sleeper-draft-assistant-chrome-extension/releases/latest";
+document.querySelectorAll('.install-link').forEach(function(a){ a.href = INSTALL_URL; });
+
+(function(){
+  // Spotlight card effect — only wired on fine-pointer/hover devices, so
+  // touch never pays the pointermove cost for a visual it'll never see.
+  if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+  document.querySelectorAll('.featCard').forEach(function(card){
+    card.addEventListener('pointermove', function(e){
+      var r = card.getBoundingClientRect();
+      card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+      card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+    });
+  });
+})();
+(function(){
+  var menuBtn = document.getElementById('menuBtn');
+  var mobileMenu = document.getElementById('mobileMenu');
+  var iconOpen = document.getElementById('menuIconOpen');
+  var iconClose = document.getElementById('menuIconClose');
+  menuBtn.addEventListener('click', function(){
+    var isOpen = mobileMenu.classList.toggle('open');
+    menuBtn.setAttribute('aria-expanded', String(isOpen));
+    iconOpen.style.display = isOpen ? 'none' : '';
+    iconClose.style.display = isOpen ? '' : 'none';
+  });
+  mobileMenu.querySelectorAll('a').forEach(function(a){
+    a.addEventListener('click', function(){
+      mobileMenu.classList.remove('open');
+      menuBtn.setAttribute('aria-expanded', 'false');
+      iconOpen.style.display = ''; iconClose.style.display = 'none';
+    });
+  });
+})();
+</script>
+</body>
+</html>
