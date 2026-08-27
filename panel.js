@@ -1808,11 +1808,22 @@ async function poll(draftId, { manual = false } = {}) {
       const pos = (md.position || "").toUpperCase();
       if (!first && !last) return;
       if (!activePos.includes(pos)) { skippedPos++; return; }
-      // A pick is "mine" if its roster_id or draft_slot matches what the user entered.
-      // Sleeper populates these differently across real vs. mock drafts, so accept either.
+      // A pick is "mine" if its roster_id matches what the user entered —
+      // roster_id is Sleeper's permanent, non-reused team identity, so it's
+      // authoritative whenever present. draft_slot is only used as a
+      // fallback for drafts where roster_id is genuinely absent (some mock
+      // drafts don't populate it) — NOT as an additional OR check, which was
+      // a real bug: draft_slot can coincidentally equal a different team's
+      // roster_id-based myRosterId value, and once that happens even once,
+      // every one of THAT team's picks (and, cumulatively round after
+      // round, other teams too) gets misattributed as "mine" — a real user
+      // hit this live: their entire draft's picks ended up on their own
+      // roster, and rage bait (which refuses to fire right after "your own"
+      // pick) stopped firing at all as a direct symptom of the same bug.
+      const pickRosterId = pk.roster_id != null ? Number(pk.roster_id) : null;
       const mine =
         myRosterId !== null &&
-        (Number(pk.roster_id) === myRosterId || Number(pk.draft_slot) === myRosterId);
+        (pickRosterId != null ? pickRosterId === myRosterId : Number(pk.draft_slot) === myRosterId);
       // Team identity for grouping picks by roster (buildTeamPositionRanks,
       // shared.js — backlog #13). roster_id preferred, draft_slot as
       // fallback, same acceptance as the "mine" check just above.
@@ -1850,9 +1861,13 @@ async function poll(draftId, { manual = false } = {}) {
         const newest = picks[picks.length - 1];
         const md = newest.metadata || {};
         toast(`Pick ${newest.pick_no}: ${md.first_name || ""} ${md.last_name || ""}`);
+        // Same roster_id-first rule as the main "mine" check above — must
+        // stay consistent with it, or this "was that my own pick" guard
+        // could disagree with what the board/roster popover just decided.
+        const newestRosterId = newest.roster_id != null ? Number(newest.roster_id) : null;
         const newestWasMine =
           myRosterId !== null &&
-          (Number(newest.roster_id) === myRosterId || Number(newest.draft_slot) === myRosterId);
+          (newestRosterId != null ? newestRosterId === myRosterId : Number(newest.draft_slot) === myRosterId);
         maybeFireRageBait(picks.length, newestWasMine);
       }
       lastPickCount = picks.length;
