@@ -274,7 +274,35 @@ async function fetchDraftSettings(draftId) {
   return {
     settings: (data && data.settings) || null,
     scoringType: (data && data.metadata && data.metadata.scoring_type) || null,
+    // draft_slot (the column position on Sleeper's own draft board, what the
+    // "your draft slot" setting actually asks for) and roster_id (the
+    // permanent per-team identity picks are actually tagged with) are two
+    // INDEPENDENT numbering spaces — slot 3 on the board is not necessarily
+    // roster_id 3. Sleeper's own draft object carries the real mapping
+    // between them (`slot_to_roster_id`), fetched here alongside settings/
+    // scoring so there's still only one call. See myRosterIdResolved()'s
+    // comment below for why this was a real bug found live.
+    slotToRoster: (data && data.slot_to_roster_id) || null,
   };
+}
+// Real bug found live: myRosterId is what the user enters ("your draft slot"),
+// but picks are matched by roster_id, and those two numbers are not the same
+// thing — a user in draft slot 3 is not necessarily roster_id 3, so directly
+// comparing pk.roster_id to myRosterId could (and did) land on a totally
+// unrelated team's roster whenever the two numbering spaces happened to
+// diverge. This resolves the user's entered slot to its REAL roster_id via
+// Sleeper's own slot_to_roster_id mapping (fetched in fetchDraftSettings)
+// whenever that mapping is available; falls back to treating myRosterId as
+// a roster_id directly (the old behavior) when the mapping hasn't loaded yet
+// or the draft doesn't expose it (some mock drafts) — never worse than
+// before, just correct once the real mapping is known.
+let draftSlotToRoster = null; // {"<slot>": rosterId, ...} — keys are strings, values are numbers, straight from Sleeper
+function myRosterIdResolved() {
+  if (myRosterId == null) return null;
+  if (draftSlotToRoster && draftSlotToRoster[String(myRosterId)] != null) {
+    return Number(draftSlotToRoster[String(myRosterId)]);
+  }
+  return myRosterId;
 }
 const K_SLEEPER_QUEUE = "sleeperQueueKeys"; // this extension's own local mirror of "what should be queued" — playerKey[]
 let sleeperQueueKeys = []; // loaded from storage on init, kept in sync with the button state
@@ -1694,6 +1722,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
         draftSettingsForId = v.draftId;
         applySyncedLeagueSettings(v.settings);
       }
+      if (v.slotToRoster) draftSlotToRoster = v.slotToRoster;
       // Same "did this actually change anything" check as poll()'s own
       // callback — in the main window this mostly re-applies what its own
       // write already set directly (harmless, idempotent); in a popped-out
@@ -1736,7 +1765,8 @@ async function poll(draftId, { manual = false } = {}) {
   if (manual || draftSettingsForId !== draftId) {
     draftSettingsForId = draftId;
     fetchDraftSettings(draftId)
-      .then(({ settings: s, scoringType }) => {
+      .then(({ settings: s, scoringType, slotToRoster }) => {
+        draftSlotToRoster = slotToRoster;
         if (s) {
           draftSettings = s;
           // League-shape sync (K/DST support) — makes BEER's replacement-
@@ -1762,14 +1792,22 @@ async function poll(draftId, { manual = false } = {}) {
           autoRefreshAdpAndStats();
           autoRefreshProjections().then((map) => { if (map) { projMap = map; renderAll(); } });
         }
-        if (s || formatChanged) {
+        if (s || formatChanged || slotToRoster) {
           // Relay to any popped-out Roster window (and this window's own
           // next reload) — see K_DRAFT_SETTINGS's comment above for why this
           // can't just stay in memory.
-          chrome.storage.local.set({ [K_DRAFT_SETTINGS]: { draftId, settings: s, scoringType } });
+          chrome.storage.local.set({ [K_DRAFT_SETTINGS]: { draftId, settings: s, scoringType, slotToRoster } });
           renderRosterBtn();
           renderAll(); // BEER values/replacement ranks everywhere just changed
         }
+        // slotToRoster just resolved (or changed) — the picks already
+        // processed by THIS poll() call may have matched "mine" using the
+        // old fallback (raw myRosterId treated as a roster_id), which is
+        // exactly the bug this was built to fix. Re-poll picks immediately
+        // rather than waiting for the next ~3s tick, so the roster popover/
+        // board correct themselves right away instead of looking broken for
+        // a few more seconds.
+        if (slotToRoster && myRosterId != null) poll(draftId);
       })
       .catch((e) => console.warn("[4th&Go] draft settings fetch failed:", e.message));
   }
@@ -1821,9 +1859,10 @@ async function poll(draftId, { manual = false } = {}) {
       // roster, and rage bait (which refuses to fire right after "your own"
       // pick) stopped firing at all as a direct symptom of the same bug.
       const pickRosterId = pk.roster_id != null ? Number(pk.roster_id) : null;
+      const resolvedMine = myRosterIdResolved();
       const mine =
-        myRosterId !== null &&
-        (pickRosterId != null ? pickRosterId === myRosterId : Number(pk.draft_slot) === myRosterId);
+        resolvedMine !== null &&
+        (pickRosterId != null ? pickRosterId === resolvedMine : Number(pk.draft_slot) === myRosterId);
       // Team identity for grouping picks by roster (buildTeamPositionRanks,
       // shared.js — backlog #13). roster_id preferred, draft_slot as
       // fallback, same acceptance as the "mine" check just above.
@@ -1865,9 +1904,10 @@ async function poll(draftId, { manual = false } = {}) {
         // stay consistent with it, or this "was that my own pick" guard
         // could disagree with what the board/roster popover just decided.
         const newestRosterId = newest.roster_id != null ? Number(newest.roster_id) : null;
+        const resolvedMineNewest = myRosterIdResolved();
         const newestWasMine =
-          myRosterId !== null &&
-          (newestRosterId != null ? newestRosterId === myRosterId : Number(newest.draft_slot) === myRosterId);
+          resolvedMineNewest !== null &&
+          (newestRosterId != null ? newestRosterId === resolvedMineNewest : Number(newest.draft_slot) === myRosterId);
         maybeFireRageBait(picks.length, newestWasMine);
       }
       lastPickCount = picks.length;
@@ -3450,6 +3490,7 @@ $("lockLicenseInput").addEventListener("keydown", (e) => {
       applySyncedLeagueSettings(savedDs.settings);
     }
     applySyncedScoringFormat(savedDs.scoringType);
+    if (savedDs.slotToRoster) draftSlotToRoster = savedDs.slotToRoster;
   }
   const savedOverride = await loadScoringFormatOverride();
   setScoringFormatOverride(savedOverride);
